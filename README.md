@@ -72,7 +72,7 @@ The configuration parameters for the simulation are stored in `config.py`. By de
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/marjomol/PRIMAL_Seed_Gen/blob/master/LICENSE.md) file for details.
 
 ## Acknowledgments
 
