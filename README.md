@@ -19,6 +19,7 @@ PRIMAL_Seed_Gen/
 │
 ├── scripts/
 │   ├── __init__.py
+│   ├── diff.py
 │   ├── plot_fields.py
 │   ├── seed_generator.py
 │   ├── spectral.py
@@ -62,6 +63,7 @@ The configuration parameters for the simulation are stored in `config.py`. By de
 
 ## Scripts
 
+- **diff.py**: Contains functions to compute the general differential calculus.
 - **plot_fields.py**: Contains functions to plot the magnetic field seeds and create animations.
 - **seed_generation.py**: Contains functions to generate the magnetic field seeds.
 - **spectral.py**: Contains functions to perform spectral analysis on the generated magnetic field seeds.
