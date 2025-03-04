@@ -9,6 +9,7 @@ in a cosmological context.
 Created by Marco Molina Pradillo
 """
 
+import gc
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
@@ -560,45 +561,29 @@ def power_spectrum_amplitude(k_mag, alpha_index, lambda_scale, B_lambda, h_cosmo
     
     return P_B
 
-def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, size, N, gauss_rad_factor = 1, epsilon = 1e-30,
-                                filtering = True, verbose = False, debug = False, format = 'fortran', run = 'no_name'):
+def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = False):
     '''
-    Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
-    used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
+    Generates the Fourier space quantities needed to compute the magnetic field seed in Fourier space.
     
     Args:
-        - alpha_index: spectral index of the magnetic field
-        - lambda_scale: comoving smoothing length in Mpc
-        - B_lambda: magnetic field amplitude at the comoving smoothing length in Gauss
-        - h_cosmo: Hubble constant in units of 100 km/s/Mpc
         - size: size of the box in Mpc
         - N: number of cells in each direction
-        - gauss_rad_factor: factor to multiply the Gaussian filtering radius
         - epsilon: small number to avoid division by zero
-        - filtering: boolean to apply the filtering and damping or not
         - verbose: boolean to print the parameters or not
         - debug: boolean to print debugging information or not
         
     Returns:
-        - B_kx: random magnetic field component in Fourier space in the x direction
-        - B_ky: random magnetic field component in Fourier space in the y direction
-        - B_kz: random magnetic field component in Fourier space in the z direction
-        
-    Source: Vazza, F., Paoletti, D., Banfi, S., Finelli, F., Gheller, C., O’Sullivan, S. P., & Brüggen, M. (2021).
-            Simulations and observational tests of primordial magnetic fields from Cosmic Microwave Background constraints.
-            Monthly Notices of the Royal Astronomical Society, 500(4), 5350–5368. https://doi.org/10.1093/mnras/staa3532
-            Phase theoretical treatment based on Vicent Quilis' procedure.
+        - k_grid: wave vector k coordinates for each combination of kx, ky, and kz
+        - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
             
     Author: Marco Molina
 
     '''
-    
-    # Fourier space quantities #
-    
-    # Calculate the wave numbers for a Fourier transform
+
     nmax, nmay, nmaz = N
     dx = size/nmax
     
+    # Calculate the wave numbers for a Fourier transform
     kx = [np.fft.fftfreq(nmax, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
     ky = [np.fft.fftfreq(nmay, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
     kz = [np.fft.fftfreq(nmaz, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
@@ -675,8 +660,33 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
             print('============================================================')
             
         del k_hat, k_hat_magnitude
+        gc.collect()
         
+    return k_grid, k_magnitude
+
+def generate_seed_phase(k_magnitude, N, epsilon = 1e-30, verbose = False, debug = False):
+    '''
+    Generates the random magnetic field seed phase in Fourier space.
+    Args:
+        - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
+        - N: number of cells in each direction
+        - epsilon: small number to avoid division by zero
+        - verbose: boolean to print the parameters or not
+        - debug: boolean to print debugging information or not
         
+    Returns:
+        - B_phase_kx: random magnetic field component in Fourier space in the x direction
+        - B_phase_ky: random magnetic field component in Fourier space in the y direction
+        - B_phase_kz: random magnetic field component in Fourier space in the z direction
+        
+    Source: Phase theoretical treatment based on Vicent Quilis' procedure.
+            
+    Author: Marco Molina
+
+    '''
+    
+    nmax, nmay, nmaz = N
+    
     # Generate a random phase with chosen real and imaginary parts to get a real random magnetic field in real space, evently distributed in amplitude around a given value.
     iota_grid, beta_grid = random_phase(N, k_magnitude, epsilon = epsilon, mode = 3)
     
@@ -721,10 +731,39 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         print(f"Debugging Test X Passed: kx B phase is Hermitian.")
         print('============================================================')
         
-    del iota_grid, beta_grid
+    return B_phase_kx, B_phase_ky, B_phase_kz
+
+def generate_random_seed_amplitudes(k_grid, k_magnitude, B_phase_kx, B_phase_ky, B_phase_kz, P_B, size, N, verbose = False, debug = False):
+    '''
+    Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
+    used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
     
-    # Compute the amplitude of the power spectrum of the magnetic field seed
-    P_B = [power_spectrum_amplitude(k_magnitude[p], alpha_index, lambda_scale, B_lambda, h_cosmo, size, N, gauss_rad_factor = gauss_rad_factor, filtering = filtering, verbose = verbose) for p in range(sum(npatch)+1)]
+    Args:
+        - k_grid: wave vector k coordinates for each combination of kx, ky, and kz
+        - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
+        - B_phase_kx: random magnetic field component in Fourier space in the x direction
+        - B_phase_ky: random magnetic field component in Fourier space in the y direction
+        - B_phase_kz: random magnetic field component in Fourier space in the z direction
+        - P_B: amplitude of the power spectrum of the magnetic field seed
+        - size: size of the box in Mpc
+        - N: number of cells in each direction
+        - verbose: boolean to print the parameters or not
+        - debug: boolean to print debugging information or not
+        
+    Returns:
+        - B_random_kx: random magnetic field component in Fourier space in the x direction
+        - B_random_ky: random magnetic field component in Fourier space in the y direction
+        - B_random_kz: random magnetic field component in Fourier space in the z direction
+        
+    Source: Vazza, F., Paoletti, D., Banfi, S., Finelli, F., Gheller, C., O’Sullivan, S. P., & Brüggen, M. (2021).
+            Simulations and observational tests of primordial magnetic fields from Cosmic Microwave Background constraints.
+            Monthly Notices of the Royal Astronomical Society, 500(4), 5350–5368. https://doi.org/10.1093/mnras/staa3532
+            
+    Author: Marco Molina
+
+    '''
+    
+    nmax, nmay, nmaz = N
     
     # Generate the random magnetic field components amplitude in Fourier space    
     B_kx_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid[p][0]/k_magnitude[p])**2) for p in range(sum(npatch)+1)]
@@ -771,17 +810,41 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         print(f"Debugging Test XIV Passed: B random kx is Hermitian.")
         print('============================================================')
     
-    del B_phase_kx, B_phase_ky, B_phase_kz, B_kx_mod_squared, B_ky_mod_squared, B_kz_mod_squared  
+    return B_random_kx, B_random_ky, B_random_kz
+
+def seed_transverse_projection(k_grid, B_random_kx, B_random_ky, B_random_kz, N, verbose = False, debug = False):
+    '''
+    Computes the transverse projection of the magnetic field to ensure the null divergence.
+    
+    Args:
+        - k_grid: wave vector k coordinates for each combination of kx, ky, and kz
+        - B_random_kx: random magnetic field component in Fourier space in the x direction
+        - B_random_ky: random magnetic field component in Fourier space in the y direction
+        - B_random_kz: random magnetic field component in Fourier space in the z direction
+        - N: number of cells in each direction
+        - verbose: boolean to print the parameters or not
+        - debug: boolean to print debugging information or not
+        
+    Returns:
+        - B_kx: random magnetic field component in Fourier space in the x direction
+        - B_ky: random magnetic field component in Fourier space in the y direction
+        - B_kz: random magnetic field component in Fourier space in the z direction
+            
+    Author: Marco Molina
+
+    '''
+    
+    nmax, nmay, nmaz = N
     
     # Compute the transverse projection of the magnetic field to ensure the null divergence
+    
+    k_squared = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)] 
+    
     k_dot_B = [(k_grid[p][0] * B_random_kx[p] + k_grid[p][1] * B_random_ky[p] + k_grid[p][2] * B_random_kz[p])/(k_squared[p]) for p in range(sum(npatch)+1)]
     
     B_kx = [B_random_kx[p] - (k_grid[p][0] * k_dot_B[p]) for p in range(sum(npatch)+1)]
     B_ky = [B_random_ky[p] - (k_grid[p][1] * k_dot_B[p]) for p in range(sum(npatch)+1)]
     B_kz = [B_random_kz[p] - (k_grid[p][2] * k_dot_B[p]) for p in range(sum(npatch)+1)]
-    
-    # Erase some last arrays to free memory
-    del B_random_kx, B_random_ky, B_random_kz, k_dot_B, k_grid, k_squared, k_magnitude
     
     # After handling the transverse proyection, we can finally merge the explicitly separated positive and negative Nyquist frequencies
     B_kx = [merge_nyquist(B_kx[p]) for p in range(sum(npatch)+1)]
@@ -810,17 +873,67 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         assert np.allclose(B_kz[0][1:, 1:, 1:], np.conj(np.flip(B_kz[0][1:, 1:, 1:])), rtol = 1e-5, atol = 1e-5), f"Debugging Test XVII Failed: B_kz is not Hermitian."
         print(f"Debugging Test XVII Passed: B_kz is Hermitian.")
         print('============================================================')
+    
+    return B_kx, B_ky, B_kz
+
+def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, size, N, gauss_rad_factor = 1, epsilon = 1e-30,
+                                filtering = True, verbose = False, debug = False, format = 'fortran', run = 'no_name'):
+    '''
+    Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
+    used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
+    
+    Args:
+        - alpha_index: spectral index of the magnetic field
+        - lambda_scale: comoving smoothing length in Mpc
+        - B_lambda: magnetic field amplitude at the comoving smoothing length in Gauss
+        - h_cosmo: Hubble constant in units of 100 km/s/Mpc
+        - size: size of the box in Mpc
+        - N: number of cells in each direction
+        - gauss_rad_factor: factor to multiply the Gaussian filtering radius
+        - epsilon: small number to avoid division by zero
+        - filtering: boolean to apply the filtering and damping or not
+        - verbose: boolean to print the parameters or not
+        - debug: boolean to print debugging information or not
         
+    Returns:
+        - B_kx: random magnetic field component in Fourier space in the x direction
+        - B_ky: random magnetic field component in Fourier space in the y direction
+        - B_kz: random magnetic field component in Fourier space in the z direction
+        
+    Source: Vazza, F., Paoletti, D., Banfi, S., Finelli, F., Gheller, C., O’Sullivan, S. P., & Brüggen, M. (2021).
+            Simulations and observational tests of primordial magnetic fields from Cosmic Microwave Background constraints.
+            Monthly Notices of the Royal Astronomical Society, 500(4), 5350–5368. https://doi.org/10.1093/mnras/staa3532
+            Phase theoretical treatment based on Vicent Quilis' procedure.
+            
+    Author: Marco Molina
+
+    '''
+    
+    nmax, nmay, nmaz = N
+    dx = size/nmax
+    
+    # Fourier space quantities
+    k_grid, k_magnitude = generate_fourier_space(size, N, epsilon = epsilon, verbose = verbose, debug = debug)
+        
+    # Phase of the magnetic field seed in Fourier space
+    B_phase_kx, B_phase_ky, B_phase_kz = generate_seed_phase(k_magnitude, N, epsilon = epsilon, verbose = verbose, debug = debug)
+    
+    # Power spectrum amplitude
+    P_B = [power_spectrum_amplitude(k_magnitude[p], alpha_index, lambda_scale, B_lambda, h_cosmo, size, N, gauss_rad_factor = gauss_rad_factor, filtering = filtering, verbose = verbose) for p in range(sum(npatch)+1)]
+    
+    # Generate the random magnetic field components amplitude in Fourier space
+    B_random_kx, B_random_ky, B_random_kz = generate_random_seed_amplitudes(k_grid, k_magnitude, B_phase_kx, B_phase_ky, B_phase_kz, P_B, size, N, verbose = verbose, debug = debug)
+    
+    # Handle the transverse projection and generate the magnetic field seed in Fourier space
+    B_kx, B_ky, B_kz = seed_transverse_projection(k_grid, B_random_kx, B_random_ky, B_random_kz, N, verbose = verbose, debug = debug)
+    
     # Get the magnetic field components in real space
-    Bx = [np.fft.ifftn(B_kx[p])/(B_kx[p].size) for p in range(sum(npatch)+1)]
-    By = [np.fft.ifftn(B_ky[p])/(B_ky[p].size) for p in range(sum(npatch)+1)]
-    Bz = [np.fft.ifftn(B_kz[p])/(B_kz[p].size) for p in range(sum(npatch)+1)]
+    Bx = [np.real(np.fft.ifftn(B_kx[p])/(B_kx[p].size)) for p in range(sum(npatch)+1)]
+    By = [np.real(np.fft.ifftn(B_ky[p])/(B_ky[p].size)) for p in range(sum(npatch)+1)]
+    Bz = [np.real(np.fft.ifftn(B_kz[p])/(B_kz[p].size)) for p in range(sum(npatch)+1)]
     
     del B_kx, B_ky, B_kz
-        
-    Bx = [np.real(Bx[p]) for p in range(sum(npatch)+1)]
-    By = [np.real(By[p]) for p in range(sum(npatch)+1)]
-    Bz = [np.real(Bz[p]) for p in range(sum(npatch)+1)]
+    gc.collect()
     
     if debug:
         
@@ -889,6 +1002,7 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         plt.text(imdim, imdim-gauss_rad_factor, f'{gauss_rad_factor} Mpc', color=col)
         
         del Bmag, diver_B
+        gc.collect()
         
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = os.path.join(base_dir, 'data')
