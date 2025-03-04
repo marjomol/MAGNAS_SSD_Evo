@@ -550,8 +550,9 @@ def power_spectrum_amplitude(k_mag, alpha_index, lambda_scale, B_lambda, h_cosmo
         P_B = P_B * np.exp(-A_fil)
     
         if verbose:
-            print(f'Paremeters: Spectral index: {alpha_index} | Filtering Scale: {lambda_scale} | B0: {B_lambda} | h: {h_cosmo}')
             print('============================================================')
+            print(f'Paremeters: Spectral index: {alpha_index} | Filtering Scale: {lambda_scale} | B0: {B_lambda} | h: {h_cosmo}')
+            print('------------------------------------------------------------')
             print(f'Damping scale:            {k_d}')
             print(f'Maximum frequency number: {np.max(k_mag)}')
             print('------------------------------------------------------------')
@@ -612,6 +613,14 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
     for p in range(sum(npatch)+1):
         k_squared[p][k_squared[p] == 0] = epsilon
         k_magnitude[p][k_magnitude[p] == 0] = epsilon
+        
+    if verbose:
+        print('============================================================')
+        print('Fourier Grid completed')
+        print('------------------------------------------------------------')
+        print(f'kx shape: {kx[0].shape}')
+        print(f'kx grid shape: {k_grid[0][0].shape}')
+        print('============================================================')
     
     # Debugging tests if needed, saving some k-arrays to check the values
     if debug:
@@ -635,7 +644,7 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
         print(f'k squared shape: {k_squared[0].shape}')
         print(f'k magnitude shape: {k_magnitude[0].shape}')
         print(f'Some k magnitude values: {k_magnitude[0][0:3, 0:3, 0:3]}')
-        print('------------------------------------------------------------')
+        print('============================================================')
         assert np.allclose(k_grid[0][0][1:, 1:, 1:], -np.conj(np.flip(k_grid[0][0][1:, 1:, 1:]))), f"Debugging Test I Failed: kx grid is simmetric."
         print(f"Debugging Test I Passed: kx grid is simmetric.")
         assert np.allclose(k_magnitude[0][1:, 1:, 1:], np.conj(np.flip(k_magnitude[0][1:, 1:, 1:]))), f"Debugging Test II Failed: k magnitude is not Hermitian."
@@ -693,6 +702,13 @@ def generate_seed_phase(k_magnitude, N, epsilon = 1e-30, verbose = False, debug 
     B_phase_kx = [np.cos(2 * np.pi * iota_grid[p][0]) * np.sqrt(-2 * np.log(beta_grid[p][0])) + 1j * (np.sin(2 * np.pi * iota_grid[p][0]) * np.sqrt(-2 * np.log(beta_grid[p][0]))) for p in range(sum(npatch)+1)]
     B_phase_ky = [np.cos(2 * np.pi * iota_grid[p][1]) * np.sqrt(-2 * np.log(beta_grid[p][1])) + 1j * (np.sin(2 * np.pi * iota_grid[p][1]) * np.sqrt(-2 * np.log(beta_grid[p][1]))) for p in range(sum(npatch)+1)]
     B_phase_kz = [np.cos(2 * np.pi * iota_grid[p][2]) * np.sqrt(-2 * np.log(beta_grid[p][2])) + 1j * (np.sin(2 * np.pi * iota_grid[p][2]) * np.sqrt(-2 * np.log(beta_grid[p][2]))) for p in range(sum(npatch)+1)]
+    
+    if verbose:
+        print('============================================================')
+        print('Random Phase completed')
+        print('------------------------------------------------------------')
+        print(f'Random phase shape: {B_phase_kx[0].shape}')
+        print('============================================================')
     
     if debug:
         
@@ -785,6 +801,13 @@ def generate_random_seed_amplitudes(k_grid, k_magnitude, B_phase_kx, B_phase_ky,
     B_random_ky = [(np.sqrt(B_ky_mod_squared[p]/2)) * B_phase_ky[p] for p in range(sum(npatch)+1)]
     B_random_kz = [(np.sqrt(B_kz_mod_squared[p]/2)) * B_phase_kz[p] for p in range(sum(npatch)+1)]
     
+    if verbose:
+        print('============================================================')
+        print('Random Magnetic Field Seed Amplitudes completed')
+        print('------------------------------------------------------------')
+        print(f'Random magnetic field component shape: {B_random_kx[0].shape}')
+        print('============================================================')
+    
     # Save some arrays to check the values if needed
     if debug:
         
@@ -795,8 +818,9 @@ def generate_random_seed_amplitudes(k_grid, k_magnitude, B_phase_kx, B_phase_ky,
             utils.save_3d_array('B_random_kx', B_random_kx[0])
         
         print('============================================================')
-        print(f'Power Spectrum Information')
+        print(f'Random Magnetic Field Seed Amplitudes Information')
         print('------------------------------------------------------------')
+        print(f'Random magnetic field component shape: {B_random_kx[0].shape}')
         print(f'Power Spectrum shape: {P_B[0].shape}')
         print(f'Some power spectrum values: {P_B[0][0:3, 0:3, 0:3]}')
         print('------------------------------------------------------------')
@@ -850,6 +874,13 @@ def seed_transverse_projection(k_grid, B_random_kx, B_random_ky, B_random_kz, N,
     B_kx = [merge_nyquist(B_kx[p]) for p in range(sum(npatch)+1)]
     B_ky = [merge_nyquist(B_ky[p]) for p in range(sum(npatch)+1)]
     B_kz = [merge_nyquist(B_kz[p]) for p in range(sum(npatch)+1)]
+    
+    if verbose:
+        print('============================================================')
+        print('Transverse Projection completed')
+        print('------------------------------------------------------------')
+        print(f'B_kx amplitude shape: {B_kx[0].shape}')
+        print('============================================================')
     
     if debug:
         
@@ -924,8 +955,14 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
     # Generate the random magnetic field components amplitude in Fourier space
     B_random_kx, B_random_ky, B_random_kz = generate_random_seed_amplitudes(k_grid, k_magnitude, B_phase_kx, B_phase_ky, B_phase_kz, P_B, size, N, verbose = verbose, debug = debug)
     
+    del B_phase_kx, B_phase_ky, B_phase_kz, P_B, k_magnitude
+    gc.collect()
+    
     # Handle the transverse projection and generate the magnetic field seed in Fourier space
     B_kx, B_ky, B_kz = seed_transverse_projection(k_grid, B_random_kx, B_random_ky, B_random_kz, N, verbose = verbose, debug = debug)
+    
+    del B_random_kx, B_random_ky, B_random_kz, k_grid
+    gc.collect()
     
     # Get the magnetic field components in real space
     Bx = [np.real(np.fft.ifftn(B_kx[p])/(B_kx[p].size)) for p in range(sum(npatch)+1)]
@@ -935,6 +972,28 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
     del B_kx, B_ky, B_kz
     gc.collect()
     
+    if verbose:
+        
+        print('============================================================')
+        print(f'Magnetic Field Real Space Information')
+        print('------------------------------------------------------------')
+        print(f'B_x component shape: {Bx[0].shape}')
+        print(f'Some magnetic field values: {Bx[0][0:3, 0:3, 0:3]}')
+        print('============================================================')
+        
+        depth = 5
+        fact = 5
+        col = 'red'
+        
+        imdim = np.round((fact+gauss_rad_factor)/dx, 0).astype(int)
+        section = np.sum(Bx[0][(Bx[0].shape[0]//2 - imdim):(Bx[0].shape[0]//2 + imdim), (Bx[0].shape[1]//2 - imdim):(Bx[0].shape[1]//2 + imdim), (Bx[0].shape[2]//2 - depth//2):(Bx[0].shape[2] + depth//2)], axis=2)
+        plt.imshow(section, cmap='viridis')
+        plt.title(f'Gaussian Filtered Magnetic Field, $\\alpha$ = {alpha_index}')
+        ctoMpc = gauss_rad_factor/dx
+        plt.arrow(imdim, imdim, ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
+        plt.text(imdim, imdim-gauss_rad_factor, f'{gauss_rad_factor} Mpc', color=col)
+    
+    # Display the divergence of the magnetic field and some values of the seed
     if debug:
         
         print('============================================================')
@@ -953,27 +1012,11 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         print(f"Debugging Test XX Passed: Bz is real.")
         print('============================================================')
     
-    if debug or verbose:
         # Compute the magnetic field magnitude
         Bmag = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
         
         # Compute the magnetic field seed divergence
         diver_B = diff.periodic_divergence(Bx, By, Bz, dx, npatch = np.array([0]), stencil=5, kept_patches=None)
-    
-    if debug:
-        
-        print('============================================================')
-        print('Magnetic Field Divergence Information')
-        print('------------------------------------------------------------')
-        print(f'Magnetic field divergence shape: {diver_B[0].shape}')
-        print(f'Some magnetic field divergence values: {diver_B[0][0:3, 0:3, 0:3]}')
-        print('============================================================')
-        
-        if verbose == False:
-            del Bmag, diver_B
-    
-    # Display the divergence of the magnetic field and some values of the seed
-    if verbose:
         
         print('============================================================')
         print(f'Spectral Index: {alpha_index}')
@@ -981,6 +1024,11 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         print(f'Max field: {np.max(Bmag)}')
         print(f'Min field: {np.min(Bmag)}')
         print(f'Average field: {np.mean(Bmag)}')
+        print('============================================================')
+        print('Magnetic Field Divergence Information')
+        print('------------------------------------------------------------')
+        print(f'Magnetic field divergence shape: {diver_B[0].shape}')
+        print(f'Some magnetic field divergence values: {diver_B[0][0:3, 0:3, 0:3]}')
         print('------------------------------------------------------------')
         print(f"Max absolute divergence: {np.max(np.abs(diver_B[0]))}")
         print(f"Min absolute divergence: {np.min(np.abs(diver_B[0]))}")
@@ -988,18 +1036,6 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         print(f"Average divergence: {np.mean(diver_B[0])}")
         print(f"Dispersion divergence: {np.std(diver_B[0])}")
         print('============================================================')
-        
-        depth = 5
-        fact = 5
-        col = 'red'
-        
-        imdim = np.round((fact+gauss_rad_factor)/dx, 0).astype(int)
-        section = np.sum(Bx[0][(Bx[0].shape[0]//2 - imdim):(Bx[0].shape[0]//2 + imdim), (Bx[0].shape[1]//2 - imdim):(Bx[0].shape[1]//2 + imdim), (Bx[0].shape[2]//2 - depth//2):(Bx[0].shape[2] + depth//2)], axis=2)
-        plt.imshow(section, cmap='viridis')
-        plt.title(f'Gaussian Filtered Magnetic Field, $\\alpha$ = {alpha_index}')
-        ctoMpc = gauss_rad_factor/dx
-        plt.arrow(imdim, imdim, ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
-        plt.text(imdim, imdim-gauss_rad_factor, f'{gauss_rad_factor} Mpc', color=col)
         
         del Bmag, diver_B
         gc.collect()

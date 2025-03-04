@@ -39,15 +39,18 @@ def plot(Bx, By, Bz, Run):
         zoom_animation_3D(BM, seed_params["dx"], arrow_scale=1, units='Mpc', 
                         title=f'Gaussian Filtered Magnetic Field, $\\alpha$ = {seed_params["alpha"][index]}', 
                         Save=out_params["save"], DPI=out_params["dpi"], run=run, folder=out_params["image_folder"])
-        
+
 if __name__ == "__main__":
-    plot(*main(), Run)
+    main
+
+# if __name__ == "__main__":
+#     plot(*main(), Run)
     
 # ============================
 # Only edit the section above
 # ============================
 
-if out_params["save"]:
+if out_params["save"] == True:
     print(f"Results saved in {out_params['image_folder']}")
 else:
     print("Results not saved")
