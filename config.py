@@ -22,14 +22,15 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # alpha = [-2.9, -1, 0, 1, 2]
 
 SEED_PARAMS = {
-    "nmax": 1024,
-    "nmay": 1024,
-    "nmaz": 1024,
+    "nmax": 256,
+    "nmay": 256,
+    "nmaz": 256,
     "size": 40, # Size of the box in Mpc
-    "B0": [2], # Initial magnetic field amplitude in Gauss
-    "alpha": [-2.9], # Spectral index
+    "B0": 2, # Initial magnetic field amplitude in Gauss
+    "alpha": -2.9, # Spectral index
     "lambda_comoving": 1.0, # Comoving smoothing length
     "smothing": 1,
+    "filtering": True,
     "epsilon": 1e-30,
     "npalev": 13000,
     "nlevels": 7,
@@ -45,7 +46,10 @@ SEED_PARAMS = {
 
 OUTPUT_PARAMS = {
     "save": True,
+    "format": "fortran",
     "dpi": 300,
+    "verbose": True,
+    "debug": False,
     "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
