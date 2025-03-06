@@ -15,8 +15,6 @@ import scripts.utils as utils
 import scripts.diff as diff
 from scipy.special import gamma
 from matplotlib import pyplot as plt
-from scipy.io import FortranFile
-import h5py
 import os
 npatch = np.array([0]) # We only want the zero patch for the seed
 
@@ -903,25 +901,9 @@ def generate_magnetic_field_seed(axis, k_grid, B_random_k, k_dot_B, alpha_index,
         assert np.all(np.abs(np.imag(B[0])) < 1e-7), f"Debugging Test XII Failed: B{axis} is not real."
         print(f"Debugging Test XII Passed: B{axis} is real.")
         print('============================================================')
-        
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_dir = os.path.join(base_dir, 'data')
 
     # Save the magnetic field seed in the data directory using a universal text format
-    if format == 'txt':
-        os.makedirs(data_dir, exist_ok=True)
-        np.savetxt(os.path.join(data_dir, f'B{axis}_{run}.txt'), B[0].flatten())
-    elif format == 'npy':
-        os.makedirs(data_dir, exist_ok=True)
-        np.save(os.path.join(data_dir, f'B{axis}_{run}.npy'), B[0])
-    elif format == 'hdf5':
-        os.makedirs(data_dir, exist_ok=True)
-        with h5py.File(os.path.join(data_dir, 'B.h5'), 'w') as f:
-            f.create_dataset(f'B{axis}_{run}', data=B[0])
-    elif format == 'fortran':
-        os.makedirs(data_dir, exist_ok=True)
-        with FortranFile(os.path.join(data_dir, f'B{axis}_{run}.bin'), 'w') as f:
-            f.write_record(B[0].astype(np.float32))
+    utils.save_magnetic_field_seed(B, axis, format, run)
     
     return B
 

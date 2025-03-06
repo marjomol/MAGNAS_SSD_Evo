@@ -22,9 +22,9 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # alpha = [-2.9, -1, 0, 1, 2]
 
 SEED_PARAMS = {
-    "nmax": 256,
-    "nmay": 256,
-    "nmaz": 256,
+    "nmax": 32,
+    "nmay": 32,
+    "nmaz": 32,
     "size": 40, # Size of the box in Mpc
     "B0": 2, # Initial magnetic field amplitude in Gauss
     "alpha": -2.9, # Spectral index
@@ -50,6 +50,7 @@ OUTPUT_PARAMS = {
     "dpi": 300,
     "verbose": True,
     "debug": False,
+    "run": f'PRIMAL_Seed_Gen_test',
     "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
