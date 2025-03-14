@@ -8,7 +8,9 @@ Defines configuration parameters for the simulation, including seed parameters a
 Created by Marco Molina Pradillo
 """
 
+import numpy as np
 import os
+import psutil
 from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 
 # ============================
@@ -22,9 +24,9 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # alpha = [-2.9, -1, 0, 1, 2]
 
 SEED_PARAMS = {
-    "nmax": 32,
-    "nmay": 32,
-    "nmaz": 32,
+    "nmax": 64,
+    "nmay": 64,
+    "nmaz": 64,
     "size": 40, # Size of the box in Mpc
     "B0": 2, # Initial magnetic field amplitude in Gauss
     "alpha": -2.9, # Spectral index
@@ -46,11 +48,13 @@ SEED_PARAMS = {
 
 OUTPUT_PARAMS = {
     "save": True,
+    "chunk_factor": 2,
+    "bitformat": np.float64,
     "format": "fortran",
     "dpi": 300,
     "verbose": True,
     "debug": False,
-    "run": f'PRIMAL_Seed_Gen_test',
+    "run": f'PRIMAL_Seed_Gen_modular_2',
     "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
@@ -108,3 +112,31 @@ for folder in folders:
         os.makedirs(folder) 
 
 OUTPUT_PARAMS["image_folder"] = image_folder
+
+## Check if the arrays can fit in memory or if an alternative memory handeling method is needed
+
+# Get the total RAM capacity in bytes
+ram_capacity = psutil.virtual_memory().total
+
+# Convert the RAM capacity to gigabytes
+ram_capacity_gb = ram_capacity / (1024 ** 3)
+
+print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
+
+# Calculate the size of the arrays in bytes
+array_size = SEED_PARAMS["nmax"] * SEED_PARAMS["nmay"] * SEED_PARAMS["nmaz"]
+array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
+
+print(f"Size of the arrays: {array_size_bytes / (1024 ** 3):.2f} GB")
+
+# Check if the arrays will use more than 1/4 of the total RAM
+if array_size_bytes > (ram_capacity / 4):
+    memmap = True
+    print("The arrays are too large to fit in memory: chunking will be used.")
+    # Implement alternative method here
+else:
+    memmap = False
+    print("The arrays can fit in memory: chunking will not be used.")
+    # Proceed with the current method
+
+OUTPUT_PARAMS["memmap"] = memmap

@@ -10,12 +10,13 @@ Created by Marco Molina Pradillo
 """
 
 import gc
+import os
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
+from scripts.units import *
 from scipy.special import gamma
 from matplotlib import pyplot as plt
-import os
 npatch = np.array([0]) # We only want the zero patch for the seed
 
 def random_hermitian_vector(n):
@@ -415,7 +416,6 @@ def power_spectrum_amplitude(k_mag, alpha_index, lambda_scale, B_lambda, h_cosmo
     Author: Marco Molina
     '''
     
-    
     # Power spectrum amplitude #
     
     # This are two different but equivalent ways to compute the power spectrum amplitude appearing in the bibliography.
@@ -427,7 +427,7 @@ def power_spectrum_amplitude(k_mag, alpha_index, lambda_scale, B_lambda, h_cosmo
     
     if filtering:
         
-        n = max(N) # Maximum number of cells form each of the direction
+        n = max(N) # Maximum number of cells from each of the directions
     
         # Gaussian filtering
         R_fil = size / n 
@@ -457,7 +457,7 @@ def power_spectrum_amplitude(k_mag, alpha_index, lambda_scale, B_lambda, h_cosmo
     
     return P_B
 
-def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = False):
+def generate_fourier_space(K, N, epsilon = 1e-30, verbose = False, debug = False):
     '''
     Generates the Fourier space quantities needed to compute the magnetic field seed in Fourier space.
     
@@ -477,43 +477,29 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
     '''
 
     nmax, nmay, nmaz = N
-    dx = size/nmax
     
-    # Calculate the wave numbers for a Fourier transform
-    kx = [np.fft.fftfreq(nmax, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
-    ky = [np.fft.fftfreq(nmay, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
-    kz = [np.fft.fftfreq(nmaz, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
-    
-    ##Revisar## Factor 2*pi
-    # kx = [np.fft.fftfreq(nmax, dx) for _ in range(sum(npatch)+1)]
-    # ky = [np.fft.fftfreq(nmay, dx) for _ in range(sum(npatch)+1)]
-    # kz = [np.fft.fftfreq(nmaz, dx) for _ in range(sum(npatch)+1)]
-    
-    # Here we add the positive Nyquist frequency just before the negative Nyquist frequency already present
-    for p in range(sum(npatch)+1):
-        kx[p] = np.insert(kx[p], nmax//2, -kx[p][nmax//2])
-        ky[p] = np.insert(ky[p], nmay//2, -ky[p][nmay//2])
-        kz[p] = np.insert(kz[p], nmaz//2, -kz[p][nmaz//2])
+    kx = K[0]
+    ky = K[1]
+    kz = K[2]
     
     # Components of the wave vector k for each combination of kx, ky, and kz.
-    k_grid = [np.meshgrid(kx[p], ky[p], kz[p], indexing='ij') for p in range(sum(npatch)+1)]
-
+    k_grid = [np.meshgrid(kx, ky, kz, indexing='ij') for _ in range(sum(npatch)+1)]
+    
     # Squared magnitudes of the wave vector k for each combination of kx, ky, and kz.
-    k_squared = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)]
+    k_magnitude = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)]
 
     # Magnitude of the wave vector k for each combination of kx, ky, and kz.
-    k_magnitude = [np.sqrt(k_squared[p]).astype(np.float64) for p in range(sum(npatch)+1)]
+    k_magnitude = [np.sqrt(k_magnitude[p]).astype(np.float64) for p in range(sum(npatch)+1)]
 
     # Avoid division by zero by setting zero magnitudes to a small number.
     for p in range(sum(npatch)+1):
-        k_squared[p][k_squared[p] == 0] = epsilon
         k_magnitude[p][k_magnitude[p] == 0] = epsilon
         
     if verbose:
         print('============================================================')
         print('Fourier Grid completed')
         print('------------------------------------------------------------')
-        print(f'kx shape: {kx[0].shape}')
+        print(f'kx shape: {kx.shape}')
         print(f'kx grid shape: {k_grid[0][0].shape}')
         print('============================================================')
     
@@ -529,14 +515,13 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
         print('============================================================')
         print('Fourier Grid Information')
         print('------------------------------------------------------------')
-        print(f'kx shape: {kx[0].shape}')
-        print(f'ky shape: {ky[0].shape}')
-        print(f'kz shape: {kz[0].shape}')
+        print(f'kx shape: {kx.shape}')
+        print(f'ky shape: {ky.shape}')
+        print(f'kz shape: {kz.shape}')
         print(f'kx grid shape: {k_grid[0][0].shape}')
         print(f'ky grid shape: {k_grid[0][1].shape}')
         print(f'kz grid shape: {k_grid[0][2].shape}')
-        print(f'Frequency numbers: {kx[0]}')
-        print(f'k squared shape: {k_squared[0].shape}')
+        print(f'Frequency numbers: {kx}')
         print(f'k magnitude shape: {k_magnitude[0].shape}')
         print(f'Some k magnitude values: {k_magnitude[0][0:3, 0:3, 0:3]}')
         print('============================================================')
@@ -568,12 +553,16 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
         
     return k_grid, k_magnitude
 
-def generate_seed_phase(axis, k_magnitude, N, epsilon = 1e-30, verbose = False, debug = False):
+def generate_seed_phase(axis, k_magnitude, iota, beta, N, epsilon = 1e-30, verbose = False, debug = False):
     '''
     Generates the random magnetic field seed phase in Fourier space.
     Args:
         - axis: axis of the random magnetic field seed phase needed to be generated. The axis must be x, y, or z.
         - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
+        - iota: random number 3D array for the asked dimension
+            - If the hole array is processed, this must be a negative symmetric array resulting from @random_phase
+        - beta: random number 3D array for the asked dimension
+            - If the hole array is processed, this must be a positive symmetric array resulting from @random_phase
         - N: number of cells in each direction
         - epsilon: small number to avoid division by zero
         - verbose: boolean to print the parameters or not
@@ -592,9 +581,6 @@ def generate_seed_phase(axis, k_magnitude, N, epsilon = 1e-30, verbose = False, 
         raise ValueError('The axis must be x, y, or z.')
     
     nmax, nmay, nmaz = N
-    
-    # Generate a random phase with chosen real and imaginary parts to get a real random magnetic field in real space, evently distributed in amplitude around a given value.
-    iota, beta = random_phase(axis, k_magnitude, N, epsilon = epsilon, mode = 3)
     
     B_phase_k = [np.cos(2 * np.pi * iota[p]) * np.sqrt(-2 * np.log(beta[p])) + 1j * (np.sin(2 * np.pi * iota[p]) * np.sqrt(-2 * np.log(beta[p]))) for p in range(sum(npatch)+1)]
     
@@ -634,16 +620,17 @@ def generate_seed_phase(axis, k_magnitude, N, epsilon = 1e-30, verbose = False, 
         
     return B_phase_k
 
-def generate_random_seed_amplitudes(axis, k_grid, k_magnitude, P_B, size, N, verbose = False, debug = False):
+def generate_random_seed_amplitudes(axis, k_grid_axis, k_magnitude, P_B, B_phase_axis, size, N, verbose = False, debug = False):
     '''
     Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
     used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
     
     Args:
         - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z.
-        - k_grid: wave vector k coordinates for each combination of kx, ky, and kz
+        - k_grid_axis: wave vector k coordinates axis component for each combination of kx, ky, and kz
         - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
         - P_B: amplitude of the power spectrum of the magnetic field seed
+        - B_phase_axis: random magnetic field seed phase in Fourier space in the given direction
         - size: size of the box in Mpc
         - N: number of cells in each direction
         - verbose: boolean to print the parameters or not
@@ -659,32 +646,21 @@ def generate_random_seed_amplitudes(axis, k_grid, k_magnitude, P_B, size, N, ver
     Author: Marco Molina
 
     '''
-    
-    if axis == 'x':
-        ax_id = 0
-    elif axis == 'y':
-        ax_id = 1
-    elif axis == 'z':
-        ax_id = 2
-    else:
-        raise ValueError('The axis must be x, y, or z.')
         
+    if axis not in ['x', 'y', 'z']:
+        raise ValueError('The axis must be x, y, or z.')
+    
     nmax, nmay, nmaz = N
     
-    # Generate the random magnetic field components amplitude in Fourier space    
-    B_k_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid[p][ax_id]/k_magnitude[p])**2) for p in range(sum(npatch)+1)]
+    # Generate the random magnetic field components in Fourier space by agregating the phase and amplitude
+    B_random_k = [np.sqrt(((size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid_axis/k_magnitude[p])**2))/2) * B_phase_axis[p] for p in range(sum(npatch)+1)]
     
     ##Revisar## Proyección transversal en la magnitud
-    # B_k_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] for p in range(sum(npatch)+1)]
+    # B_random_k = [np.sqrt(((size**3) * ((2 * np.pi)**3) * P_B[p])/2) * B_random_k[p] for p in range(sum(npatch)+1)]
     
     # We need to habdle the null frequency after applying the magnitude proyection or the signal would tend to infity.
-    B_k_mod_squared[0][0,0,0] = 0.
-    
-    # Generate the random phase of the magnetic field seed
-    B_phase_k = generate_seed_phase(axis, k_magnitude, N, epsilon = 1e-30, verbose = verbose, debug = debug)
-    
-    # Generate the random magnetic field components in Fourier space
-    B_random_k = [(np.sqrt(B_k_mod_squared[p]/2)) * B_phase_k[p] for p in range(sum(npatch)+1)]
+    if k_magnitude[0][0,0,0] == 0:
+        B_random_k[0][0,0,0] = 0.
     
     if verbose:
         print('============================================================')
@@ -696,9 +672,14 @@ def generate_random_seed_amplitudes(axis, k_grid, k_magnitude, P_B, size, N, ver
     # Save some arrays to check the values if needed
     if debug:
         
+        # Generate the random magnetic field components amplitude in Fourier space    
+        B_k_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid_axis/k_magnitude[p])**2) for p in range(sum(npatch)+1)]
+        # We need to habdle the null frequency after applying the magnitude proyection or the signal would tend to infity.
+        B_k_mod_squared[0][0,0,0] = 0.
+        
         if nmax <= 32 and nmay <= 32 and nmaz <= 32:            
             utils.save_3d_array('data/P_B', P_B[0])
-            utils.save_3d_array(f'data/1-(k_hat k_hat div k_squared)_{axis}', (1 - (k_grid[0][ax_id]/k_magnitude[0])**2))
+            utils.save_3d_array(f'data/1-(k_hat k_hat div k_squared)_{axis}', (1 - (k_grid_axis/k_magnitude[0])**2))
             utils.save_3d_array(f'data/B_k{axis}_mod_squared', B_k_mod_squared[0])
             utils.save_3d_array(f'data/B_random_k{axis}', B_random_k[0])
         
@@ -711,7 +692,7 @@ def generate_random_seed_amplitudes(axis, k_grid, k_magnitude, P_B, size, N, ver
         print('------------------------------------------------------------')
         assert np.allclose(P_B[0][1:, 1:, 1:], np.conj(np.flip(P_B[0][1:, 1:, 1:]))), f"Debugging Test VII Failed: P_B is not Hermitian."
         print(f"Debugging Test VII Passed: P_B is Hermitian.")
-        assert np.allclose((1 - (k_grid[0][ax_id]/k_magnitude[0])**2)[1:, 1:, 1:], np.conj(np.flip((1 - (k_grid[0][ax_id]/k_magnitude[0])**2)[1:, 1:, 1:]))), f"Debugging Test VIII Failed: 1 - (k_hat k_hat div k_squared)_{axis} is not Hermitian."
+        assert np.allclose((1 - (k_grid_axis/k_magnitude[0])**2)[1:, 1:, 1:], np.conj(np.flip((1 - (k_grid_axis/k_magnitude[0])**2)[1:, 1:, 1:]))), f"Debugging Test VIII Failed: 1 - (k_hat k_hat div k_squared)_{axis} is not Hermitian."
         print(f"Debugging Test VIII Passed: 1 - (k_hat k_hat div k_squared)_{axis} is Hermitian.")
         assert np.allclose(B_k_mod_squared[0][1:, 1:, 1:], np.conj(np.flip(B_k_mod_squared[0][1:, 1:, 1:]))), f"Debugging Test IX Failed: B k{axis} module squared is not Hermitian."
         print(f"Debugging Test IX Passed: B k{axis} module squared is Hermitian.")
@@ -747,9 +728,9 @@ def seed_transverse_projector(k_grid, B_random_K, N, verbose = False, debug = Fa
     
     # Compute the transverse projection of the magnetic field to ensure the null divergence
     
-    k_squared = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)] 
+    k_dot_B = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)] 
     
-    k_dot_B = [(k_grid[p][0] * B_random_kx[p] + k_grid[p][1] * B_random_ky[p] + k_grid[p][2] * B_random_kz[p])/(k_squared[p]) for p in range(sum(npatch)+1)]
+    k_dot_B = [(k_grid[p][0] * B_random_kx[p] + k_grid[p][1] * B_random_ky[p] + k_grid[p][2] * B_random_kz[p])/(k_dot_B[p]) for p in range(sum(npatch)+1)]
 
     k_dot_B[0][0,0,0] = 0.
 
@@ -774,24 +755,92 @@ def seed_transverse_projector(k_grid, B_random_K, N, verbose = False, debug = Fa
 
     return k_dot_B
 
-def generate_magnetic_field_seed(axis, k_grid, B_random_k, k_dot_B, alpha_index, size, N, gauss_rad_factor = 1,
-                                verbose = False, debug = False, format = 'fortran', run = 'no_name'):
+def generate_seed_magnetic_field(axis, k_grid_axis, B_random_k, k_dot_B, N,
+                                verbose = False, debug = False):
     '''
     Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
     used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
     
     Args:
         - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z.
-        - k_grid: wave vector k coordinates for each combination of kx, ky, and kz
-        - B_random_k: random magnetic field component in Fourier space in the three directions
+        - k_grid_axis: wave vector k coordinates axis component for each combination of kx, ky, and kz
+        - B_random_k: random magnetic field component in Fourier space in the three directions for the given axis
         - k_dot_B: transverse projectior of the magnetic field to ensure the null divergence
+        - verbose: boolean to print the parameters or not
+        - debug: boolean to print debugging information or not
+
+    Returns:
+        - B: random magnetic field component in Fourier space in the given direction
+        
+    Source: Vazza, F., Paoletti, D., Banfi, S., Finelli, F., Gheller, C., O’Sullivan, S. P., & Brüggen, M. (2021).
+            Simulations and observational tests of primordial magnetic fields from Cosmic Microwave Background constraints.
+            Monthly Notices of the Royal Astronomical Society, 500(4), 5350–5368. https://doi.org/10.1093/mnras/staa3532
+            Phase theoretical treatment based on Vicent Quilis' procedure.
+            
+    Author: Marco Molina
+
+    '''
+
+    if axis not in ['x', 'y', 'z']:
+        raise ValueError('The axis must be x, y, or z.')
+    
+    nmax, nmay, nmaz = N
+    
+    # Generate the random magnetic field seed phase in Fourier space
+    Bk = [B_random_k[p] - (k_grid_axis * k_dot_B[p]) for p in range(sum(npatch)+1)]
+    
+    if verbose:
+        print('============================================================')
+        print(f'Magnetic Field Fourier {axis} Amplitude completed')
+        print('------------------------------------------------------------')
+        print(f'B_k{axis} amplitude shape: {Bk[0].shape}')
+        print('============================================================')
+    
+    if debug:
+        
+        if nmax <= 32 and nmay <= 32 and nmaz <= 32:
+            utils.save_3d_array(f'data/B_k{axis}', Bk[0])
+    
+        print('============================================================')
+        print(f'Magnetic Field Fourier {axis} Amplitude Information')
+        print('------------------------------------------------------------')
+        print(f'B_k{axis} amplitude shape: {Bk[0].shape}')
+        print(f'Some magnetic field {axis} Fourier amplitude values: {Bk[0][0:3, 0:3, 0:3]}')
+        print('------------------------------------------------------------')
+        for i in range(nmax):
+            for j in range(nmay):
+                for k in range(nmaz//2 + 1):
+
+                    iconj = -i % Bk[0].shape[0]
+                    jconj = -j % Bk[0].shape[1]
+                    kconj = -k % Bk[0].shape[2]
+                    
+                    if Bk[0][i, j, k] != np.conj(Bk[0][iconj, jconj, kconj]):
+                        print(f"Indices: ({i}, {j}, {k}) -> ({iconj}, {jconj}, {kconj})")
+                        print(f"Value at ({i}, {j}, {k}): {Bk[0][i, j, k]}")
+                        print(f"Value at ({iconj}, {jconj}, {kconj}): {Bk[0][iconj, jconj, kconj]}")
+                    
+                    assert Bk[0][i, j, k] == np.conj(Bk[0][iconj, jconj, kconj]), f"Debugging Test XI Failed: B_k{axis} is not Hermitian."
+        print(f"Debugging Test XI Passed: B_k{axis} is Hermitian.")
+        print('============================================================')
+        
+    return Bk
+
+def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_factor = 1,
+                                verbose = False, debug = False, run = 'no_name'):
+    '''
+    Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
+    used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
+    
+    Args:
+        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z.
+        - B: random magnetic field component in Fourier space in the given direction
         - alpha_index: spectral index of the magnetic field
         - size: size of the box in Mpc
         - N: number of cells in each direction
         - gauss_rad_factor: factor to multiply the Gaussian filtering radius
         - verbose: boolean to print the parameters or not
         - debug: boolean to print debugging information or not
-        - format: format of the output files
         - run: name of the run
         
     Returns:
@@ -806,63 +855,15 @@ def generate_magnetic_field_seed(axis, k_grid, B_random_k, k_dot_B, alpha_index,
 
     '''
 
-    if axis == 'x':
-        ax_id = 0
-    elif axis == 'y':
-        ax_id = 1
-    elif axis == 'z':
-        ax_id = 2
-    else:
+    if axis not in ['x', 'y', 'z']:
         raise ValueError('The axis must be x, y, or z.')
-
+    
     nmax, nmay, nmaz = N
     dx = size/nmax
-    
-    # Generate the random magnetic field seed phase in Fourier space
-    B = [B_random_k[p] - (k_grid[p][ax_id] * k_dot_B[p]) for p in range(sum(npatch)+1)]
-    
+
     # After handling the transverse proyection, we can finally merge the explicitly separated positive and negative Nyquist frequencies
     B = [merge_nyquist(B[p]) for p in range(sum(npatch)+1)]
-    
-    if verbose:
-        print('============================================================')
-        print(f'Magnetic Field Fourier {axis} Amplitude completed')
-        print('------------------------------------------------------------')
-        print(f'B_k{axis} amplitude shape: {B[0].shape}')
-        print('============================================================')
-    
-    if debug:
-        
-        if nmax <= 32 and nmay <= 32 and nmaz <= 32:
-            utils.save_3d_array(f'data/B_k{axis}', B[0])
-    
-        print('============================================================')
-        print(f'Magnetic Field Fourier {axis} Amplitude Information')
-        print('------------------------------------------------------------')
-        print(f'B_k{axis} amplitude shape: {B[0].shape}')
-        print(f'Some magnetic field {axis} Fourier amplitude values: {B[0][0:3, 0:3, 0:3]}')
-        print('------------------------------------------------------------')
-        for i in range(nmax):
-            for j in range(nmay):
-                for k in range(nmaz):
-                    
-                    i = 0
-                    j = 0
-                    k = int(1+B[0].shape[2]//2)
 
-                    iconj = -i % B[0].shape[0]
-                    jconj = -j % B[0].shape[1]
-                    kconj = -k % B[0].shape[2]
-                    
-                    if B[0][i, j, k] != np.conj(B[0][iconj, jconj, kconj]):
-                        print(f"Indices: ({i}, {j}, {k}) -> ({iconj}, {jconj}, {kconj})")
-                        print(f"Value at ({i}, {j}, {k}): {B[0][i, j, k]}")
-                        print(f"Value at ({iconj}, {jconj}, {kconj}): {B[0][iconj, jconj, kconj]}")
-                    
-                    assert B[0][i, j, k] == np.conj(B[0][iconj, jconj, kconj]), f"Debugging Test XI Failed: B_k{axis} is not Hermitian."
-        print(f"Debugging Test XI Passed: B_k{axis} is Hermitian.")
-        print('============================================================')
-    
     # Get the magnetic field components in real space
     B = [np.real(np.fft.ifftn(B[p])/(B[p].size)) for p in range(sum(npatch)+1)]
     
@@ -887,25 +888,278 @@ def generate_magnetic_field_seed(axis, k_grid, B_random_k, k_dot_B, alpha_index,
         plt.arrow(imdim, imdim, ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
         plt.text(imdim, imdim-gauss_rad_factor, f'{gauss_rad_factor} Mpc', color=col)
         
-        plt.savefig(os.path.join('data/', f'B{axis}_{run}.png'))
-    
-    # Display the divergence of the magnetic field and some values of the seed
+        name = f'B{axis}_{run}_{nmax}_{size}_{alpha_index}'
+        plt.savefig(os.path.join('data/', f'{name}.png'))
+        
     if debug:
         
+        if nmax <= 32 and nmay <= 32 and nmaz <= 32:
+            utils.save_3d_array(f'data/B_k{axis}', B[0])
+        
+        assert np.isreal(B[0]).all(), f"Debugging Test XII Failed: B_{axis} is not real."
+        print(f"Debugging Test XII Passed: B_{axis} is real.")
         print('============================================================')
-        print(f'Magnetic Field Real Space Information')
-        print('------------------------------------------------------------')
-        print(f'B_{axis} component shape: {B[0].shape}')
-        print(f'Some magnetic {axis} field values: {B[0][0:3, 0:3, 0:3]}')
-        print('------------------------------------------------------------')
-        assert np.all(np.abs(np.imag(B[0])) < 1e-7), f"Debugging Test XII Failed: B{axis} is not real."
-        print(f"Debugging Test XII Passed: B{axis} is real.")
-        print('============================================================')
-
-    # Save the magnetic field seed in the data directory using a universal text format
-    utils.save_magnetic_field_seed(B, axis, format, run)
-    
+        
     return B
+
+def process_seed_chunk(axis, chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS):
+    '''
+    Process a chunk of the magnetic field seed generation.
+    
+    Args:
+        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z.
+        - chunk_size: size of the chunk in each direction
+        - i: index of the chunk in the x direction
+        - j: index of the chunk in the y direction
+        - k: index of the chunk in the z direction
+        - Kx: wave vector k coordinates for the x direction
+        - Ky: wave vector k coordinates for the y direction
+        - Kz: wave vector k coordinates for the z direction
+        - SEED_PARAMS: dictionary with the parameters for the seed generation
+        - OUT_PARAMS: dictionary with the parameters for the output
+        
+    Returns:
+        - B_chunk: magnetic field chunk in Fourier space in the given direction
+        
+    Author: Marco Molina
+    '''
+    
+    chunk_size_x, chunk_size_y, chunk_size_z = chunk_size
+    
+    i_final = i + chunk_size_x
+    j_final = j + chunk_size_y
+    k_final = k + chunk_size_z
+    
+    kx = Kx[i:i_final]
+    ky = Ky[j:j_final]
+    kz = Kz[k:k_final]
+    
+    k_grid, k_magnitude = generate_fourier_space(
+        [kx, ky, kz], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        SEED_PARAMS["epsilon"], verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    PB = power_spectrum_amplitude(
+        k_magnitude, SEED_PARAMS["alpha"], SEED_PARAMS["lambda_comoving"], SEED_PARAMS["B0"], h, 
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]], 
+        gauss_rad_factor=SEED_PARAMS["smothing"], filtering=SEED_PARAMS["filtering"], verbose=OUT_PARAMS["verbose"]
+        )
+    
+    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    
+    B_random_phase = generate_seed_phase(
+        'x', k_magnitude, iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    B_random_kx = generate_random_seed_amplitudes(
+        'x', k_grid[0][0], k_magnitude, PB, B_random_phase,
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    
+    B_random_phase = generate_seed_phase(
+        'y', k_magnitude, iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    B_random_ky = generate_random_seed_amplitudes(
+        'y', k_grid[0][1], k_magnitude, PB, B_random_phase,
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    
+    B_random_phase = generate_seed_phase(
+        'z', k_magnitude, iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    B_random_kz = generate_random_seed_amplitudes(
+        'z', k_grid[0][2], k_magnitude, PB, B_random_phase,
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    k_dot_B = seed_transverse_projector(
+        k_grid, [B_random_kx, B_random_ky, B_random_kz],
+        [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    if axis == 'x':
+        B_chunk = generate_seed_magnetic_field(
+            axis, k_grid[0][0], B_random_kx, k_dot_B,
+            [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+            verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+            )
+    elif axis == 'y':
+        B_chunk = generate_seed_magnetic_field(
+            axis, k_grid[0][1], B_random_ky, k_dot_B,
+            [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+            verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+            )
+    elif axis == 'z':
+        B_chunk = generate_seed_magnetic_field(
+            axis, k_grid[0][2], B_random_kz, k_dot_B,
+            [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+            verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+            )
+        
+    return B_chunk
+
+def generate_seed(axis, chunk_factor, SEED_PARAMS, OUT_PARAMS):
+    '''
+    Generates the magnetic field seed in the given direction.
+
+    Args:
+        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z.
+        - chunk_factor: factor to divide the array in chunks
+        - SEED_PARAMS: dictionary with the parameters for the seed generation
+        - OUT_PARAMS: dictionary with the parameters for the output
+
+    Returns:
+        - B: magnetic field component in the given direction
+        
+    Author: Marco Molina
+    '''
+    
+    nmax, nmay, nmaz = SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]
+    size = SEED_PARAMS["size"]
+    dx = size/nmax
+    
+    chunk_size = min(nmax, nmay, nmaz) // chunk_factor
+
+    # Ensure chunk_size is a multiple of every size and a divisor of 2
+    while any(cell_size % chunk_size != 0 for cell_size in (nmax, nmay, nmaz)) or (chunk_size & (chunk_size - 1)) != 0:
+        chunk_size -= 1
+        if chunk_size == 1:
+            print('Chunks are only 1 cell in size. Caution, the chunk factor is too high.')
+            break
+            
+    if (nmax != nmay or nmax != nmaz or nmay != nmaz or nmax != chunk_size) and OUT_PARAMS["debug"] == True:
+        OUT_PARAMS["debug"] = False
+        print('Debugging will not take place if the array is not cubic or if it is chunked.')
+
+    chunk_size = (chunk_size, chunk_size, chunk_size)
+    
+    B = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=np.complex128) for _ in range(sum(npatch)+1)]
+    
+    # Calculate the wave numbers for a Fourier transform
+    Kx = np.fft.fftfreq(nmax, dx) * 2 * np.pi
+    Ky = np.fft.fftfreq(nmay, dx) * 2 * np.pi
+    Kz = np.fft.fftfreq(nmaz, dx) * 2 * np.pi
+    
+    ##Revisar## Factor 2*pi
+    # Kx = np.fft.fftfreq(nmax, dx)
+    # Ky = np.fft.fftfreq(nmay, dx)
+    # Kz = np.fft.fftfreq(nmaz, dx)
+    
+    # Here we add the positive Nyquist frequency just before the negative Nyquist frequency already present
+    Kx = np.insert(Kx, nmax//2, -Kx[nmax//2])
+    Ky = np.insert(Ky, nmay//2, -Ky[nmay//2])
+    Kz = np.insert(Kz, nmaz//2, -Kz[nmaz//2])
+
+    # In case the memory is not enough to generate the magnetic field in one go, we generate it in chunks
+    for i in range(1, nmax, chunk_size[0]):
+        for j in range(1, nmay, chunk_size[1]):
+            for k in range(1, nmaz//2, chunk_size[2]):
+                
+                if OUT_PARAMS["verbose"]:
+                    print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                    print(f'Processing Chunk ({i}, {j}, {k})')
+                    print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            
+                B_chunk = process_seed_chunk(
+                    axis, chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS
+                    )
+                
+                i_final = i + chunk_size[0]
+                j_final = j + chunk_size[1]
+                k_final = k + chunk_size[2]
+            
+                B[0][i:i_final, j:j_final, k:k_final] = B_chunk[0]
+
+                iconj = -i % B[0].shape[0]
+                jconj = -j % B[0].shape[1]
+                kconj = -k % B[0].shape[2]
+                
+                iconj_final = -i_final % B[0].shape[0]
+                jconj_final = -j_final % B[0].shape[1]
+                kconj_final = -k_final % B[0].shape[2]
+                
+                B[0][iconj_final:iconj, jconj_final:jconj, kconj_final:kconj] = np.flip(np.flip(np.flip(np.conj(B_chunk[0]), axis=0), axis=1), axis=2)
+
+    if OUT_PARAMS["verbose"]:
+        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        print(f'Processing Null Axes')
+        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+    
+    chunk_size = (nmax//2, 1, 1)
+    B_chunk = process_seed_chunk(
+        axis, chunk_size, 1, 0, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS
+        )
+    B[0][1:(nmax//2 + 1), 0, 0] = B_chunk[0][:, 0, 0]
+    B[0][(nmax//2 + 1):, 0, 0] = np.flip(np.conj(B_chunk[0][:, 0, 0]), axis=0)
+    
+    chunk_size = (1, nmax//2, 1)
+    B_chunk = process_seed_chunk(
+        axis, chunk_size, 0, 1, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS
+        )
+    B[0][0, 1:(nmay//2 + 1), 0] = B_chunk[0][0, :, 0]
+    B[0][0, (nmay//2 + 1):, 0] = np.flip(np.conj(B_chunk[0][0, :, 0]), axis=0)
+    
+    chunk_size = (1, 1, nmax//2)
+    B_chunk = process_seed_chunk(
+        axis, chunk_size, 0, 0, 1, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS
+        )
+    B[0][0, 0, 1:(nmaz//2 + 1)] = B_chunk[0][0, 0, :]
+    B[0][0, 0, (nmaz//2 + 1):] = np.flip(np.conj(B_chunk[0][0, 0, :]), axis=0)
+    
+    if OUT_PARAMS["verbose"]:
+        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        print(f'Processing Null Planes')
+        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+    
+    chunk_size = (nmax, nmay//2, 1)
+    B_chunk = process_seed_chunk(
+        axis, chunk_size, 1, 1, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS
+        )
+    B[0][1:, 1:(nmay//2 + 1), 0] = B_chunk[0][:, :, 0]
+    B[0][1:, (nmay//2 + 1):, 0] = np.flip(np.flip(np.conj(B_chunk[0][:, :, 0]), axis=0), axis=1)
+    
+    chunk_size = (nmax, 1, nmaz//2)
+    B_chunk = process_seed_chunk(
+        axis, chunk_size, 1, 0, 1, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS
+        )
+    B[0][1:, 0, 1:(nmaz//2 + 1)] = B_chunk[0][:, 0, :]
+    B[0][1:, 0, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk[0][:, 0, :]), axis=0), axis=1)
+    
+    chunk_size = (1, nmay, nmaz//2)
+    B_chunk = process_seed_chunk(
+        axis, chunk_size, 0, 1, 1, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS
+        )
+    B[0][0, 1:, 1:(nmaz//2 + 1)] = B_chunk[0][0, :, :]
+    B[0][0, 1:, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk[0][0, :, :]), axis=0), axis=1)
+    
+    B = transform_seed_magnetic_field(
+        axis, B, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
+        [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        gauss_rad_factor=SEED_PARAMS["smothing"], verbose=OUT_PARAMS["verbose"],
+        debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
+        )
+    
+    if OUT_PARAMS["save"]:
+        utils.save_magnetic_field_seed(B, axis, OUT_PARAMS["format"], OUT_PARAMS["run"])
+
+    return B
+
 
 def generate_seed_properties(Bx, By, Bz, alpha_index, size, N, verbose = False):
     '''

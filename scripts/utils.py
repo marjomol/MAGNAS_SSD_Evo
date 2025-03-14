@@ -13,8 +13,45 @@ import sys
 import os
 from scipy.io import FortranFile
 import h5py
+import psutil
 from config import SEED_PARAMS as seed_params
 from config import OUTPUT_PARAMS as out_params
+
+def check_memory():
+    '''
+    Checks if the arrays can fit in memory or if an alternative memory handeling method is needed.
+    
+    Returns:
+        - True if the arrays can fit in memory, False otherwise
+        
+    Author: Marco Molina
+    '''
+
+    # Get the total RAM capacity in bytes
+    ram_capacity = psutil.virtual_memory().total
+
+    # Convert the RAM capacity to gigabytes
+    ram_capacity_gb = ram_capacity / (1024 ** 3)
+
+    print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
+
+    # Calculate the size of the arrays in bytes
+    array_size = seed_params["nmax"] * seed_params["nmay"] * seed_params["nmaz"]
+    array_size_bytes =  array_size * np.dtype(out_params["bitformat"]).itemsize
+
+    print(f"Size of the arrays: {array_size_bytes / (1024 ** 3):.2f} GB")
+
+    # Check if the arrays will use more than 1/4 of the total RAM
+    if array_size_bytes > (ram_capacity / 4):
+        memmap = True
+        print("The arrays are too large to fit in memory: np.memmap will be used.")
+        # Implement alternative method here
+    else:
+        memmap = False
+        print("The arrays can fit in memory: np.memmap will not be used.")
+        # Proceed with the current method
+    
+    return memmap
 
 def save_3d_array(filename, array):
     '''
@@ -73,7 +110,7 @@ def save_magnetic_field_seed(B, axis, format, run):
             f.create_dataset(f'{name}', data=B[0])
     elif format == 'fortran':
         with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'w') as f:
-            f.write_record(B[0].astype(np.float64))
+            f.write_record(B[0].astype(out_params["bitformat"]))
             
 def load_magnetic_field(axis, run, format='fortran'):
     '''
@@ -103,8 +140,8 @@ def load_magnetic_field(axis, run, format='fortran'):
             B = f[f'{name}'][:]
     elif format == 'fortran':
         with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'r') as f:
-            B = f.read_record(dtype=np.float64)
-        B = np.frombuffer(B, dtype=np.float64).reshape(rshape)
+            B = f.read_record(dtype=out_params["bitformat"])
+        B = np.frombuffer(B, dtype=out_params["bitformat"]).reshape(rshape)
     
     return B
 
