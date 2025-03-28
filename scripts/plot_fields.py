@@ -9,6 +9,7 @@ Created by Marco Molina Pradillo
 """
 
 import numpy as np
+import gc
 import scripts.diff as diff
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -18,7 +19,7 @@ import plotly.graph_objects as go
 import os
 from . import spectral
 
-def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, Save = False, DPI = 300, run = '_', folder = None):
+def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Plots the power spectrum of the magnetic field seed and other interesting quantities to check the generation.
     
@@ -30,6 +31,7 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
         - dx: cell size in Mpc
         - mode: integer to choose the plot mode
         - epsilon: small number to avoid division by zero
+        - verbose: boolean to print the progress of the function
         - Save: boolean to save the plot or not
         - DPI: dots per inch in the plot
         - run: string to identify the run
@@ -45,28 +47,35 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
     # Compute the magnetic field magnitude
     Bmag = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
     
+    if verbose == True:
+        print(f'Plotting... Magnetic Field Seed Magnitude computed')
+    
     # Compute the magnetic power spectrum
     k_bins, P_k = spectral.power_spectrum_vector_field(Bx[0], By[0], Bz[0], dx=dx)
     P_k = np.where(P_k == 0, epsilon, P_k)
     k_bins = k_bins * 2 * np.pi
     
+    if verbose == True:
+        print(f'Plotting... Magnetic Field Seed Power Spectrum computed')
+    
     ## Calculate the standard deviation of the power spectrum for each bin ##
     
     # First we need to compute the FFT, its amplitude square, and normalise it
-    Bx_fft = np.fft.fftn(Bx[0]) # Done with the scipy fft in spec, maybe the normalization is different
-    By_fft = np.fft.fftn(By[0])
-    Bz_fft = np.fft.fftn(Bz[0])
-    Bx_fourier_amplitudes = (np.abs(Bx_fft)**2).flatten() / Bx[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
-    By_fourier_amplitudes = (np.abs(By_fft)**2).flatten() / By[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
-    Bz_fourier_amplitudes = (np.abs(Bz_fft)**2).flatten() / Bz[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
+    Bx_fourier_amplitudes = np.fft.fftn(Bx[0]) # Done with the scipy fft in spec, maybe the normalization is different
+    By_fourier_amplitudes = np.fft.fftn(By[0])
+    Bz_fourier_amplitudes = np.fft.fftn(Bz[0])
+    Bx_fourier_amplitudes = (np.abs(Bx_fourier_amplitudes)**2).flatten() / Bx[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
+    By_fourier_amplitudes = (np.abs(By_fourier_amplitudes)**2).flatten() / By[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
+    Bz_fourier_amplitudes = (np.abs(Bz_fourier_amplitudes)**2).flatten() / Bz[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
 
     # Next we obtain the frequencies
     kx = np.fft.fftfreq(nmax, dx) * 2 * np.pi # Es seguro el factor 2*pi?
     ky = np.fft.fftfreq(nmay, dx) * 2 * np.pi
     kz = np.fft.fftfreq(nmaz, dx) * 2 * np.pi
-    k_grid = np.meshgrid(kx, ky, kz, indexing='ij')
-    k_squared = k_grid[0]**2 + k_grid[1]**2 + k_grid[2]**2
-    k_magnitude = np.sqrt(k_squared).flatten()
+    
+    k_magnitude = np.meshgrid(kx, ky, kz, indexing='ij')
+    k_magnitude = k_magnitude[0]**2 + k_magnitude[1]**2 + k_magnitude[2]**2
+    k_magnitude = np.sqrt(k_magnitude).flatten()
 
     # Assuming isotropy, we can obtain the P(k) (1-dimensional power spectrum) standard deviation
     k_stats_bins = np.arange(kx[1]/2, np.abs(kx).max(), kx[1])
@@ -75,10 +84,22 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
     P_k_y_std, _, _ = stats.binned_statistic(k_magnitude, By_fourier_amplitudes, statistic='std', bins=k_stats_bins)
     P_k_z_std, _, _ = stats.binned_statistic(k_magnitude, Bz_fourier_amplitudes, statistic='std', bins=k_stats_bins)
     
+    del Bx_fourier_amplitudes, By_fourier_amplitudes, Bz_fourier_amplitudes, k_magnitude
+    gc.collect()
+    
     P_k_std = P_k_x_std + P_k_y_std + P_k_z_std
+    
+    del P_k_x_std, P_k_y_std, P_k_z_std
+    gc.collect()
+    
+    if verbose == True:
+        print(f'Plotting... Magnetic Field Seed Power Spectrum Standard Deviation computed')
     
     # Computes the magnetic field seed divergence
     diver_B = diff.periodic_divergence(Bx, By, Bz, dx, npatch = np.array([0]), stencil=5, kept_patches=None)
+    
+    if verbose == True:
+        print(f'Plotting... Magnetic Field Seed Divergence computed')
 
     # Calculate the expected trend lines starting from specifict values of P_k
     klim = 1 # Set axis limits in the power spectrum plot (klim=1 and k0=0 for showing all, ko defines the starting point of the trend line)
@@ -104,9 +125,19 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
         nmax, nmay, nmaz = Bx[0].shape
         
         xxx = np.linspace(0, 100, 1001)
-        sub_sample = (0.1*256/nmax) * nmax * nmay * nmaz
-        random_inndex = np.random.choice((nmax-(nmax//2))*(nmay-(nmay//2))*(nmaz-(nmaz//2)), size=int(sub_sample), replace=False)
-        random_cells = np.abs(diver_B[0][nmax//4:-nmax//4,nmay//4:-nmay//4,nmaz//4:-nmaz//4].flatten()[random_inndex])
+        if nmax >= 256 or nmay >= 256 or nmaz >= 256:
+            sub_sample = int(0.1 * 256**3)
+        else:
+            sub_sample = int(0.2 * nmax * nmay * nmaz)
+            
+        # Consider only the central part of the box
+        # random_inndex = np.random.choice((nmax-(nmax//2))*(nmay-(nmay//2))*(nmaz-(nmaz//2)), size=int(sub_sample), replace=False)
+        # random_cells = np.abs(diver_B[0][nmax//4:-nmax//4,nmay//4:-nmay//4,nmaz//4:-nmaz//4].flatten()[random_inndex])
+        
+        # Consider the whole box
+        random_inndex = np.random.choice(nmax*nmay*nmaz, size=int(sub_sample), replace=False)
+        random_cells = np.abs(diver_B[0].flatten()[random_inndex])
+        
         yyy = [np.percentile(random_cells, p) for p in xxx]
 
         ax[1].clear()
@@ -117,6 +148,9 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
         ax[1].set_xscale('linear')
         ax[1].set_yscale('log')
         ax[1].grid()
+        
+        if verbose == True:
+            print(f'Plotting... Magnetic Field Seed Cumulative Relative Divergence plotted')
     
     # Spectrum with the Cumulative Absolute Divergence of the Magnetic Field
     elif mode == 2:
@@ -129,9 +163,19 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
         nmax, nmay, nmaz = Bx[0].shape
         
         xxx = np.linspace(0, 100, 1001)
-        sub_sample = (0.1*256/nmax) * nmax * nmay * nmaz
+        if nmax >= 256 or nmay >= 256 or nmaz >= 256:
+            sub_sample = int(0.1 * 256**3)
+        else:
+            sub_sample = int(0.2 * nmax * nmay * nmaz)
+            
+        # Consider only the central part of the box
+        # random_inndex = np.random.choice((nmax-(nmax//2))*(nmay-(nmay//2))*(nmaz-(nmaz//2)), size=int(sub_sample), replace=False)
+        # random_cells = np.abs(diver_B[0][nmax//4:-nmax//4,nmay//4:-nmay//4,nmaz//4:-nmaz//4].flatten()[random_inndex])
+        
+        # Consider the whole box
         random_inndex = np.random.choice(nmax*nmay*nmaz, size=int(sub_sample), replace=False)
         random_cells = np.abs(diver_B[0].flatten()[random_inndex])
+        
         yyy = [np.percentile(random_cells, p) for p in xxx]
 
         ax[1].clear()
@@ -142,6 +186,9 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
         ax[1].set_xscale('linear')
         ax[1].set_yscale('log')
         ax[1].grid()
+        
+        if verbose == True:
+            print(f'Plotting... Magnetic Field Seed Cumulative Absolute Divergence plotted')
         
     # Spectrum with the Histograms of the Divergence and the Magnetic Field
     elif mode == 3:
@@ -185,6 +232,9 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
         # ax[1].set_xlim(1e-40, 5e-1)
         # ax[1].set_ylim(1e-2, 1e6)
         ax[1].legend(loc='upper right')
+        
+        if verbose == True:
+            print(f'Plotting... Magnetic Field Seed Histograms plotted')
 
     ax[0].clear()  
     ax[0].set_title(f'Random Transverse Projected Magnetic Field Power Spectrum')
@@ -198,6 +248,9 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
     ax[0].set_ylim(1e-28, 1e-12)
     ax[0].legend(loc='lower center')
     
+    if verbose == True:
+        print(f'Plotting... Magnetic Field Seed Power Spectrum plotted')
+    
     # Save the plots
     if Save == True:
         
@@ -206,7 +259,7 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, S
             
         fig.savefig(folder + f'/Mag_Field_Power_Spectrum_{run}.png')
         
-def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Gaussian Filtered Magnetic Field Zoom', Save = False, DPI = 300, run = '_', folder = None):
+def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Zoom', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Generates an animation of the magnetic field seed in 3D with a zoom effect. Can be used for any other 3D spacial field.
     
@@ -216,6 +269,7 @@ def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Gaussian
         - arrow_scale: scale of the arrow in Mpc
         - units: units of the arrow scale
         - title: title of the animation
+        - verbose: boolean to print the progress of the function
         - Save: boolean to save the animation or not
         - DPI: dots per inch in the animation
         - run: name of the run
@@ -261,6 +315,9 @@ def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Gaussian
     data_dir = os.path.join(base_dir, 'data')
     ani.save(data_dir + '/animation.gif', writer='pillow')
     
+    if verbose == True:
+        print(f'Plotting... Magnetic Field Seed Zoom Animation computed')
+    
     # Save the plots
     if Save == True:
         
@@ -270,7 +327,7 @@ def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Gaussian
         file_title = ' '.join(title.split()[:4])
         ani.save(folder + f'/{file_title}_{run}_zoom.gif', writer='pillow', dpi = DPI)
         
-def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title = 'Gaussian Filtered Magnetic Field Scan', Save = False, DPI = 300, run = '_', folder = None):
+def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Scan', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Generates an animation of the magnetic field seed in 3D with a scan effect. Can be used for any other 3D spacial field.
     
@@ -281,6 +338,7 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
         - arrow_scale: scale of the arrow in Mpc
         - units: units of the arrow scale
         - title: title of the animation
+        - verbose: boolean to print the progress of the function
         - Save: boolean to save the animation or not
         - DPI: dots per inch in the animation
         - run: name of the run
@@ -320,7 +378,7 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
     #     max_value = 1e-3
         
     # Create a logarithmic normalization for the color intensity and regulate the intensity of the color bar
-    norm = LogNorm(vmin=100*min_value, vmax=max_value)
+    norm = LogNorm(vmin=min_value, vmax=max_value)
     
     def animate(frame):
         plt.clf()
@@ -339,6 +397,9 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
     data_dir = os.path.join(base_dir, 'data')
     ani.save(data_dir + '/animation.gif', writer='pillow')
     
+    if verbose == True:
+        print(f'Plotting... Magnetic Field Seed Scan Animation computed')
+    
     # Save the plots
     if Save == True:
         
@@ -348,7 +409,7 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
         file_title = ' '.join(title.split()[:4])
         ani.save(folder + f'/{file_title}_{run}_scan.gif', writer='pillow', dpi = DPI)
         
-def plot_3D_volume(arr, axis_values, log = False, subvolume_factor = 1, subsampling_step = 2, axis_step = 10, quantity = ' ', axis_title = ['x', 'y', 'z'], units = ' ', title = ' ', invert = False, Save = False, DPI = 300, run = '_', folder = None):
+def plot_3D_volume(arr, axis_values, log = False, subvolume_factor = 1, subsampling_step = 2, axis_step = 10, quantity = ' ', axis_title = ['x', 'y', 'z'], units = ' ', title = ' ', invert = False, verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Plots a 3D volume of a 3D array with changing opacity levels for different values.
     
@@ -364,6 +425,7 @@ def plot_3D_volume(arr, axis_values, log = False, subvolume_factor = 1, subsampl
         - units: units of the quantity
         - title: title of the plot
         - invert: boolean to invert the opacity levels
+        - verbose: boolean to print the progress of the function
         - Save: boolean to save the plot or not
         - DPI: dots per inch in the plot
         - run: name of the run
@@ -506,6 +568,9 @@ def plot_3D_volume(arr, axis_values, log = False, subvolume_factor = 1, subsampl
     )
 
     fig.show()
+    
+    if verbose == True:
+        print(f'Plotting... 3D Volume Plot computed')
     
     # Save the plots
     if Save == True:

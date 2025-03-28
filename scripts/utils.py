@@ -10,6 +10,48 @@ Created by Marco Molina Pradillo
 
 import numpy as np
 import sys
+import os
+from scipy.io import FortranFile
+import h5py
+import psutil
+from config import SEED_PARAMS as seed_params
+from config import OUTPUT_PARAMS as out_params
+
+def check_memory():
+    '''
+    Checks if the arrays can fit in memory or if an alternative memory handeling method is needed.
+    
+    Returns:
+        - True if the arrays can fit in memory, False otherwise
+        
+    Author: Marco Molina
+    '''
+
+    # Get the total RAM capacity in bytes
+    ram_capacity = psutil.virtual_memory().total
+
+    # Convert the RAM capacity to gigabytes
+    ram_capacity_gb = ram_capacity / (1024 ** 3)
+
+    print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
+
+    # Calculate the size of the arrays in bytes
+    array_size = seed_params["nmax"] * seed_params["nmay"] * seed_params["nmaz"]
+    array_size_bytes =  array_size * np.dtype(out_params["bitformat"]).itemsize
+
+    print(f"Size of the arrays: {array_size_bytes / (1024 ** 3):.2f} GB")
+
+    # Check if the arrays will use more than 1/4 of the total RAM
+    if array_size_bytes > (ram_capacity / 4):
+        memmap = True
+        print("The arrays are too large to fit in memory: np.memmap will be used.")
+        # Implement alternative method here
+    else:
+        memmap = False
+        print("The arrays can fit in memory: np.memmap will not be used.")
+        # Proceed with the current method
+    
+    return memmap
 
 def save_3d_array(filename, array):
     '''
@@ -25,6 +67,123 @@ def save_3d_array(filename, array):
         for i in range(array.shape[0]):
             np.savetxt(f, array[i], header=f'Slice {i}', comments='')
             f.write('\n')
+            
+def delete_temp_files(temp_files):
+    '''
+    Deletes temporary files used with np.memmap.
+    
+    Args:
+        - temp_files: list of temporary files to delete
+    
+    Author: Marco Molina
+    '''
+    for file_path in temp_files:
+        try:
+            os.remove(file_path)
+            print(f"Deleted memmap file: {file_path}")
+        except OSError as e:
+            print(f"Error deleting memmap file {file_path}: {e}")
+            
+def save_magnetic_field_seed(B, axis, real, format, run):
+    '''
+    Saves the magnetic field component to a file.
+    
+    Args:
+        - B: magnetic field component to save
+        - axis: axis of the magnetic field
+        - real: whether the space of the magnetic field component is real or not (fourier)
+        - run: run title
+        - format: format of the file (txt, npy, hdf5, fortran)
+        
+    Author: Marco Molina
+    '''
+    
+    assert format in ['txt', 'npy', 'hdf5', 'fortran'], 'Invalid format.'
+    assert axis in ['x', 'y', 'z'], 'Invalid axis.'
+    assert real in [True, False], 'Invalid space value.'
+    
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(base_dir, 'data')
+    
+    if real:
+        name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+    else:
+        name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+    os.makedirs(data_dir, exist_ok=True)
+
+    if format == 'txt':
+        np.savetxt(os.path.join(data_dir, f'{name}.txt'), B[0].flatten())
+    elif format == 'npy':
+        np.save(os.path.join(data_dir, f'{name}.npy'), B[0])
+    elif format == 'hdf5':
+        with h5py.File(os.path.join(data_dir, f'{name}.h5'), 'w') as f:
+            f.create_dataset(f'{name}', data=B[0])
+    elif format == 'fortran':
+        if real:
+            with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'w') as f:
+                f.write_record(B[0].astype(out_params["bitformat"]))
+        else:
+            with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'w') as f:
+                f.write_record(B[0].astype(out_params["complex_bitformat"]))
+            
+def load_magnetic_field(axis, run, format='fortran'):
+    '''
+    Loads the magnetic field component from a file.
+    
+    Args:
+        - axis: axis of the magnetic field component
+        - run: run title
+        - format: format of the file (txt, npy, hdf5, fortran)
+        
+    Returns:
+        - Magnetic field component
+        
+    Author: Marco Molina
+    '''
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(base_dir, 'data')
+    name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+    rshape = (seed_params["nmax"], seed_params["nmay"], seed_params["nmaz"])
+
+    if format == 'txt':
+        B = np.loadtxt(os.path.join(data_dir, f'{name}.txt')).reshape(rshape)
+    elif format == 'npy':
+        B = np.load(os.path.join(data_dir, f'{name}.npy'))
+    elif format == 'hdf5':
+        with h5py.File(os.path.join(data_dir, f'{name}.h5'), 'r') as f:
+            B = f[f'{name}'][:]
+    elif format == 'fortran':
+        with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'r') as f:
+            B = f.read_record(dtype=out_params["bitformat"])
+        B = np.frombuffer(B, dtype=out_params["bitformat"]).reshape(rshape)
+    
+    return B
+
+def get_fortran_file_size(axis, run, dtype=np.float64):
+    """
+    Gets the size of a Fortran binary file seed component and calculates the array dimensions.
+
+    Args:
+        - axis: axis of the magnetic field
+        - run: run number
+        - dtype: data type of the array elements
+
+    Returns:
+        - Number of elements in the array.
+        
+    Author: Marco Molina
+    """
+    
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(base_dir, 'data')
+    name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+    filepath = os.path.join(data_dir, f'{name}.bin')
+    
+    file_size = os.path.getsize(filepath)
+    element_size = np.dtype(dtype).itemsize
+    num_elements = file_size // element_size
+    
+    return num_elements
             
 def is_ordered(vector):
     '''

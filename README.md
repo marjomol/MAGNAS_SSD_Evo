@@ -61,6 +61,8 @@ The configuration parameters for the simulation are stored in `config.py`. By de
 
 3. The generated plots and animations will be saved in the specified `image_folder` directory.
 
+4. For debugging purposes, run the script in debugging mode with a small resolution (recommended 32 cell size arrays) to save intermediary arrays.
+
 ## Scripts
 
 - **diff.py**: Contains functions to compute the general differential calculus.

@@ -10,15 +10,17 @@ Created by Marco Molina Pradillo
 """
 
 import gc
+import os
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
+from scripts.units import *
 from scipy.special import gamma
 from matplotlib import pyplot as plt
-from scipy.io import FortranFile
-import h5py
-import os
 npatch = np.array([0]) # We only want the zero patch for the seed
+
+import pdb
+np.set_printoptions(linewidth=200)
 
 def random_hermitian_vector(n):
     '''
@@ -112,15 +114,18 @@ def symmetrize(arr, mode = 0):
     
     return arr
 
-def merge_nyquist(arr):
+def merge_nyquist(arr, axis='none', memmap = False, complex_bitformat = np.complex64):
     '''
-    PRIMAL Seed Generator works with the Nyquist frequencies explicitly separated and centered in the Fourier
+    PRIMAL Seed Generator works with the Nyquist frequencies explicitly splited and centered in the Fourier
     space to ensure the correct signal transverse projection works. Given a 3D Fourier space array with the
     positive and negative Nyquist frequencies separated and centered, this function merges their signal making
     it apt for the numpy inverse Fourier transform where the Nyquist signal frequencies are implicitly merged.
     
     Args:
         - arr: imput array with the positive and negative Nyquist frequencies explicitly splited and centered
+        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z
+        - memmap: boolean to decide if the data is processed with memory cautions or not
+        - complex_bitformat: format of the complex numbers in the array. Only used if memmap is True
         
     Returns:
         - arr: array with the positive and negative Nyquist frequencies merged
@@ -138,23 +143,53 @@ def merge_nyquist(arr):
     assert (shape[1]-1) % 2 == 0, "The y-size of the array must be an even number"
     assert (shape[2]-1) % 2 == 0, "The z-size of the array must be an even number"
     
-    # Join the signal of the positive and negative Nyquist frequencies
-    arr[shape[0]//2, :, :] = arr[shape[0]//2+1, :, :]
-    arr[:, shape[1]//2, :] = arr[:, shape[1]//2+1, :]
-    arr[:, :, shape[2]//2] = arr[:, :, shape[2]//2+1]
+    if memmap:
+        assert axis != 'none', "The axis must be x, y, or z."
+        
+        # Join the signal of the positive and negative Nyquist frequencies while avoiding one of the two central planes
+        # new_arr = np.memmap(f'data/_Imaginary_B_{axis}_temporary_file_.dat', dtype=complex_bitformat,
+        #                     mode='w+', shape=(shape[0]-1, shape[1]-1, ((shape[2]-1)//2)+1))
+        new_arr = np.memmap(f'data/_Imaginary_B_{axis}_temporary_file_.dat', dtype=complex_bitformat,
+                    mode='w+', shape=(shape[0]-1, shape[1]-1, shape[2]-1))
+
+        # Only half of the Fourier space is needed to use the Real numpy inverse Fourier transform
+        # as the other half is the Hermitian conjugate of the first half
+        new_arr[:shape[0]//2, :shape[0]//2, :shape[0]//2] = arr[:shape[0]//2, :shape[0]//2, :shape[0]//2]
+        new_arr[:shape[0]//2, shape[0]//2:, :shape[0]//2] = arr[:shape[0]//2, shape[0]//2+1:, :shape[0]//2]
+        new_arr[shape[0]//2:, :shape[0]//2, :shape[0]//2] = arr[shape[0]//2+1:, :shape[0]//2, :shape[0]//2]
+        new_arr[shape[0]//2:, shape[0]//2:, :shape[0]//2] = arr[shape[0]//2+1:, shape[0]//2+1:, :shape[0]//2]
+        
+        new_arr[:shape[0]//2, :shape[0]//2, shape[0]//2:] = arr[:shape[0]//2, :shape[0]//2, shape[0]//2+1:]
+        new_arr[:shape[0]//2, shape[0]//2:, shape[0]//2:] = arr[:shape[0]//2, shape[0]//2+1:, shape[0]//2+1:]
+        new_arr[shape[0]//2:, :shape[0]//2, shape[0]//2:] = arr[shape[0]//2+1:, :shape[0]//2, shape[0]//2+1:]
+        new_arr[shape[0]//2:, shape[0]//2:, shape[0]//2:] = arr[shape[0]//2+1:, shape[0]//2+1:, shape[0]//2+1:]
     
-    # Erase one of the two Nyquist central planes in all three directions of the B_k 3D arrays
-    arr = np.delete(arr, shape[0]//2+1, axis=0)
-    arr = np.delete(arr, shape[1]//2+1, axis=1)
-    arr = np.delete(arr, shape[2]//2+1, axis=2)
+        del arr
+        gc.collect()
+        
+        # Flush changes to disk if it's a memory-mapped array
+        if isinstance(new_arr, np.memmap):
+            new_arr.flush()
     
-    return arr
+        return new_arr
+    else:
+        # Join the signal of the positive and negative Nyquist frequencies
+        arr[shape[0]//2, :, :] = arr[shape[0]//2+1, :, :]
+        arr[:, shape[1]//2, :] = arr[:, shape[1]//2+1, :]
+        arr[:, :, shape[2]//2] = arr[:, :, shape[2]//2+1]
+        
+        # Erase one of the two Nyquist central planes in all three directions of the B_k 3D arrays
+        arr = np.delete(arr, shape[0]//2+1, axis=0)
+        arr = np.delete(arr, shape[1]//2+1, axis=1)
+        arr = np.delete(arr, shape[2]//2+1, axis=2)
+    
+        return arr
 
 def k_null(arr, k_val, k_mag):
     '''
     Makes the elemensts of the array corresponding to null and Nyquist frequency zero. The positive and negative
-    Nyquist frequencies are assumed to be explicitly separated and centered.
-        
+    Nyquist frequencies are assumed to be explicitly splited and centered.
+    
     Args:
         - arr: input array to be made zero
         - k_val: wave vector unique values array in Mpc^{-1}
@@ -195,7 +230,7 @@ def k_null(arr, k_val, k_mag):
     
     return arr
 
-def random_phase(N, k_mag, epsilon = 1e-30, mode = 0):
+def random_phase(axis, k_mag, N, epsilon = 1e-30, mode = 0):
     '''
     Generates two random number 3D arrays for each three dimensions in order to be used in the generation of the
     magnetic field seed in Fourier space, transmiting the neccesary Fourier space information so as to ensure that
@@ -204,18 +239,19 @@ def random_phase(N, k_mag, epsilon = 1e-30, mode = 0):
     The positive and negative Nyquist frequencies are assumed to be explicitly separated and centered.
     
     Different methods are implemented to generate the random numbers, each one with its own advantages and
-    disadvantages depending on the aim. From 0 to 2 the methods are faster but generate pattern-like seeds;
+    disadvantages depending on the aim. From modes 0 to 2 the methods are faster but generate pattern-like seeds;
     method 3 is the slowest but generates truly random seeds.
     
     Args:
-        - N: tuple with the number of cells in each direction
+        - axis: axis of the random number 3D array to be generated. The axis must be x, y, or z
         - k_mag: wave number magnitudes
+        - N: tuple with the number of cells in each direction
         - epsilon: small number to avoid division by zero
         - mode: method to generate the random numbers
         
     Returns:
-        - iota_grid: random number 3D array for each three dimensions
-        - beta_grid: random number 3D array for each three dimensions
+        - iota: random number 3D array for the asked dimension
+        - beta: random number 3D array for the asked dimension
         
     Source: Developed for one dimenssion an any two quantities in H. Press, W.,
             T. Vetterling, W., A. Teukolsky, S., & P. Flannery, B. (1992).
@@ -226,73 +262,50 @@ def random_phase(N, k_mag, epsilon = 1e-30, mode = 0):
 
     Author: Marco Molina
     '''
-
+    
     nmax, nmay, nmaz = N
+
+    if axis == 'x':
+        nma = nmax
+    elif axis == 'y':
+        nma = nmay
+    elif axis == 'z':
+        nma = nmaz
+    else:
+        raise ValueError('The axis must be x, y, or z.')
 
     # Method to create two 3D arrays of random numbers in a vectorized and fast way.
     # This method is correlating the random numbers and is restricting the range of the phase space, resulting in
     # Cartesian-like patterns in the final results, but it is faster and could be used in some test cases.
     if mode == 0:
         # Create two random number arrays for each three dimensions
-        iota_x = [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)]
-        beta_x = [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)]
-        iota_y = [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)]
-        beta_y = [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)]
-        iota_z = [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)]
-        beta_z = [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)]
+        iota = [random_hermitian_vector(nma) for _ in range(sum(npatch)+1)]
+        beta = [random_hermitian_vector(nma) for _ in range(sum(npatch)+1)]
 
         # Make elements corresponding to the null and Nyquist frequency zero in the iota arrays 
         for p in range(sum(npatch)+1):
-            iota_x[p][0] = 0.
-            iota_x[p][nmax//2] = 0.
-            iota_x[p][nmax//2+1] = 0.
-            iota_y[p][0] = 0.
-            iota_y[p][nmay//2] = 0.
-            iota_y[p][nmay//2+1] = 0.
-            iota_z[p][0] = 0.
-            iota_z[p][nmaz//2] = 0.
-            iota_z[p][nmaz//2+1] = 0.
+            iota[p][0] = 0.
+            iota[p][nma//2] = 0.
+            iota[p][nma//2+1] = 0.
 
         # Create the grid of the random numbers
-        iota_grid_x = [np.meshgrid(iota_x[p], iota_x[p], iota_x[p], indexing='ij') for p in range(sum(npatch)+1)]
-        beta_grid_x = [np.meshgrid(beta_x[p], beta_x[p], beta_x[p], indexing='ij') for p in range(sum(npatch)+1)]
-        iota_grid_y = [np.meshgrid(iota_y[p], iota_y[p], iota_y[p], indexing='ij') for p in range(sum(npatch)+1)]
-        beta_grid_y = [np.meshgrid(beta_y[p], beta_y[p], beta_y[p], indexing='ij') for p in range(sum(npatch)+1)]
-        iota_grid_z = [np.meshgrid(iota_z[p], iota_z[p], iota_z[p], indexing='ij') for p in range(sum(npatch)+1)]
-        beta_grid_z = [np.meshgrid(beta_z[p], beta_z[p], beta_z[p], indexing='ij') for p in range(sum(npatch)+1)]
+        iota_grid = [np.meshgrid(iota[p], iota[p], iota[p], indexing='ij') for p in range(sum(npatch)+1)]
+        beta_grid = [np.meshgrid(beta[p], beta[p], beta[p], indexing='ij') for p in range(sum(npatch)+1)]
 
         # Assigning the same random number to the same k-magnitude value
-        iota_x = [np.sqrt(iota_grid_x[p][0]**2 + iota_grid_x[p][1]**2 + iota_grid_x[p][2]**2) for p in range(sum(npatch)+1)]
-        beta_x = [np.sqrt(beta_grid_x[p][0]**2 + beta_grid_x[p][1]**2 + beta_grid_x[p][2]**2) for p in range(sum(npatch)+1)]
-        iota_y = [np.sqrt(iota_grid_y[p][0]**2 + iota_grid_y[p][1]**2 + iota_grid_y[p][2]**2) for p in range(sum(npatch)+1)]
-        beta_y = [np.sqrt(beta_grid_y[p][0]**2 + beta_grid_y[p][1]**2 + beta_grid_y[p][2]**2) for p in range(sum(npatch)+1)]
-        iota_z = [np.sqrt(iota_grid_z[p][0]**2 + iota_grid_z[p][1]**2 + iota_grid_z[p][2]**2) for p in range(sum(npatch)+1)]
-        beta_z = [np.sqrt(beta_grid_z[p][0]**2 + beta_grid_z[p][1]**2 + beta_grid_z[p][2]**2) for p in range(sum(npatch)+1)]
+        iota = [np.sqrt(iota_grid[p][0]**2 + iota_grid[p][1]**2 + iota_grid[p][2]**2) for p in range(sum(npatch)+1)]
+        beta = [np.sqrt(beta_grid[p][0]**2 + beta_grid[p][1]**2 + beta_grid[p][2]**2) for p in range(sum(npatch)+1)]
 
         # Normalizing the random numbers between 0 and 1
-        iota_x = [((iota_x[p] - np.min(iota_x[p])) / (np.max(iota_x[p]) - np.min(iota_x[p]))) for p in range(sum(npatch)+1)]
-        beta_x = [((beta_x[p] - np.min(beta_x[p])) / (np.max(beta_x[p]) - np.min(beta_x[p]))) for p in range(sum(npatch)+1)]
-        iota_y = [((iota_y[p] - np.min(iota_y[p])) / (np.max(iota_y[p]) - np.min(iota_y[p]))) for p in range(sum(npatch)+1)]
-        beta_y = [((beta_y[p] - np.min(beta_y[p])) / (np.max(beta_y[p]) - np.min(beta_y[p]))) for p in range(sum(npatch)+1)]
-        iota_z = [((iota_z[p] - np.min(iota_z[p])) / (np.max(iota_z[p]) - np.min(iota_z[p]))) for p in range(sum(npatch)+1)]
-        beta_z = [((beta_z[p] - np.min(beta_z[p])) / (np.max(beta_z[p]) - np.min(beta_z[p]))) for p in range(sum(npatch)+1)]
+        iota = [((iota[p] - np.min(iota[p])) / (np.max(iota[p]) - np.min(iota[p]))) for p in range(sum(npatch)+1)]
+        beta = [((beta[p] - np.min(beta[p])) / (np.max(beta[p]) - np.min(beta[p]))) for p in range(sum(npatch)+1)]
 
         for p in range(sum(npatch)+1):
-            iota_x[p][iota_x[p] == 0] = epsilon
-            beta_x[p][beta_x[p] == 0] = epsilon
-            iota_y[p][iota_y[p] == 0] = epsilon
-            beta_y[p][beta_y[p] == 0] = epsilon
-            iota_z[p][iota_z[p] == 0] = epsilon
-            beta_z[p][beta_z[p] == 0] = epsilon
+            iota[p][iota[p] == 0] = epsilon
+            beta[p][beta[p] == 0] = epsilon
 
         # Making the random iota arrays negative symmetric so they transmit the Fourier space properties when used in the phase
-        iota_x = [symmetrize(iota_x[p], mode = 0) for p in range(sum(npatch)+1)]
-        iota_y = [symmetrize(iota_y[p], mode = 0) for p in range(sum(npatch)+1)]
-        iota_z = [symmetrize(iota_z[p], mode = 0) for p in range(sum(npatch)+1)]
-
-        # Building the grid of random numbers
-        iota_grid = [[iota_x[p], iota_y[p], iota_z[p]] for p in range(sum(npatch)+1)]
-        beta_grid = [[beta_x[p], beta_y[p], beta_z[p]] for p in range(sum(npatch)+1)]
+        iota = [symmetrize(iota[p], mode = 0) for p in range(sum(npatch)+1)]
 
     # Method to asign the random numbers to each of the posible k-magnitude values specifically.
     # This method is correlating the random numbers and is restricting the range of the phase space, resulting in
@@ -302,42 +315,21 @@ def random_phase(N, k_mag, epsilon = 1e-30, mode = 0):
         k_values = [np.unique(k_mag[p]) for p in range(sum(npatch)+1)]
 
         # Generate random numbers for each k-magnitude value, two arrays in each direction
-        iota_x_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
-        beta_x_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
-        iota_y_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
-        beta_y_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
-        iota_z_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
-        beta_z_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
+        iota_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
+        beta_values = [np.random.uniform(0, 1, size=len(k_values[p])) for p in range(sum(npatch)+1)]
 
         # Assing zero to the elements corresponding to the null and Nyquist frequency values
-        iota_x_values = [k_null(iota_x_values[p], k_values[p], k_mag[p]) for p in range(sum(npatch)+1)]
-        iota_y_values = [k_null(iota_y_values[p], k_values[p], k_mag[p]) for p in range(sum(npatch)+1)]
-        iota_z_values = [k_null(iota_z_values[p], k_values[p], k_mag[p]) for p in range(sum(npatch)+1)]
-
-        beta_x_values[0][beta_x_values[0] == 0] = epsilon
-        beta_y_values[0][beta_y_values[0] == 0] = epsilon
-        beta_z_values[0][beta_z_values[0] == 0] = epsilon
+        iota_values = [k_null(iota_values[p], k_values[p], k_mag[p]) for p in range(sum(npatch)+1)]
+        beta_values[0][beta_values[0] == 0] = epsilon
 
         # Populate the grids of random numbers so as to have the same random numbers for the same k-magnitude values
-        iota_x = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
-        beta_x = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
-        iota_y = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
-        beta_y = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
-        iota_z = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
-        beta_z = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
+        iota = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
+        beta = [np.zeros_like(k_mag[p]) for p in range(sum(npatch)+1)]
 
         for i, k in enumerate(k_values[0]):
             idx = k_mag[0] == k
-            iota_x[0][idx] = iota_x_values[0][i]
-            beta_x[0][idx] = beta_x_values[0][i]
-            iota_y[0][idx] = iota_y_values[0][i]
-            beta_y[0][idx] = beta_y_values[0][i]
-            iota_z[0][idx] = iota_z_values[0][i]
-            beta_z[0][idx] = beta_z_values[0][i]
-            
-        # Building the grid of random numbers
-        iota_grid = [[iota_x[p], iota_y[p], iota_z[p]] for p in range(sum(npatch)+1)]
-        beta_grid = [[beta_x[p], beta_y[p], beta_z[p]] for p in range(sum(npatch)+1)]
+            iota[0][idx] = iota_values[0][i]
+            beta[0][idx] = beta_values[0][i]
         
     # Method to asign random numbers to each of the Fourier space values in a vectorized and fast way.
     # This method is correlating the random numbers and is restricting the range of the phase space, resulting in
@@ -345,24 +337,12 @@ def random_phase(N, k_mag, epsilon = 1e-30, mode = 0):
     elif mode == 2:
         # Create two random number arrays for each three dimensions
         variables = {
-            'iota_x1': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
-            'iota_x2': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
-            'iota_x3': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
-            'beta_x1': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
-            'beta_x2': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
-            'beta_x3': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
-            'iota_y1': [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)],
-            'iota_y2': [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)],
-            'iota_y3': [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)],
-            'beta_y1': [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)],
-            'beta_y2': [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)],
-            'beta_y3': [random_hermitian_vector(nmay) for _ in range(sum(npatch)+1)],
-            'iota_z1': [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)],
-            'iota_z2': [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)],
-            'iota_z3': [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)],
-            'beta_z1': [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)],
-            'beta_z2': [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)],
-            'beta_z3': [random_hermitian_vector(nmaz) for _ in range(sum(npatch)+1)]
+            'iota_1': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
+            'iota_2': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
+            'iota_3': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
+            'beta_1': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
+            'beta_2': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)],
+            'beta_3': [random_hermitian_vector(nmax) for _ in range(sum(npatch)+1)]
         }
 
         # Make elements corresponding to the null and Nyquist frequency zero in the iota arrays 
@@ -372,65 +352,31 @@ def random_phase(N, k_mag, epsilon = 1e-30, mode = 0):
                 variables[key][p][nmax//2] = 0.
                 variables[key][p][nmax//2+1] = 0.
                 
-        iota_x1 = variables['iota_x1']
-        beta_x1 = variables['beta_x1']
-        iota_x2 = variables['iota_x2']
-        beta_x2 = variables['beta_x2']
-        iota_x3 = variables['iota_x3']
-        beta_x3 = variables['beta_x3']
-        iota_y1 = variables['iota_y1']
-        beta_y1 = variables['beta_y1']
-        iota_y2 = variables['iota_y2']
-        beta_y2 = variables['beta_y2']
-        iota_y3 = variables['iota_y3']
-        beta_y3 = variables['beta_y3']
-        iota_z1 = variables['iota_z1']
-        beta_z1 = variables['beta_z1']
-        iota_z2 = variables['iota_z2']
-        beta_z2 = variables['beta_z2']
-        iota_z3 = variables['iota_z3']
-        beta_z3 = variables['beta_z3']
+        iota_1 = variables['iota_1']
+        beta_1 = variables['beta_1']
+        iota_2 = variables['iota_2']
+        beta_2 = variables['beta_2']
+        iota_3 = variables['iota_3']
+        beta_3 = variables['beta_3']
 
         # Create the grid of the random numbers
-        iota_grid_x = [np.meshgrid(iota_x1[p], iota_x2[p], iota_x3[p], indexing='ij') for p in range(sum(npatch)+1)]
-        beta_grid_x = [np.meshgrid(beta_x1[p], beta_x2[p], beta_x3[p], indexing='ij') for p in range(sum(npatch)+1)]
-        iota_grid_y = [np.meshgrid(iota_y1[p], iota_y2[p], iota_y3[p], indexing='ij') for p in range(sum(npatch)+1)]
-        beta_grid_y = [np.meshgrid(beta_y1[p], beta_y2[p], beta_y3[p], indexing='ij') for p in range(sum(npatch)+1)]
-        iota_grid_z = [np.meshgrid(iota_z1[p], iota_z2[p], iota_z3[p], indexing='ij') for p in range(sum(npatch)+1)]
-        beta_grid_z = [np.meshgrid(beta_z1[p], beta_z2[p], beta_z3[p], indexing='ij') for p in range(sum(npatch)+1)]
+        iota_grid = [np.meshgrid(iota_1[p], iota_2[p], iota_3[p], indexing='ij') for p in range(sum(npatch)+1)]
+        beta_grid = [np.meshgrid(beta_1[p], beta_2[p], beta_3[p], indexing='ij') for p in range(sum(npatch)+1)]
 
         # Assigning the same random number to the same k-magnitude value
-        iota_x = [np.sqrt(iota_grid_x[p][0]**2 + iota_grid_x[p][1]**2 + iota_grid_x[p][2]**2) for p in range(sum(npatch)+1)]
-        beta_x = [np.sqrt(beta_grid_x[p][0]**2 + beta_grid_x[p][1]**2 + beta_grid_x[p][2]**2) for p in range(sum(npatch)+1)]
-        iota_y = [np.sqrt(iota_grid_y[p][0]**2 + iota_grid_y[p][1]**2 + iota_grid_y[p][2]**2) for p in range(sum(npatch)+1)]
-        beta_y = [np.sqrt(beta_grid_y[p][0]**2 + beta_grid_y[p][1]**2 + beta_grid_y[p][2]**2) for p in range(sum(npatch)+1)]
-        iota_z = [np.sqrt(iota_grid_z[p][0]**2 + iota_grid_z[p][1]**2 + iota_grid_z[p][2]**2) for p in range(sum(npatch)+1)]
-        beta_z = [np.sqrt(beta_grid_z[p][0]**2 + beta_grid_z[p][1]**2 + beta_grid_z[p][2]**2) for p in range(sum(npatch)+1)]
+        iota = [np.sqrt(iota_grid[p][0]**2 + iota_grid[p][1]**2 + iota_grid[p][2]**2) for p in range(sum(npatch)+1)]
+        beta = [np.sqrt(beta_grid[p][0]**2 + beta_grid[p][1]**2 + beta_grid[p][2]**2) for p in range(sum(npatch)+1)]
 
         # Normalizing the random numbers between 0 and 1
-        iota_x = [((iota_x[p] - np.min(iota_x[p])) / (np.max(iota_x[p]) - np.min(iota_x[p]))) for p in range(sum(npatch)+1)]
-        beta_x = [((beta_x[p] - np.min(beta_x[p])) / (np.max(beta_x[p]) - np.min(beta_x[p]))) for p in range(sum(npatch)+1)]
-        iota_y = [((iota_y[p] - np.min(iota_y[p])) / (np.max(iota_y[p]) - np.min(iota_y[p]))) for p in range(sum(npatch)+1)]
-        beta_y = [((beta_y[p] - np.min(beta_y[p])) / (np.max(beta_y[p]) - np.min(beta_y[p]))) for p in range(sum(npatch)+1)]
-        iota_z = [((iota_z[p] - np.min(iota_z[p])) / (np.max(iota_z[p]) - np.min(iota_z[p]))) for p in range(sum(npatch)+1)]
-        beta_z = [((beta_z[p] - np.min(beta_z[p])) / (np.max(beta_z[p]) - np.min(beta_z[p]))) for p in range(sum(npatch)+1)]
+        iota = [((iota[p] - np.min(iota[p])) / (np.max(iota[p]) - np.min(iota[p]))) for p in range(sum(npatch)+1)]
+        beta = [((beta[p] - np.min(beta[p])) / (np.max(beta[p]) - np.min(beta[p]))) for p in range(sum(npatch)+1)]
 
         for p in range(sum(npatch)+1):
-            iota_x[p][iota_x[p] == 0] = epsilon
-            beta_x[p][beta_x[p] == 0] = epsilon
-            iota_y[p][iota_y[p] == 0] = epsilon
-            beta_y[p][beta_y[p] == 0] = epsilon
-            iota_z[p][iota_z[p] == 0] = epsilon
-            beta_z[p][beta_z[p] == 0] = epsilon
+            iota[p][iota[p] == 0] = epsilon
+            beta[p][beta[p] == 0] = epsilon
 
         # Making the random iota arrays negative symmetric so they transmit the Fourier space properties when used in the phase
-        iota_x = [symmetrize(iota_x[p], mode = 0) for p in range(sum(npatch)+1)]
-        iota_y = [symmetrize(iota_y[p], mode = 0) for p in range(sum(npatch)+1)]
-        iota_z = [symmetrize(iota_z[p], mode = 0) for p in range(sum(npatch)+1)]
-
-        # Building the grid of random numbers
-        iota_grid = [[iota_x[p], iota_y[p], iota_z[p]] for p in range(sum(npatch)+1)]
-        beta_grid = [[beta_x[p], beta_y[p], beta_z[p]] for p in range(sum(npatch)+1)]
+        iota = [symmetrize(iota[p], mode = 0) for p in range(sum(npatch)+1)]
         
     # Method to create two truly hermitic random number 3D arrays in a slow but sure way.
     # This is the only method that is not correlating the random numbers and is not restricting the range of the phase space,
@@ -438,36 +384,20 @@ def random_phase(N, k_mag, epsilon = 1e-30, mode = 0):
     if mode == 3:
         
         # Randomize the arrays completely taking the array structure from k_mag        
-        iota_x = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
-        beta_x = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
-        iota_y = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
-        beta_y = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
-        iota_z = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
-        beta_z = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
+        iota = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
+        beta = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
 
         for p in range(sum(npatch)+1):
-            iota_x[p][iota_x[p] == 0] = epsilon
-            beta_x[p][beta_x[p] == 0] = epsilon
-            iota_y[p][iota_y[p] == 0] = epsilon
-            beta_y[p][beta_y[p] == 0] = epsilon
-            iota_z[p][iota_z[p] == 0] = epsilon
-            beta_z[p][beta_z[p] == 0] = epsilon
+            iota[p][iota[p] == 0] = epsilon
+            beta[p][beta[p] == 0] = epsilon
 
         # Making the random iota arrays negative symmetric so they transmit the Fourier space properties when used in the phase
-        iota_x = [symmetrize(iota_x[p], mode = 1) for p in range(sum(npatch)+1)]
-        iota_y = [symmetrize(iota_y[p], mode = 1) for p in range(sum(npatch)+1)]
-        iota_z = [symmetrize(iota_z[p], mode = 1) for p in range(sum(npatch)+1)]
+        iota = [symmetrize(iota[p], mode = 1) for p in range(sum(npatch)+1)]
         
         # Making the beta arrays positive symmetric
-        beta_x = [symmetrize(beta_x[p], mode = 2) for p in range(sum(npatch)+1)]
-        beta_y = [symmetrize(beta_y[p], mode = 2) for p in range(sum(npatch)+1)]
-        beta_z = [symmetrize(beta_z[p], mode = 2) for p in range(sum(npatch)+1)]
-
-        # Building the grid of random numbers
-        iota_grid = [[iota_x[p], iota_y[p], iota_z[p]] for p in range(sum(npatch)+1)]
-        beta_grid = [[beta_x[p], beta_y[p], beta_z[p]] for p in range(sum(npatch)+1)]
+        beta = [symmetrize(beta[p], mode = 2) for p in range(sum(npatch)+1)]
     
-    return iota_grid, beta_grid
+    return iota, beta
 
 def vector_kd(alpha_index, lambda_scale, B_lambda, h_cosmo):
     '''
@@ -524,50 +454,59 @@ def power_spectrum_amplitude(k_mag, alpha_index, lambda_scale, B_lambda, h_cosmo
     # Power spectrum amplitude #
     
     # This are two different but equivalent ways to compute the power spectrum amplitude appearing in the bibliography.
-    
-    # P_B = ((2 * (np.pi)**2 * lambda_scale**3 * B_lambda**2) / gamma((alpha_index + 3)/2)) * (lambda_scale * k_mag)**alpha_index
-    P_B = (((2 * np.pi)**(alpha_index + 5) * B_lambda**2 * k_mag**alpha_index) / (2 * gamma((alpha_index + 3)/2) * ((2 * np.pi) / lambda_scale)**(alpha_index + 3)))
+    P_B = [(((2 * np.pi)**(alpha_index + 5) * B_lambda**2 * k_mag[p]**alpha_index) / (2 * gamma((alpha_index + 3)/2) * ((2 * np.pi) / lambda_scale)**(alpha_index + 3))) for p in range(sum(npatch)+1)]
+    # P_B = [((2 * (np.pi)**2 * lambda_scale**3 * B_lambda**2) / gamma((alpha_index + 3)/2)) * (lambda_scale * k_mag[p])**alpha_index for p in range(sum(npatch)+1)]
     
     # Filtering the power spectrum #
     
     if filtering:
         
-        n = max(N) # Maximum number of cells form each of the direction
+        n = max(N) # Maximum number of cells from each of the directions
     
         # Gaussian filtering
         R_fil = size / n 
         # R_fil = gauss_rad_factor * 2.0 * R_fil / lambda_scale # Gaussian filtering radius
         R_fil = gauss_rad_factor / lambda_scale # Gaussian filtering radius
-        A_fil = k_mag**2 * R_fil**2 / 2.0 # Amplitude of the Gaussian filter
+        A_fil = k_mag[0]**2 * R_fil**2 / 2.0 # Amplitude of the Gaussian filter
         
         # Damping scale in (Mpc)^{-1}
         k_d = vector_kd(alpha_index, lambda_scale, B_lambda, h_cosmo)
         
-        KD = k_mag <= k_d # Damping scale mask
-    
-        P_B[~KD] = 0
+        KD = k_mag[0] <= k_d # Damping scale mask
         
-        P_B = P_B * np.exp(-A_fil)
+        P_B[0][~KD] = 0
+        
+        P_B = [P_B[p] * np.exp(-A_fil) for p in range(sum(npatch)+1)]
     
         if verbose:
             print('============================================================')
-            print(f'Paremeters: Spectral index: {alpha_index} | Filtering Scale: {lambda_scale} | B0: {B_lambda} | h: {h_cosmo}')
+            print('Power Spectrum Amplitude completed')
+            print('------------------------------------------------------------')
+            print(f'Spectral index: {alpha_index}')
+            print(f'Filtering Scale: {lambda_scale}')
+            print(f'B0: {B_lambda} | h: {h_cosmo}')
             print('------------------------------------------------------------')
             print(f'Damping scale:            {k_d}')
-            print(f'Maximum frequency number: {np.max(k_mag)}')
+            if np.any(KD):
+                print(f'Maximum frequency number: {np.max(k_mag[0][KD])}')
+            else:
+                print(f'Maximum frequency number: none')
             print('------------------------------------------------------------')
             print(f'Filtering radius:         {R_fil}')
-            print(f'Minimum frequency number: {np.min(k_mag[KD])}')
+            if np.any(KD):
+                print(f'Minimum frequency number: {np.min(k_mag[0][KD])}')
+            else:
+                print(f'Minimum frequency number: none')
             print('============================================================')
     
     return P_B
 
-def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = False):
+def generate_fourier_space(K, N, epsilon = 1e-30, verbose = False, debug = False):
     '''
-    Generates the Fourier space quantities needed to compute the magnetic field seed in Fourier space.
+    Generates the Fourier space quantities needed to compute the magnetic field seed.
     
     Args:
-        - size: size of the box in Mpc
+        - K: wave vector unique values array. Can be a chunk of the wave vector values in each direction.
         - N: number of cells in each direction
         - epsilon: small number to avoid division by zero
         - verbose: boolean to print the parameters or not
@@ -578,47 +517,32 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
         - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
             
     Author: Marco Molina
-
     '''
 
     nmax, nmay, nmaz = N
-    dx = size/nmax
     
-    # Calculate the wave numbers for a Fourier transform
-    kx = [np.fft.fftfreq(nmax, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
-    ky = [np.fft.fftfreq(nmay, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
-    kz = [np.fft.fftfreq(nmaz, dx) * 2 * np.pi for _ in range(sum(npatch)+1)]
-    
-    ##Revisar## Factor 2*pi
-    # kx = [np.fft.fftfreq(nmax, dx) for _ in range(sum(npatch)+1)]
-    # ky = [np.fft.fftfreq(nmay, dx) for _ in range(sum(npatch)+1)]
-    # kz = [np.fft.fftfreq(nmaz, dx) for _ in range(sum(npatch)+1)]
-    
-    # Here we add the positive Nyquist frequency just before the negative Nyquist frequency already present
-    for p in range(sum(npatch)+1):
-        kx[p] = np.insert(kx[p], nmax//2, -kx[p][nmax//2])
-        ky[p] = np.insert(ky[p], nmay//2, -ky[p][nmay//2])
-        kz[p] = np.insert(kz[p], nmaz//2, -kz[p][nmaz//2])
+    kx = K[0]
+    ky = K[1]
+    kz = K[2]
     
     # Components of the wave vector k for each combination of kx, ky, and kz.
-    k_grid = [np.meshgrid(kx[p], ky[p], kz[p], indexing='ij') for p in range(sum(npatch)+1)]
-
+    k_grid = [np.meshgrid(kx, ky, kz, indexing='ij') for _ in range(sum(npatch)+1)]
+    
     # Squared magnitudes of the wave vector k for each combination of kx, ky, and kz.
-    k_squared = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)]
+    k_magnitude = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)]
 
     # Magnitude of the wave vector k for each combination of kx, ky, and kz.
-    k_magnitude = [np.sqrt(k_squared[p]).astype(np.float64) for p in range(sum(npatch)+1)]
+    k_magnitude = [np.sqrt(k_magnitude[p]).astype(np.float64) for p in range(sum(npatch)+1)]
 
     # Avoid division by zero by setting zero magnitudes to a small number.
     for p in range(sum(npatch)+1):
-        k_squared[p][k_squared[p] == 0] = epsilon
         k_magnitude[p][k_magnitude[p] == 0] = epsilon
         
     if verbose:
         print('============================================================')
         print('Fourier Grid completed')
         print('------------------------------------------------------------')
-        print(f'kx shape: {kx[0].shape}')
+        print(f'kx shape: {kx.shape}')
         print(f'kx grid shape: {k_grid[0][0].shape}')
         print('============================================================')
     
@@ -626,26 +550,25 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
     if debug:
         
         if nmax <= 32 and nmay <= 32 and nmaz <= 32:
-            utils.save_3d_array('kx', k_grid[0][0])
-            utils.save_3d_array('k_magnitude', k_magnitude[0])
+            utils.save_3d_array('data/kx', k_grid[0][0])
+            utils.save_3d_array('data/k_magnitude', k_magnitude[0])
         else:
-            print('The debugging information is not saved because the number of cells is too large. Try with a smaller number of cells, like 6.')
+            print('The debugging information is not saved because the number of cells is too large. Try with a smaller and manageable number of cells, like 6.')
         
         print('============================================================')
         print('Fourier Grid Information')
         print('------------------------------------------------------------')
-        print(f'kx shape: {kx[0].shape}')
-        print(f'ky shape: {ky[0].shape}')
-        print(f'kz shape: {kz[0].shape}')
+        print(f'kx shape: {kx.shape}')
+        print(f'ky shape: {ky.shape}')
+        print(f'kz shape: {kz.shape}')
         print(f'kx grid shape: {k_grid[0][0].shape}')
         print(f'ky grid shape: {k_grid[0][1].shape}')
         print(f'kz grid shape: {k_grid[0][2].shape}')
-        print(f'Frequency numbers: {kx[0]}')
-        print(f'k squared shape: {k_squared[0].shape}')
+        print(f'Frequency numbers: {kx}')
         print(f'k magnitude shape: {k_magnitude[0].shape}')
         print(f'Some k magnitude values: {k_magnitude[0][0:3, 0:3, 0:3]}')
         print('============================================================')
-        assert np.allclose(k_grid[0][0][1:, 1:, 1:], -np.conj(np.flip(k_grid[0][0][1:, 1:, 1:]))), f"Debugging Test I Failed: kx grid is simmetric."
+        assert np.allclose(k_grid[0][0][1:, 1:, 1:], -np.conj(np.flip(k_grid[0][0][1:, 1:, 1:]))), f"Debugging Test I Failed: kx grid is not simmetric."
         print(f"Debugging Test I Passed: kx grid is simmetric.")
         assert np.allclose(k_magnitude[0][1:, 1:, 1:], np.conj(np.flip(k_magnitude[0][1:, 1:, 1:]))), f"Debugging Test II Failed: k magnitude is not Hermitian."
         print(f"Debugging Test II Passed: k magnitude is Hermitian.")
@@ -658,9 +581,9 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
         k_hat_magnitude[0][0,0,0] = 1.
         
         if nmax <= 32 and nmay <= 32 and nmaz <= 32:
-            utils.save_3d_array('k_hat_magnitude', k_hat_magnitude[0])
+            utils.save_3d_array('data/k_hat_magnitude', k_hat_magnitude[0])
         else:
-            print('The debugging information is not saved because the number of cells is too large. Try with a smaller number of cells, like 6.')
+            print('The debugging information is not saved because the number of cells is too large. Try with a smaller and manageable number of cells, like 6.')
             
         for p in range(sum(npatch)+1):
             
@@ -673,263 +596,222 @@ def generate_fourier_space(size, N, epsilon = 1e-30, verbose = False, debug = Fa
         
     return k_grid, k_magnitude
 
-def generate_seed_phase(k_magnitude, N, epsilon = 1e-30, verbose = False, debug = False):
+def generate_seed_phase(axis, iota, beta, N, verbose = False, debug = False):
     '''
     Generates the random magnetic field seed phase in Fourier space.
+    
     Args:
-        - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
+        - axis: axis of the random magnetic field seed phase needed to be generated. The axis must be x, y, or z
+        - iota: random number 3D array for the asked dimension
+            - If the hole array is processed, this must be a negative symmetric array resulting from @random_phase
+        - beta: random number 3D array for the asked dimension
+            - If the hole array is processed, this must be a positive symmetric array resulting from @random_phase
         - N: number of cells in each direction
-        - epsilon: small number to avoid division by zero
         - verbose: boolean to print the parameters or not
         - debug: boolean to print debugging information or not
         
     Returns:
-        - B_phase_kx: random magnetic field component in Fourier space in the x direction
-        - B_phase_ky: random magnetic field component in Fourier space in the y direction
-        - B_phase_kz: random magnetic field component in Fourier space in the z direction
+        - B_phase_k: random magnetic field seed phase in Fourier space in the given direction
         
     Source: Phase theoretical treatment based on Vicent Quilis' procedure.
             
     Author: Marco Molina
-
     '''
+    
+    if axis not in ['x', 'y', 'z']:
+        raise ValueError('The axis must be x, y, or z.')
     
     nmax, nmay, nmaz = N
     
-    # Generate a random phase with chosen real and imaginary parts to get a real random magnetic field in real space, evently distributed in amplitude around a given value.
-    iota_grid, beta_grid = random_phase(N, k_magnitude, epsilon = epsilon, mode = 3)
-    
-    B_phase_kx = [np.cos(2 * np.pi * iota_grid[p][0]) * np.sqrt(-2 * np.log(beta_grid[p][0])) + 1j * (np.sin(2 * np.pi * iota_grid[p][0]) * np.sqrt(-2 * np.log(beta_grid[p][0]))) for p in range(sum(npatch)+1)]
-    B_phase_ky = [np.cos(2 * np.pi * iota_grid[p][1]) * np.sqrt(-2 * np.log(beta_grid[p][1])) + 1j * (np.sin(2 * np.pi * iota_grid[p][1]) * np.sqrt(-2 * np.log(beta_grid[p][1]))) for p in range(sum(npatch)+1)]
-    B_phase_kz = [np.cos(2 * np.pi * iota_grid[p][2]) * np.sqrt(-2 * np.log(beta_grid[p][2])) + 1j * (np.sin(2 * np.pi * iota_grid[p][2]) * np.sqrt(-2 * np.log(beta_grid[p][2]))) for p in range(sum(npatch)+1)]
+    B_phase_k = [np.cos(2 * np.pi * iota[p]) * np.sqrt(-2 * np.log(beta[p]))
+         + 1j * (np.sin(2 * np.pi * iota[p]) * np.sqrt(-2 * np.log(beta[p]))) for p in range(sum(npatch)+1)]
     
     if verbose:
         print('============================================================')
-        print('Random Phase completed')
+        print(f'Random {axis} Phase completed')
         print('------------------------------------------------------------')
-        print(f'Random phase shape: {B_phase_kx[0].shape}')
+        print(f'Random {axis} phase shape: {B_phase_k[0].shape}')
         print('============================================================')
     
     if debug:
         
         if nmax <= 32 and nmay <= 32 and nmaz <= 32:
-            utils.save_3d_array('R(B_phase_kx)', np.real(B_phase_kx[0]))
-            utils.save_3d_array('I(B_phase_kx)', np.imag(B_phase_kx[0]))
-            utils.save_3d_array('iota_x', iota_grid[0][0])
-            utils.save_3d_array('iota_y', iota_grid[0][1])
-            utils.save_3d_array('iota_z', iota_grid[0][2])
-            utils.save_3d_array('DEBUG', (iota_grid[0][0][1:, 1:, 1:] - (-np.conj(np.flip(iota_grid[0][0][1:, 1:, 1:])))))
+            utils.save_3d_array(f'data/R(B_phase_k{axis})', np.real(B_phase_k[0]))
+            utils.save_3d_array(f'data/I(B_phase_k{axis})', np.imag(B_phase_k[0]))
+            utils.save_3d_array(f'data/iota_{axis}', iota[0])
+            # utils.save_3d_array('data/DEBUG', (iota[0][1:, 1:, 1:] - (-np.conj(np.flip(iota[0][1:, 1:, 1:])))))
         
         print('============================================================')        
-        print(f'Random Phase Information')
+        print(f'Random {axis} Phase Information')
         print('------------------------------------------------------------')
-        print(f'Random iota shape: {iota_grid[0][0].shape}')
-        print(f'Random beta shape: {beta_grid[0][0].shape}')
-        print(f'Random phase shape: {B_phase_kx[0].shape}')
-        print(f'Some random iota values: {iota_grid[0][0][0:3, 0:3, 0:3]}')
-        print(f'Some random beta values: {beta_grid[0][0][0:3, 0:3, 0:3]}')
-        print(f'Some random phase values: {B_phase_kx[0][0:3, 0:3, 0:3]}')
+        print(f'Random iota {axis} shape: {iota[0].shape}')
+        print(f'Random beta {axis} shape: {beta[0].shape}')
+        print(f'Random {axis} phase shape: {B_phase_k[0].shape}')
+        print(f'Some random iota {axis} values: {iota[0][0:3, 0:3, 0:3]}')
+        print(f'Some random beta {axis} values: {beta[0][0:3, 0:3, 0:3]}')
+        print(f'Some random {axis} phase values: {B_phase_k[0][0:3, 0:3, 0:3]}')
         print('------------------------------------------------------------')
+
         # In case one needs cut the code to check the Hermitian properties of the random numbers when debugging
-        assert np.allclose(iota_grid[0][0][1:, 1:, 1:], -np.conj(np.flip(iota_grid[0][0][1:, 1:, 1:]))), f"Debugging Test IV Failed: iota grid x is not Hermitian."
-        print(f"Debugging Test IV Passed: iota grid x is Hermitian.")
-        assert np.allclose(beta_grid[0][0][1:, 1:, 1:], np.conj(np.flip(beta_grid[0][0][1:, 1:, 1:]))), f"Debugging Test V Failed: beta grid x is not Hermitian."
-        print(f"Debugging Test V Passed: beta grid x is Hermitian.")
-        assert np.allclose(iota_grid[0][1][1:, 1:, 1:], -np.conj(np.flip(iota_grid[0][1][1:, 1:, 1:]))), f"Debugging Test VI Failed: iota grid y is not Hermitian."
-        print(f"Debugging Test VI Passed: iota grid y is Hermitian.")
-        assert np.allclose(beta_grid[0][1][1:, 1:, 1:], np.conj(np.flip(beta_grid[0][1][1:, 1:, 1:]))), f"Debugging Test VII Failed: beta grid y is not Hermitian."
-        print(f"Debugging Test VII Passed: beta grid y is Hermitian.")
-        assert np.allclose(iota_grid[0][2][1:, 1:, 1:], -np.conj(np.flip(iota_grid[0][2][1:, 1:, 1:]))), f"Debugging Test VIII Failed: iota grid z is not Hermitian."
-        print(f"Debugging Test VIII Passed: iota grid z is Hermitian.")
-        assert np.allclose(beta_grid[0][2][1:, 1:, 1:], np.conj(np.flip(beta_grid[0][2][1:, 1:, 1:]))), f"Debugging Test IX Failed: beta grid z is not Hermitian."
-        print(f"Debugging Test IX Passed: beta grid z is Hermitian.")
-        assert np.allclose(B_phase_kx[0][1:, 1:, 1:], np.conj(np.flip(B_phase_kx[0][1:, 1:, 1:]))), f"Debugging Test X Failed: kx B phase is not Hermitian."
-        print(f"Debugging Test X Passed: kx B phase is Hermitian.")
+        assert np.allclose(iota[0][1:, 1:, 1:], -np.conj(np.flip(iota[0][1:, 1:, 1:]))), f"Debugging Test IV Failed: iota grid {axis} is not Hermitian."
+        print(f"Debugging Test IV Passed: iota grid {axis} is Hermitian.")
+        assert np.allclose(beta[0][1:, 1:, 1:], np.conj(np.flip(beta[0][1:, 1:, 1:]))), f"Debugging Test V Failed: beta grid {axis} is not Hermitian."
+        print(f"Debugging Test V Passed: beta grid {axis} is Hermitian.")
+        assert np.allclose(B_phase_k[0][1:, 1:, 1:], np.conj(np.flip(B_phase_k[0][1:, 1:, 1:]))), f"Debugging Test X Failed: k{axis} B phase is not Hermitian."
+        print(f"Debugging Test VI Passed: k{axis} B phase is Hermitian.")
         print('============================================================')
         
-    return B_phase_kx, B_phase_ky, B_phase_kz
+    return B_phase_k
 
-def generate_random_seed_amplitudes(k_grid, k_magnitude, B_phase_kx, B_phase_ky, B_phase_kz, P_B, size, N, verbose = False, debug = False):
+def generate_random_seed_amplitudes(axis, k_grid_axis, k_magnitude, P_B, B_phase_axis, size, N, verbose = False, debug = False):
     '''
     Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
     used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
     
     Args:
-        - k_grid: wave vector k coordinates for each combination of kx, ky, and kz
+        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z
+        - k_grid_axis: wave vector k coordinates axis component for each combination of kx, ky, and kz
         - k_magnitude: magnitude of the wave vector k for each combination of kx, ky, and kz
-        - B_phase_kx: random magnetic field component in Fourier space in the x direction
-        - B_phase_ky: random magnetic field component in Fourier space in the y direction
-        - B_phase_kz: random magnetic field component in Fourier space in the z direction
         - P_B: amplitude of the power spectrum of the magnetic field seed
+        - B_phase_axis: random magnetic field seed phase in Fourier space in the given direction
         - size: size of the box in Mpc
         - N: number of cells in each direction
         - verbose: boolean to print the parameters or not
         - debug: boolean to print debugging information or not
         
     Returns:
-        - B_random_kx: random magnetic field component in Fourier space in the x direction
-        - B_random_ky: random magnetic field component in Fourier space in the y direction
-        - B_random_kz: random magnetic field component in Fourier space in the z direction
+        - B_random_k: random magnetic field components in Fourier space in the given direction
         
     Source: Vazza, F., Paoletti, D., Banfi, S., Finelli, F., Gheller, C., O’Sullivan, S. P., & Brüggen, M. (2021).
             Simulations and observational tests of primordial magnetic fields from Cosmic Microwave Background constraints.
             Monthly Notices of the Royal Astronomical Society, 500(4), 5350–5368. https://doi.org/10.1093/mnras/staa3532
             
     Author: Marco Molina
-
     '''
+        
+    if axis not in ['x', 'y', 'z']:
+        raise ValueError('The axis must be x, y, or z.')
     
     nmax, nmay, nmaz = N
     
-    # Generate the random magnetic field components amplitude in Fourier space    
-    B_kx_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid[p][0]/k_magnitude[p])**2) for p in range(sum(npatch)+1)]
-    B_ky_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid[p][1]/k_magnitude[p])**2) for p in range(sum(npatch)+1)]
-    B_kz_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid[p][2]/k_magnitude[p])**2) for p in range(sum(npatch)+1)]
+    # Generate the random magnetic field components in Fourier space by agregating the phase and amplitude
+    B_random_k = [np.sqrt(((size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid_axis/k_magnitude[p])**2))/2) * B_phase_axis[p] for p in range(sum(npatch)+1)]
     
     ##Revisar## Proyección transversal en la magnitud
-    # B_kx_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] for p in range(sum(npatch)+1)]
-    # B_ky_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] for p in range(sum(npatch)+1)]
-    # B_kz_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] for p in range(sum(npatch)+1)]
+    # B_random_k = [np.sqrt(((size**3) * ((2 * np.pi)**3) * P_B[p])/2) * B_phase_axis[p] for p in range(sum(npatch)+1)]
     
     # We need to habdle the null frequency after applying the magnitude proyection or the signal would tend to infity.
-    B_kx_mod_squared[0][0,0,0] = 0.
-    B_ky_mod_squared[0][0,0,0] = 0.
-    B_kz_mod_squared[0][0,0,0] = 0.
-    
-    # Generate the random magnetic field components in Fourier space
-    B_random_kx = [(np.sqrt(B_kx_mod_squared[p]/2)) * B_phase_kx[p] for p in range(sum(npatch)+1)]
-    B_random_ky = [(np.sqrt(B_ky_mod_squared[p]/2)) * B_phase_ky[p] for p in range(sum(npatch)+1)]
-    B_random_kz = [(np.sqrt(B_kz_mod_squared[p]/2)) * B_phase_kz[p] for p in range(sum(npatch)+1)]
+    if k_magnitude[0][0,0,0] == 0:
+        B_random_k[0][0,0,0] = 0.
     
     if verbose:
         print('============================================================')
-        print('Random Magnetic Field Seed Amplitudes completed')
+        print(f'Random Magnetic Field Seed {axis} Amplitude completed')
         print('------------------------------------------------------------')
-        print(f'Random magnetic field component shape: {B_random_kx[0].shape}')
+        print(f'Random magnetic field {axis} component shape: {B_random_k[0].shape}')
         print('============================================================')
     
     # Save some arrays to check the values if needed
     if debug:
         
+        # Generate the random magnetic field components amplitude in Fourier space    
+        B_k_mod_squared = [(size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid_axis/k_magnitude[p])**2) for p in range(sum(npatch)+1)]
+        # We need to habdle the null frequency after applying the magnitude proyection or the signal would tend to infity.
+        B_k_mod_squared[0][0,0,0] = 0.
+        
         if nmax <= 32 and nmay <= 32 and nmaz <= 32:            
-            utils.save_3d_array('P_B', P_B[0])
-            utils.save_3d_array('1-(k_hat k_hat div k_squared)_x', (1 - (k_grid[0][0]/k_magnitude[0])**2))
-            utils.save_3d_array('B_kx_mod_squared', B_kx_mod_squared[0])
-            utils.save_3d_array('B_random_kx', B_random_kx[0])
+            utils.save_3d_array('data/P_B', P_B[0])
+            utils.save_3d_array(f'data/1-(k_hat k_hat div k_squared)_{axis}', (1 - (k_grid_axis/k_magnitude[0])**2))
+            utils.save_3d_array(f'data/B_k{axis}_mod_squared', B_k_mod_squared[0])
+            utils.save_3d_array(f'data/B_random_k{axis}', B_random_k[0])
         
         print('============================================================')
-        print(f'Random Magnetic Field Seed Amplitudes Information')
+        print(f'Random Magnetic Field Seed {axis} Amplitude Information')
         print('------------------------------------------------------------')
-        print(f'Random magnetic field component shape: {B_random_kx[0].shape}')
+        print(f'Random magnetic field {axis} component shape: {B_random_k[0].shape}')
         print(f'Power Spectrum shape: {P_B[0].shape}')
         print(f'Some power spectrum values: {P_B[0][0:3, 0:3, 0:3]}')
         print('------------------------------------------------------------')
-        assert np.allclose(P_B[0][1:, 1:, 1:], np.conj(np.flip(P_B[0][1:, 1:, 1:]))), f"Debugging Test XI Failed: P_B is not Hermitian."
-        print(f"Debugging Test XI Passed: P_B is Hermitian.")
-        assert np.allclose((1 - (k_grid[0][0]/k_magnitude[0])**2)[1:, 1:, 1:], np.conj(np.flip((1 - (k_grid[0][0]/k_magnitude[0])**2)[1:, 1:, 1:]))), f"Debugging Test XII Failed: 1 - (k_hat k_hat div k_squared)_x is not Hermitian."
-        print(f"Debugging Test XII Passed: 1 - (k_hat k_hat div k_squared)_x is Hermitian.")
-        assert np.allclose(B_kx_mod_squared[0][1:, 1:, 1:], np.conj(np.flip(B_kx_mod_squared[0][1:, 1:, 1:]))), f"Debugging Test XIII Failed: B kx module squared is not Hermitian."
-        print(f"Debugging Test XIII Passed: B kx module squared is Hermitian.")
-        assert np.allclose(B_random_kx[0][1:, 1:, 1:], np.conj(np.flip(B_random_kx[0][1:, 1:, 1:]))), f"Debugging Test XIV Failed: B random kx is not Hermitian."
-        print(f"Debugging Test XIV Passed: B random kx is Hermitian.")
+        assert np.allclose(P_B[0][1:, 1:, 1:], np.conj(np.flip(P_B[0][1:, 1:, 1:]))), f"Debugging Test VII Failed: P_B is not Hermitian."
+        print(f"Debugging Test VII Passed: P_B is Hermitian.")
+        assert np.allclose((1 - (k_grid_axis/k_magnitude[0])**2)[1:, 1:, 1:], np.conj(np.flip((1 - (k_grid_axis/k_magnitude[0])**2)[1:, 1:, 1:]))), f"Debugging Test VIII Failed: 1 - (k_hat k_hat div k_squared)_{axis} is not Hermitian."
+        print(f"Debugging Test VIII Passed: 1 - (k_hat k_hat div k_squared)_{axis} is Hermitian.")
+        assert np.allclose(B_k_mod_squared[0][1:, 1:, 1:], np.conj(np.flip(B_k_mod_squared[0][1:, 1:, 1:]))), f"Debugging Test IX Failed: B k{axis} module squared is not Hermitian."
+        print(f"Debugging Test IX Passed: B k{axis} module squared is Hermitian.")
+        assert np.allclose(B_random_k[0][1:, 1:, 1:], np.conj(np.flip(B_random_k[0][1:, 1:, 1:]))), f"Debugging Test X Failed: B random k{axis} is not Hermitian."
+        print(f"Debugging Test X Passed: B random k{axis} is Hermitian.")
         print('============================================================')
     
-    return B_random_kx, B_random_ky, B_random_kz
+    return B_random_k
 
-def seed_transverse_projection(k_grid, B_random_kx, B_random_ky, B_random_kz, N, verbose = False, debug = False):
+def seed_transverse_projector(k_grid, B_random_K, N, verbose = False, debug = False):
     '''
     Computes the transverse projection of the magnetic field to ensure the null divergence.
     
     Args:
         - k_grid: wave vector k coordinates for each combination of kx, ky, and kz
-        - B_random_kx: random magnetic field component in Fourier space in the x direction
-        - B_random_ky: random magnetic field component in Fourier space in the y direction
-        - B_random_kz: random magnetic field component in Fourier space in the z direction
+        - B_random_K: random magnetic field component in Fourier space in the three directions
         - N: number of cells in each direction
         - verbose: boolean to print the parameters or not
         - debug: boolean to print debugging information or not
         
     Returns:
-        - B_kx: random magnetic field component in Fourier space in the x direction
-        - B_ky: random magnetic field component in Fourier space in the y direction
-        - B_kz: random magnetic field component in Fourier space in the z direction
+        - k_dot_B: transverse projectior of the magnetic field to ensure the null divergence
             
     Author: Marco Molina
-
     '''
     
     nmax, nmay, nmaz = N
     
+    B_random_kx = B_random_K[0]
+    B_random_ky = B_random_K[1]
+    B_random_kz = B_random_K[2]
+    
     # Compute the transverse projection of the magnetic field to ensure the null divergence
+    k_dot_B = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)] 
     
-    k_squared = [k_grid[p][0]**2 + k_grid[p][1]**2 + k_grid[p][2]**2 for p in range(sum(npatch)+1)] 
-    
-    k_dot_B = [(k_grid[p][0] * B_random_kx[p] + k_grid[p][1] * B_random_ky[p] + k_grid[p][2] * B_random_kz[p])/(k_squared[p]) for p in range(sum(npatch)+1)]
-    
-    B_kx = [B_random_kx[p] - (k_grid[p][0] * k_dot_B[p]) for p in range(sum(npatch)+1)]
-    B_ky = [B_random_ky[p] - (k_grid[p][1] * k_dot_B[p]) for p in range(sum(npatch)+1)]
-    B_kz = [B_random_kz[p] - (k_grid[p][2] * k_dot_B[p]) for p in range(sum(npatch)+1)]
-    
-    # After handling the transverse proyection, we can finally merge the explicitly separated positive and negative Nyquist frequencies
-    B_kx = [merge_nyquist(B_kx[p]) for p in range(sum(npatch)+1)]
-    B_ky = [merge_nyquist(B_ky[p]) for p in range(sum(npatch)+1)]
-    B_kz = [merge_nyquist(B_kz[p]) for p in range(sum(npatch)+1)]
-    
+    k_dot_B = [(k_grid[p][0] * B_random_kx[p] + k_grid[p][1] * B_random_ky[p] + k_grid[p][2] * B_random_kz[p])/(k_dot_B[p]) for p in range(sum(npatch)+1)]
+
+    # We need to habdle the null frequency after applying the magnitude proyection or the signal would tend to infity.
+    if (k_grid[0][0]**2 + k_grid[0][1]**2 + k_grid[0][2]**2)[0,0,0] == 0:
+        k_dot_B[0][0,0,0] = 0.
+
     if verbose:
         print('============================================================')
         print('Transverse Projection completed')
         print('------------------------------------------------------------')
-        print(f'B_kx amplitude shape: {B_kx[0].shape}')
+        print(f'k_dot_B amplitude shape: {k_dot_B[0].shape}')
         print('============================================================')
-    
+        
     if debug:
         
         if nmax <= 32 and nmay <= 32 and nmaz <= 32:
-            utils.save_3d_array('B_kx', B_kx[0])
-            utils.save_3d_array('B_ky', B_ky[0])
-            utils.save_3d_array('B_kz', B_kz[0])
-    
+            utils.save_3d_array('data/k_dot_B', k_dot_B[0])
+        
         print('============================================================')
-        print(f'Magnetic Field Fourier Amplitudes Information')
+        print('Transverse Projection Information')
         print('------------------------------------------------------------')
-        print(f'B_kx amplitude shape: {B_kx[0].shape}')
-        print(f'B_ky amplitude shape: {B_ky[0].shape}')
-        print(f'B_kz amplitude shape: {B_kz[0].shape}')
-        print(f'Some magnetic field Fourier amplitude values: {B_kx[0][0:3, 0:3, 0:3]}')
-        print('------------------------------------------------------------')
-        assert np.allclose(B_kx[0][1:, 1:, 1:], np.conj(np.flip(B_kx[0][1:, 1:, 1:])), rtol = 1e-5, atol = 1e-5), f"Debugging Test XV Failed: B_kx is not Hermitian."
-        print(f"Debugging Test XV Passed: B_kx is Hermitian.")
-        assert np.allclose(B_ky[0][1:, 1:, 1:], np.conj(np.flip(B_ky[0][1:, 1:, 1:])), rtol = 1e-5, atol = 1e-5), f"Debugging Test XVI Failed: B_ky is not Hermitian."
-        print(f"Debugging Test XVI Passed: B_ky is Hermitian.")
-        assert np.allclose(B_kz[0][1:, 1:, 1:], np.conj(np.flip(B_kz[0][1:, 1:, 1:])), rtol = 1e-5, atol = 1e-5), f"Debugging Test XVII Failed: B_kz is not Hermitian."
-        print(f"Debugging Test XVII Passed: B_kz is Hermitian.")
+        print(f'k_dot_B shape: {k_dot_B[0].shape}')
+        print(f'Some k_dot_B values: {k_dot_B[0][0:3, 0:3, 0:3]}')
         print('============================================================')
-    
-    return B_kx, B_ky, B_kz
 
-def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, size, N, gauss_rad_factor = 1, epsilon = 1e-30,
-                                filtering = True, verbose = False, debug = False, format = 'fortran', run = 'no_name'):
+    return k_dot_B
+
+def generate_seed_magnetic_field(axis, k_grid_axis, B_random_k, k_dot_B, N, verbose = False, debug = False):
     '''
     Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
     used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
     
     Args:
-        - alpha_index: spectral index of the magnetic field
-        - lambda_scale: comoving smoothing length in Mpc
-        - B_lambda: magnetic field amplitude at the comoving smoothing length in Gauss
-        - h_cosmo: Hubble constant in units of 100 km/s/Mpc
-        - size: size of the box in Mpc
-        - N: number of cells in each direction
-        - gauss_rad_factor: factor to multiply the Gaussian filtering radius
-        - epsilon: small number to avoid division by zero
-        - filtering: boolean to apply the filtering and damping or not
+        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z
+        - k_grid_axis: wave vector k coordinates axis component for each combination of kx, ky, and kz
+        - B_random_k: random magnetic field component in Fourier space in the three directions for the given axis
+        - k_dot_B: transverse projectior of the magnetic field to ensure the null divergence
         - verbose: boolean to print the parameters or not
         - debug: boolean to print debugging information or not
-        
+
     Returns:
-        - B_kx: random magnetic field component in Fourier space in the x direction
-        - B_ky: random magnetic field component in Fourier space in the y direction
-        - B_kz: random magnetic field component in Fourier space in the z direction
+        - B: random magnetic field component in Fourier space in the given direction
         
     Source: Vazza, F., Paoletti, D., Banfi, S., Finelli, F., Gheller, C., O’Sullivan, S. P., & Brüggen, M. (2021).
             Simulations and observational tests of primordial magnetic fields from Cosmic Microwave Background constraints.
@@ -937,48 +819,105 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
             Phase theoretical treatment based on Vicent Quilis' procedure.
             
     Author: Marco Molina
-
     '''
+
+    if axis not in ['x', 'y', 'z']:
+        raise ValueError('The axis must be x, y, or z.')
+    
+    nmax, nmay, nmaz = N
+    
+    # Generate the random magnetic field seed phase in Fourier space
+    Bk = [B_random_k[p] - (k_grid_axis * k_dot_B[p]) for p in range(sum(npatch)+1)]
+    
+    if verbose:
+        print('============================================================')
+        print(f'Magnetic Field Fourier {axis} Amplitude completed')
+        print('------------------------------------------------------------')
+        print(f'B_k{axis} amplitude shape: {Bk[0].shape}')
+        print('============================================================')
+    
+    if debug:
+        
+        if nmax <= 32 and nmay <= 32 and nmaz <= 32:
+            utils.save_3d_array(f'data/B_k{axis}', Bk[0])
+    
+        print('============================================================')
+        print(f'Magnetic Field Fourier {axis} Amplitude Information')
+        print('------------------------------------------------------------')
+        print(f'B_k{axis} amplitude shape: {Bk[0].shape}')
+        print(f'Some magnetic field {axis} Fourier amplitude values: {Bk[0][0:3, 0:3, 0:3]}')
+        print('------------------------------------------------------------')
+        for i in range(nmax):
+            for j in range(nmay):
+                for k in range(nmaz//2 + 1):
+
+                    iconj = -i % Bk[0].shape[0]
+                    jconj = -j % Bk[0].shape[1]
+                    kconj = -k % Bk[0].shape[2]
+                    
+                    if Bk[0][i, j, k] != np.conj(Bk[0][iconj, jconj, kconj]):
+                        print(f"Indices: ({i}, {j}, {k}) -> ({iconj}, {jconj}, {kconj})")
+                        print(f"Value at ({i}, {j}, {k}): {Bk[0][i, j, k]}")
+                        print(f"Value at ({iconj}, {jconj}, {kconj}): {Bk[0][iconj, jconj, kconj]}")
+                    
+                    assert Bk[0][i, j, k] == np.conj(Bk[0][iconj, jconj, kconj]), f"Debugging Test XI Failed: B_k{axis} is not Hermitian."
+        print(f"Debugging Test XI Passed: B_k{axis} is Hermitian.")
+        print('============================================================')
+        
+    return Bk
+
+def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_factor = 1,
+                                memmap = False, verbose = False, debug = False, run = 'no_name'):
+    '''
+    Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
+    used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
+    
+    Args:
+        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z
+        - B: random magnetic field component in Fourier space in the given direction
+        - alpha_index: spectral index of the magnetic field
+        - size: size of the box in Mpc
+        - N: number of cells in each direction
+        - gauss_rad_factor: factor to multiply the Gaussian filtering radius
+        - memmap: boolean to decide if the data is processed with memory cautions or not
+        - verbose: boolean to print the parameters or not
+        - debug: boolean to print debugging information or not
+        - run: name of the run
+        
+    Returns:
+        - B: random magnetic field component in real space in the given direction
+        
+    Source: Vazza, F., Paoletti, D., Banfi, S., Finelli, F., Gheller, C., O’Sullivan, S. P., & Brüggen, M. (2021).
+            Simulations and observational tests of primordial magnetic fields from Cosmic Microwave Background constraints.
+            Monthly Notices of the Royal Astronomical Society, 500(4), 5350–5368. https://doi.org/10.1093/mnras/staa3532
+            Phase theoretical treatment based on Vicent Quilis' procedure.
+            
+    Author: Marco Molina
+    '''
+
+    if axis not in ['x', 'y', 'z']:
+        raise ValueError('The axis must be x, y, or z.')
     
     nmax, nmay, nmaz = N
     dx = size/nmax
-    
-    # Fourier space quantities
-    k_grid, k_magnitude = generate_fourier_space(size, N, epsilon = epsilon, verbose = verbose, debug = debug)
-        
-    # Phase of the magnetic field seed in Fourier space
-    B_phase_kx, B_phase_ky, B_phase_kz = generate_seed_phase(k_magnitude, N, epsilon = epsilon, verbose = verbose, debug = debug)
-    
-    # Power spectrum amplitude
-    P_B = [power_spectrum_amplitude(k_magnitude[p], alpha_index, lambda_scale, B_lambda, h_cosmo, size, N, gauss_rad_factor = gauss_rad_factor, filtering = filtering, verbose = verbose) for p in range(sum(npatch)+1)]
-    
-    # Generate the random magnetic field components amplitude in Fourier space
-    B_random_kx, B_random_ky, B_random_kz = generate_random_seed_amplitudes(k_grid, k_magnitude, B_phase_kx, B_phase_ky, B_phase_kz, P_B, size, N, verbose = verbose, debug = debug)
-    
-    del B_phase_kx, B_phase_ky, B_phase_kz, P_B, k_magnitude
-    gc.collect()
-    
-    # Handle the transverse projection and generate the magnetic field seed in Fourier space
-    B_kx, B_ky, B_kz = seed_transverse_projection(k_grid, B_random_kx, B_random_ky, B_random_kz, N, verbose = verbose, debug = debug)
-    
-    del B_random_kx, B_random_ky, B_random_kz, k_grid
-    gc.collect()
-    
+
     # Get the magnetic field components in real space
-    Bx = [np.real(np.fft.ifftn(B_kx[p])/(B_kx[p].size)) for p in range(sum(npatch)+1)]
-    By = [np.real(np.fft.ifftn(B_ky[p])/(B_ky[p].size)) for p in range(sum(npatch)+1)]
-    Bz = [np.real(np.fft.ifftn(B_kz[p])/(B_kz[p].size)) for p in range(sum(npatch)+1)]
-    
-    del B_kx, B_ky, B_kz
-    gc.collect()
+    if memmap:
+        B = [np.fft.ifftn(B[p]) for p in range(sum(npatch)+1)]
+        B = [np.real(B[p] / B[p].size) for p in range(sum(npatch)+1)]
+    else:
+        B = [np.fft.ifftn(B[p]) for p in range(sum(npatch)+1)]
+        
+        if debug == False:
+            B = [np.real(B[p] / B[p].size) for p in range(sum(npatch)+1)]
     
     if verbose:
         
         print('============================================================')
-        print(f'Magnetic Field Real Space Information')
+        print(f'Magnetic {axis} Field Real Space Information')
         print('------------------------------------------------------------')
-        print(f'B_x component shape: {Bx[0].shape}')
-        print(f'Some magnetic field values: {Bx[0][0:3, 0:3, 0:3]}')
+        print(f'B_{axis} component shape: {B[0].shape}')
+        print(f'Some magnetic {axis} field values: {B[0][0:3, 0:3, 0:3]}')
         print('============================================================')
         
         depth = 5
@@ -986,38 +925,472 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         col = 'red'
         
         imdim = np.round((fact+gauss_rad_factor)/dx, 0).astype(int)
-        section = np.sum(Bx[0][(Bx[0].shape[0]//2 - imdim):(Bx[0].shape[0]//2 + imdim), (Bx[0].shape[1]//2 - imdim):(Bx[0].shape[1]//2 + imdim), (Bx[0].shape[2]//2 - depth//2):(Bx[0].shape[2] + depth//2)], axis=2)
+        section = np.sum(B[0][(B[0].shape[0]//2 - imdim):(B[0].shape[0]//2 + imdim), (B[0].shape[1]//2 - imdim):(B[0].shape[1]//2 + imdim), (B[0].shape[2]//2 - depth//2):(B[0].shape[2] + depth//2)], axis=2)
         plt.imshow(section, cmap='viridis')
-        plt.title(f'Gaussian Filtered Magnetic Field, $\\alpha$ = {alpha_index}')
+        plt.title(f'Gaussian Filtered Magnetic {axis}-field, $\\alpha$ = {alpha_index}')
         ctoMpc = gauss_rad_factor/dx
         plt.arrow(imdim, imdim, ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
         plt.text(imdim, imdim-gauss_rad_factor, f'{gauss_rad_factor} Mpc', color=col)
-    
-    # Display the divergence of the magnetic field and some values of the seed
+        
+        name = f'B{axis}_{run}_{nmax}_{size}_{alpha_index}'
+        plt.savefig(os.path.join('data/', f'{name}.png'))
+
     if debug:
         
+        B = [np.real(B[p] / (B[p].size)) for p in range(sum(npatch)+1)]
+        
+        if nmax <= 32 and nmay <= 32 and nmaz <= 32:
+            utils.save_3d_array(f'data/B_k{axis}', B[0])
+        
+        assert np.isreal(B[0]).all(), f"Debugging Test XII Failed: B_{axis} is not real."
+        print(f"Debugging Test XII Passed: B_{axis} is real.")
         print('============================================================')
-        print(f'Magnetic Field Real Space Information')
-        print('------------------------------------------------------------')
-        print(f'B_x component shape: {Bx[0].shape}')
-        print(f'B_y component shape: {By[0].shape}')
-        print(f'B_z component shape: {Bz[0].shape}')
-        print(f'Some magnetic field values: {Bx[0][0:3, 0:3, 0:3]}')
-        print('------------------------------------------------------------')
-        assert np.all(np.abs(np.imag(Bx[0])) < 1e-7), f"Debugging Test XVIII Failed: Bx is not real."
-        print(f"Debugging Test XVIII Passed: Bx is real.")
-        assert np.all(np.abs(np.imag(By[0])) < 1e-7), f"Debugging Test XIX Failed: By is not real."
-        print(f"Debugging Test XIX Passed: By is real.")
-        assert np.all(np.abs(np.imag(Bz[0])) < 1e-7), f"Debugging Test XX Failed: Bz is not real."
-        print(f"Debugging Test XX Passed: Bz is real.")
+        
+    return B
+
+def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS):
+    '''
+    Process a chunk of the magnetic field seed generation.
+    
+    Args:
+        - chunk_size: size of the chunk in each direction
+        - i: index of the chunk in the x direction
+        - j: index of the chunk in the y direction
+        - k: index of the chunk in the z direction
+        - Kx: wave vector k coordinates for the x direction
+        - Ky: wave vector k coordinates for the y direction
+        - Kz: wave vector k coordinates for the z direction
+        - SEED_PARAMS: dictionary with the parameters for the seed generation
+        - OUT_PARAMS: dictionary with the parameters for the output
+        
+    Returns:
+        - B_chunk: magnetic field chunk in Fourier space in the given direction
+        
+    Author: Marco Molina
+    '''
+    
+    chunk_size_x, chunk_size_y, chunk_size_z = chunk_size
+    
+    i_final = i + chunk_size_x
+    j_final = j + chunk_size_y
+    k_final = k + chunk_size_z
+    
+    kx = Kx[i:i_final]
+    ky = Ky[j:j_final]
+    kz = Kz[k:k_final] 
+    
+    k_grid, k_magnitude = generate_fourier_space(
+        [kx, ky, kz], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        SEED_PARAMS["epsilon"], verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    PB = power_spectrum_amplitude(
+        k_magnitude, SEED_PARAMS["alpha"], SEED_PARAMS["lambda_comoving"], SEED_PARAMS["B0"], h, 
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]], 
+        gauss_rad_factor=SEED_PARAMS["smothing"], filtering=SEED_PARAMS["filtering"], verbose=OUT_PARAMS["verbose"]
+        )
+    
+    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    
+    B_random_phase = generate_seed_phase(
+        'x', iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    B_random_kx = generate_random_seed_amplitudes(
+        'x', k_grid[0][0], k_magnitude, PB, B_random_phase,
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    
+    B_random_phase = generate_seed_phase(
+        'y', iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    B_random_ky = generate_random_seed_amplitudes(
+        'y', k_grid[0][1], k_magnitude, PB, B_random_phase,
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    
+    B_random_phase = generate_seed_phase(
+        'z', iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    B_random_kz = generate_random_seed_amplitudes(
+        'z', k_grid[0][2], k_magnitude, PB, B_random_phase,
+        SEED_PARAMS["size"], [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    k_dot_B = seed_transverse_projector(
+        k_grid, [B_random_kx, B_random_ky, B_random_kz],
+        [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+    
+    B_chunk_x = generate_seed_magnetic_field(
+        'x', k_grid[0][0], B_random_kx, k_dot_B,
+        [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+
+    B_chunk_y = generate_seed_magnetic_field(
+        'y', k_grid[0][1], B_random_ky, k_dot_B,
+        [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+
+    B_chunk_z = generate_seed_magnetic_field(
+        'z', k_grid[0][2], B_random_kz, k_dot_B,
+        [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+        verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
+        )
+        
+    return B_chunk_x, B_chunk_y, B_chunk_z
+
+def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
+    '''
+    Generates the magnetic field seed in the given direction.
+
+    Args:
+        - chunk_factor: factor to divide the array in chunks
+        - SEED_PARAMS: dictionary with the parameters for the seed generation
+        - OUT_PARAMS: dictionary with the parameters for the output
+
+    Returns:
+        - B: magnetic field component in the given direction
+        
+    Author: Marco Molina
+    '''
+    
+    nmax, nmay, nmaz = SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]
+    size = SEED_PARAMS["size"]
+    dx = size/nmax
+    
+    chunk_size = min(nmax, nmay, nmaz) // chunk_factor
+
+    # Ensure chunk_size is a multiple of every size and a divisor of 2
+    while any(cell_size % chunk_size != 0 for cell_size in (nmax, nmay, nmaz)) or (chunk_size & (chunk_size - 1)) != 0:
+        chunk_size -= 1
+    if chunk_size == 1 and OUT_PARAMS["memmap"]:
+        print('Chunks are only 1 cell in size. Caution, the chunk factor is too high.')
+    
+    debugChunk = False
+    if (nmax != nmay or nmax != nmaz or nmay != nmaz or nmax != chunk_size) and OUT_PARAMS["debug"] == True:
+        OUT_PARAMS["debug"] = False
+        debugChunk = True
+        print('Internal debugging will not take place if the array is not cubic or if it is chunked.')
+
+    chunk_size = (chunk_size, chunk_size, chunk_size)
+    
+    if OUT_PARAMS["memmap"]:
+        # Create memory-mapped file for B
+        Bx = [np.memmap(f'data/_B_kx_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='w+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
+        Bx[0][0, 0, 0] = 0.
+        By = [np.memmap(f'data/_B_ky_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='w+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
+        By[0][0, 0, 0] = 0.
+        Bz = [np.memmap(f'data/_B_kz_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='w+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
+        Bz[0][0, 0, 0] = 0.
+    else:
+        Bx = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
+        By = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
+        Bz = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
+
+    # Calculate the wave numbers for a Fourier transform
+    Kx = np.fft.fftfreq(nmax, dx) * 2 * np.pi
+    Ky = np.fft.fftfreq(nmay, dx) * 2 * np.pi
+    Kz = np.fft.fftfreq(nmaz, dx) * 2 * np.pi
+    
+    ##Revisar## Factor 2*pi
+    # Kx = np.fft.fftfreq(nmax, dx)
+    # Ky = np.fft.fftfreq(nmay, dx)
+    # Kz = np.fft.fftfreq(nmaz, dx)
+    
+    # Here we add the positive Nyquist frequency just before the negative Nyquist frequency already present
+    Kx = np.insert(Kx, nmax//2, -Kx[nmax//2])
+    Ky = np.insert(Ky, nmay//2, -Ky[nmay//2])
+    Kz = np.insert(Kz, nmaz//2, -Kz[nmaz//2])
+
+    # In case the memory is not enough to generate the magnetic field in one go, we generate it in chunks
+    nchunk = 1
+    if OUT_PARAMS["memmap"]:
+        for i in range(1, nmax+1, chunk_size[0]):
+            for j in range(1, nmay+1, chunk_size[1]):
+                for k in range(1, nmaz//2 + 1, chunk_size[2]):
+                    
+                    if OUT_PARAMS["verbose"]:
+                        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                        print(f'Processing Chunk {nchunk} of {(nmax//chunk_size[0])*(nmay//chunk_size[1])*((nmaz//chunk_size[2])//2)}')
+                        print(f'Chunk Size: {chunk_size}')
+                        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                
+                    B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+                    
+                    i_final = i + chunk_size[0] - 1
+                    j_final = j + chunk_size[1] - 1
+                    k_final = k + chunk_size[2] - 1
+                
+                    Bx[0][i:i_final+1, j:j_final+1, k:k_final+1] = B_chunk_x[0]
+                    By[0][i:i_final+1, j:j_final+1, k:k_final+1] = B_chunk_y[0]
+                    Bz[0][i:i_final+1, j:j_final+1, k:k_final+1] = B_chunk_z[0]
+
+                    iconj = -i % Bx[0].shape[0]
+                    jconj = -j % Bx[0].shape[1]
+                    kconj = -k % Bx[0].shape[2]
+                    
+                    iconj_final = -i_final % Bx[0].shape[0]
+                    jconj_final = -j_final % Bx[0].shape[1]
+                    kconj_final = -k_final % Bx[0].shape[2]
+                    
+                    Bx[0][iconj_final:iconj+1, jconj_final:jconj+1, kconj_final:kconj+1] = np.flip(np.flip(np.flip(np.conj(B_chunk_x[0]), axis=0), axis=1), axis=2)
+                    By[0][iconj_final:iconj+1, jconj_final:jconj+1, kconj_final:kconj+1] = np.flip(np.flip(np.flip(np.conj(B_chunk_y[0]), axis=0), axis=1), axis=2)
+                    Bz[0][iconj_final:iconj+1, jconj_final:jconj+1, kconj_final:kconj+1] = np.flip(np.flip(np.flip(np.conj(B_chunk_z[0]), axis=0), axis=1), axis=2)
+                    
+                    if OUT_PARAMS["debug"] or debugChunk:
+                        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                        print(f'Chunk {nchunk} of {(nmax//chunk_size[0])*(nmay//chunk_size[1])*((nmaz//chunk_size[2])//2)} completed')
+                        print(f'Chunk Inicial Indices:           {i}, {j}, {k}')
+                        print(f'Chunk Final Indices:             {i_final}, {j_final}, {k_final}')
+                        print(f'Chunk 3D Range:           ({i}...{i_final+1}, {j}...{j_final+1}, {k}...{k_final+1})')
+                        print(f'Chunk Final Conjugate Indices:   {iconj_final}, {jconj_final}, {kconj_final}')
+                        print(f'Chunk Inicial Conjugate Indices: {iconj}, {jconj}, {kconj}')
+                        print(f'Chunk Conjugate 3D Range: ({iconj_final}...{iconj+1}, {jconj_final}...{jconj+1}, {kconj_final}...{kconj+1})')
+                        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                    
+                    nchunk += 1
+        
+        if OUT_PARAMS["verbose"]:
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            print(f'Processing Null Axes')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        
+        chunk_size = (nmax//2, 1, 1)
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk(chunk_size, 1, 0, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        Bx[0][1:(nmax//2 + 1), 0, 0] = B_chunk_x[0][:, 0, 0]
+        Bx[0][(nmax//2 + 1):, 0, 0] = np.flip(np.conj(B_chunk_x[0][:, 0, 0]), axis=0)
+        By[0][1:(nmax//2 + 1), 0, 0] = B_chunk_y[0][:, 0, 0]
+        By[0][(nmax//2 + 1):, 0, 0] = np.flip(np.conj(B_chunk_y[0][:, 0, 0]), axis=0)
+        Bz[0][1:(nmax//2 + 1), 0, 0] = B_chunk_z[0][:, 0, 0]
+        Bz[0][(nmax//2 + 1):, 0, 0] = np.flip(np.conj(B_chunk_z[0][:, 0, 0]), axis=0)
+        
+        if OUT_PARAMS["verbose"]:
+            print('X Axis completed')
+        
+        chunk_size = (1, nmax//2, 1)
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk(chunk_size, 0, 1, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        Bx[0][0, 1:(nmay//2 + 1), 0] = B_chunk_x[0][0, :, 0]
+        Bx[0][0, (nmay//2 + 1):, 0] = np.flip(np.conj(B_chunk_x[0][0, :, 0]), axis=0)
+        By[0][0, 1:(nmay//2 + 1), 0] = B_chunk_y[0][0, :, 0]
+        By[0][0, (nmay//2 + 1):, 0] = np.flip(np.conj(B_chunk_y[0][0, :, 0]), axis=0)
+        Bz[0][0, 1:(nmay//2 + 1), 0] = B_chunk_z[0][0, :, 0]
+        Bz[0][0, (nmay//2 + 1):, 0] = np.flip(np.conj(B_chunk_z[0][0, :, 0]), axis=0)
+        
+        if OUT_PARAMS["verbose"]:
+            print('Y Axis completed')
+        
+        chunk_size = (1, 1, nmax//2)
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk(chunk_size, 0, 0, 1, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        Bx[0][0, 0, 1:(nmaz//2 + 1)] = B_chunk_x[0][0, 0, :]
+        Bx[0][0, 0, (nmaz//2 + 1):] = np.flip(np.conj(B_chunk_x[0][0, 0, :]), axis=0)
+        By[0][0, 0, 1:(nmaz//2 + 1)] = B_chunk_y[0][0, 0, :]
+        By[0][0, 0, (nmaz//2 + 1):] = np.flip(np.conj(B_chunk_y[0][0, 0, :]), axis=0)
+        Bz[0][0, 0, 1:(nmaz//2 + 1)] = B_chunk_z[0][0, 0, :]
+        Bz[0][0, 0, (nmaz//2 + 1):] = np.flip(np.conj(B_chunk_z[0][0, 0, :]), axis=0)
+        
+        if OUT_PARAMS["debug"] or debugChunk:
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            print(f'DEBUG Bxx: {Bx[0][:, 0, 0]}')
+            print(f'DEBUG Bxy: {Bx[0][0, :, 0]}')
+            print(f'DEBUG Bxz: {Bx[0][0, 0, :]}')
+            print(f'DEBUG Byx: {By[0][:, 0, 0]}')
+            print(f'DEBUG Byy: {By[0][0, :, 0]}')
+            print(f'DEBUG Byz: {By[0][0, 0, :]}')
+            print(f'DEBUG Bzx: {Bz[0][:, 0, 0]}')
+            print(f'DEBUG Bzy: {Bz[0][0, :, 0]}')
+            print(f'DEBUG Bzz: {Bz[0][0, 0, :]}')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            
+        if OUT_PARAMS["verbose"]:
+            print('Z Axis completed')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            print(f'Processing Null Planes')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        
+        chunk_size = (nmax, nmay//2, 1)
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk(chunk_size, 1, 1, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        Bx[0][1:, 1:(nmay//2 + 1), 0] = B_chunk_x[0][:, :, 0]
+        Bx[0][1:, (nmay//2 + 1):, 0] = np.flip(np.flip(np.conj(B_chunk_x[0][:, :, 0]), axis=0), axis=1)
+        By[0][1:, 1:(nmay//2 + 1), 0] = B_chunk_y[0][:, :, 0]
+        By[0][1:, (nmay//2 + 1):, 0] = np.flip(np.flip(np.conj(B_chunk_y[0][:, :, 0]), axis=0), axis=1)
+        Bz[0][1:, 1:(nmay//2 + 1), 0] = B_chunk_z[0][:, :, 0]
+        Bz[0][1:, (nmay//2 + 1):, 0] = np.flip(np.flip(np.conj(B_chunk_z[0][:, :, 0]), axis=0), axis=1)
+        
+        if OUT_PARAMS["verbose"]:
+            print('XY Null Plane completed')
+        
+        chunk_size = (nmax, 1, nmaz//2)
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk(chunk_size, 1, 0, 1, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        Bx[0][1:, 0, 1:(nmaz//2 + 1)] = B_chunk_x[0][:, 0, :]
+        Bx[0][1:, 0, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk_x[0][:, 0, :]), axis=0), axis=1)
+        By[0][1:, 0, 1:(nmaz//2 + 1)] = B_chunk_y[0][:, 0, :]
+        By[0][1:, 0, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk_y[0][:, 0, :]), axis=0), axis=1)
+        Bz[0][1:, 0, 1:(nmaz//2 + 1)] = B_chunk_z[0][:, 0, :]
+        Bz[0][1:, 0, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk_z[0][:, 0, :]), axis=0), axis=1)
+        
+        if OUT_PARAMS["verbose"]:
+            print('XZ Null Plane completed')
+        
+        chunk_size = (1, nmay, nmaz//2)
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk(chunk_size, 0, 1, 1, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        Bx[0][0, 1:, 1:(nmaz//2 + 1)] = B_chunk_x[0][0, :, :]
+        Bx[0][0, 1:, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk_x[0][0, :, :]), axis=0), axis=1)
+        By[0][0, 1:, 1:(nmaz//2 + 1)] = B_chunk_y[0][0, :, :]
+        By[0][0, 1:, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk_y[0][0, :, :]), axis=0), axis=1)
+        Bz[0][0, 1:, 1:(nmaz//2 + 1)] = B_chunk_z[0][0, :, :]
+        Bz[0][0, 1:, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk_z[0][0, :, :]), axis=0), axis=1)
+        
+        if OUT_PARAMS["debug"] or debugChunk:
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            print(f'DEBUG BxXY:')
+            print(f'{Bx[0][:, :, 0]}')
+            print(f'DEBUG ByXY:')
+            print(f'{By[0][:, :, 0]}')
+            print(f'DEBUG BzXY:')
+            print(f'{Bz[0][:, :, 0]}')
+            print(f'DEBUG BxXZ:')
+            print(f'{Bx[0][:, 0, :]}')
+            print(f'DEBUG ByXZ:')
+            print(f'{By[0][:, 0, :]}')
+            print(f'DEBUG BzXZ:')
+            print(f'{Bz[0][:, 0, :]}')
+            print(f'DEBUG BxYZ:')
+            print(f'{Bx[0][0, :, :]}')
+            print(f'DEBUG ByYZ:')
+            print(f'{By[0][0, :, :]}')
+            print(f'DEBUG BzYZ:')
+            print(f'{Bz[0][0, :, :]}')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        
+        if OUT_PARAMS["verbose"]:
+            print('YZ Null Plane completed')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            print(f'Chunking Completed')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        
+    else:
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk((nmax+1, nmay+1, nmaz+1), 0, 0, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        Bx[0] = B_chunk_x[0]
+        Bx[0][0, 0, 0] = 0.
+        By[0] = B_chunk_y[0]
+        By[0][0, 0, 0] = 0.
+        Bz[0] = B_chunk_z[0]
+        Bz[0][0, 0, 0] = 0.
+        
+    #DEBUG# B = [np.memmap(f'data/_B_kx_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
+    #DEBUG# B = [np.memmap(f'data/_B_ky_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
+    #DEBUG# B = [np.memmap(f'data/_B_kz_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
+
+    # After handling the transverse proyection and building the entire magnetic field in Fourier space, 
+    # we can finally merge the explicitly separated positive and negative Nyquist frequencies
+    Bx = [merge_nyquist(Bx[p], axis='x', memmap=OUT_PARAMS["memmap"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
+    if OUT_PARAMS["memmap"]:
+        os.remove(f'data/_B_kx_temporary_file_.dat')
+    By = [merge_nyquist(By[p], axis='y', memmap=OUT_PARAMS["memmap"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
+    if OUT_PARAMS["memmap"]:
+        os.remove(f'data/_B_ky_temporary_file_.dat')
+    Bz = [merge_nyquist(Bz[p], axis='z', memmap=OUT_PARAMS["memmap"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
+    if OUT_PARAMS["memmap"]:
+        os.remove(f'data/_B_kz_temporary_file_.dat')
+    
+    if OUT_PARAMS["verbose"]:
+        print('============================================================')
+        print(f'Nyquist Frequencies Merging Completed')
         print('============================================================')
     
-        # Compute the magnetic field magnitude
-        Bmag = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
+    #DEBUG# B = [np.memmap(f'data/_Imaginary_B_x_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
+    #DEBUG# B = [np.memmap(f'data/_Imaginary_B_y_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
+    #DEBUG# B = [np.memmap(f'data/_Imaginary_B_z_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
+
+    if OUT_PARAMS["transform"]:
+        Bx = transform_seed_magnetic_field(
+            'x', Bx, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
+            [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+            gauss_rad_factor=SEED_PARAMS["smothing"], memmap=OUT_PARAMS["memmap"],
+            verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
+            )
+    if OUT_PARAMS["save"]:
+        utils.save_magnetic_field_seed(Bx, 'x', OUT_PARAMS["transform"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+    if OUT_PARAMS["memmap"]:
+        os.remove(f'data/_Imaginary_B_x_temporary_file_.dat')
         
-        # Compute the magnetic field seed divergence
-        diver_B = diff.periodic_divergence(Bx, By, Bz, dx, npatch = np.array([0]), stencil=5, kept_patches=None)
+    if OUT_PARAMS["transform"]:
+        By = transform_seed_magnetic_field(
+            'y', By, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
+            [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+            gauss_rad_factor=SEED_PARAMS["smothing"], memmap=OUT_PARAMS["memmap"],
+            verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
+            )
+    if OUT_PARAMS["save"]:
+        utils.save_magnetic_field_seed(By, 'y', OUT_PARAMS["transform"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+    if OUT_PARAMS["memmap"]:
+        os.remove(f'data/_Imaginary_B_y_temporary_file_.dat')
         
+    if OUT_PARAMS["transform"]:
+        Bz = transform_seed_magnetic_field(
+            'z', Bz, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
+            [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+            gauss_rad_factor=SEED_PARAMS["smothing"], memmap=OUT_PARAMS["memmap"],
+            verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
+            )
+    if OUT_PARAMS["save"]:
+        utils.save_magnetic_field_seed(Bz, 'z', OUT_PARAMS["transform"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+    if OUT_PARAMS["memmap"]:
+        os.remove(f'data/_Imaginary_B_z_temporary_file_.dat')
+    
+    return Bx, By, Bz
+
+
+def generate_seed_properties(Bx, By, Bz, alpha_index, size, N, verbose = False):
+    '''
+    Computes the magnitude and the divergence of the magnetic field.
+    
+    Args:
+        - Bx: magnetic field component in the x direction
+        - By: magnetic field component in the y direction
+        - Bz: magnetic field component in the z direction
+        - alpha_index: spectral index of the magnetic field
+        - size: size of the box in Mpc
+        - N: number of cells in each direction
+        - verbose: boolean to print the parameters or not
+        - debug: boolean to print debugging information or not
+    
+    Returns:
+        - Bmag: magnitude of the magnetic field
+        - diver_B: magnetic field divergence
+        
+    Author: Marco Molina
+    '''
+    
+    nmax, nmay, nmaz = N
+    dx = size/nmax
+    
+    # Compute the magnetic field magnitude
+    Bmag = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
+    
+    # Compute the magnetic field seed divergence
+    diver_B = diff.periodic_divergence(Bx, By, Bz, dx, npatch = np.array([0]), stencil=5, kept_patches=None)
+    
+    if verbose:
         print('============================================================')
         print(f'Spectral Index: {alpha_index}')
         print('------------------------------------------------------------')
@@ -1036,37 +1409,5 @@ def generate_magnetic_field_seed(alpha_index, lambda_scale, B_lambda, h_cosmo, s
         print(f"Average divergence: {np.mean(diver_B[0])}")
         print(f"Dispersion divergence: {np.std(diver_B[0])}")
         print('============================================================')
-        
-        del Bmag, diver_B
-        gc.collect()
-        
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_dir = os.path.join(base_dir, 'data')
-
-    # Save the magnetic field seed in the data directory using a universal text format
-    if format == 'txt':
-        os.makedirs(data_dir, exist_ok=True)
-        np.savetxt(os.path.join(data_dir, f'Bx_{run}.txt'), Bx[0].flatten())
-        np.savetxt(os.path.join(data_dir, f'By_{run}.txt'), By[0].flatten())
-        np.savetxt(os.path.join(data_dir, f'Bz_{run}.txt'), Bz[0].flatten())
-    elif format == 'npy':
-        os.makedirs(data_dir, exist_ok=True)
-        np.save(os.path.join(data_dir, f'Bx_{run}.npy'), Bx[0])
-        np.save(os.path.join(data_dir, f'By_{run}.npy'), By[0])
-        np.save(os.path.join(data_dir, f'Bz_{run}.npy'), Bz[0])
-    elif format == 'hdf5':
-        os.makedirs(data_dir, exist_ok=True)
-        with h5py.File(os.path.join(data_dir, 'B.h5'), 'w') as f:
-            f.create_dataset(f'Bx_{run}', data=Bx[0])
-            f.create_dataset(f'By_{run}', data=By[0])
-            f.create_dataset(f'Bz_{run}', data=Bz[0])
-    elif format == 'fortran':
-        os.makedirs(data_dir, exist_ok=True)
-        with FortranFile(os.path.join(data_dir, f'Bx_{run}.bin'), 'w') as f:
-            f.write_record(Bx[0].astype(np.float32))
-        with FortranFile(os.path.join(data_dir, f'By_{run}.bin'), 'w') as f:
-            f.write_record(By[0].astype(np.float32))
-        with FortranFile(os.path.join(data_dir, f'Bz_{run}.bin'), 'w') as f:
-            f.write_record(Bz[0].astype(np.float32))
     
-    return Bx, By, Bz
+    return Bmag, diver_B
