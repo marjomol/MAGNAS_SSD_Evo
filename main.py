@@ -72,7 +72,7 @@ if __name__ == "__main__":
 if out_params["save"] == True:
     print(f'***********************************************************')
     print(f"Plots saved in {out_params['image_folder']}")
-    print(f"Results saved in PRIMAL_Seed_Gen/data")
+    print(f"Results saved in {out_params['data_folder']}")
 else:
     print("Results not saved")
     

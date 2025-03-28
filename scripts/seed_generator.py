@@ -1333,7 +1333,7 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
             verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
             )
     if OUT_PARAMS["save"]:
-        utils.save_magnetic_field_seed(Bx, 'x', OUT_PARAMS["transform"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+        utils.save_magnetic_field_seed(Bx, 'x', OUT_PARAMS["transform"], OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
     if OUT_PARAMS["memmap"]:
         os.remove(f'data/_Imaginary_B_x_temporary_file_.dat')
         
@@ -1345,7 +1345,7 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
             verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
             )
     if OUT_PARAMS["save"]:
-        utils.save_magnetic_field_seed(By, 'y', OUT_PARAMS["transform"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+        utils.save_magnetic_field_seed(By, 'y', OUT_PARAMS["transform"], OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
     if OUT_PARAMS["memmap"]:
         os.remove(f'data/_Imaginary_B_y_temporary_file_.dat')
         
@@ -1357,7 +1357,7 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
             verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
             )
     if OUT_PARAMS["save"]:
-        utils.save_magnetic_field_seed(Bz, 'z', OUT_PARAMS["transform"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+        utils.save_magnetic_field_seed(Bz, 'z', OUT_PARAMS["transform"], OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
     if OUT_PARAMS["memmap"]:
         os.remove(f'data/_Imaginary_B_z_temporary_file_.dat')
         

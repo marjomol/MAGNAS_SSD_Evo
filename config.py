@@ -55,9 +55,9 @@ OUTPUT_PARAMS = {
     "verbose": True,
     "debug": False,
     "run": f'PRIMAL_Seed_Gen_norm',
-    "outdir": "/home/marcomol/trabajo/data/out/",
+    "outdir": "/scratch/molina/output_files_PRIMAL_",
     "plotdir": "plots/",
-    "rawdir": "raw_data_out/",
+    "rawdir": "raw_data/",
     "ID1": "seed/",
     "ID2": "norm",
     "random_seed": 23 # Set the random seed for reproducibility
@@ -96,11 +96,12 @@ rawdir = OUTPUT_PARAMS["rawdir"]
 ID1 = OUTPUT_PARAMS["ID1"]
 ID2 = OUTPUT_PARAMS["ID2"]
 
-# We create the folder for the plots
+# We create the folder for the plots and data
 image_folder = outdir + plotdir + ID1 + f'PRIMAL_Seed_{ID2}'
+data_folder = outdir + rawdir + ID1 + f'PRIMAL_Seed_{ID2}'
 
 # List of folders to check
-folders = [image_folder]
+folders = [image_folder, data_folder]
 
 for folder in folders:
     # Check if the directory already exists
@@ -112,6 +113,7 @@ for folder in folders:
         os.makedirs(folder) 
 
 OUTPUT_PARAMS["image_folder"] = image_folder
+OUTPUT_PARAMS["data_folder"] = data_folder
 
 # Determine the format of the output files
 if OUTPUT_PARAMS["bitformat"] == np.float32:
@@ -151,7 +153,7 @@ elif array_size_bytes > (ram_capacity / 4):
     print(" - Memory mapping will be used")
 else:
     memmap = False
-    memmap = True # Uncomment this line to force the use of np.memmap
+    # memmap = True # Uncomment this line to force the use of np.memmap
     transform = True
     print("The arrays can fit in memory: chunking will not be used.")
     print(" - Chunking will NOT be used")
