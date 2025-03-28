@@ -903,13 +903,12 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
 
     # Get the magnetic field components in real space
     if memmap:
-        B = [np.fft.ifftn(B[p]) for p in range(sum(npatch)+1)]
-        B = [np.real(B[p] / B[p].size) for p in range(sum(npatch)+1)]
+        B = [np.fft.ifftn(B[p] * np.sqrt(nmax * nmay * nmaz)) for p in range(sum(npatch)+1)]
+        B = [np.real(B[p]) for p in range(sum(npatch)+1)]
     else:
-        B = [np.fft.ifftn(B[p]) for p in range(sum(npatch)+1)]
-        
+        B = [np.fft.ifftn(B[p] * np.sqrt(nmax * nmay * nmaz)) for p in range(sum(npatch)+1)]
         if debug == False:
-            B = [np.real(B[p] / B[p].size) for p in range(sum(npatch)+1)]
+            B = [np.real(B[p]) for p in range(sum(npatch)+1)]
     
     if verbose:
         
@@ -945,6 +944,8 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
         assert np.isreal(B[0]).all(), f"Debugging Test XII Failed: B_{axis} is not real."
         print(f"Debugging Test XII Passed: B_{axis} is real.")
         print('============================================================')
+        
+        B = [np.real(B[p]) for p in range(sum(npatch)+1)]
         
     return B
 
@@ -1320,7 +1321,10 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
     #DEBUG# B = [np.memmap(f'data/_Imaginary_B_x_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
     #DEBUG# B = [np.memmap(f'data/_Imaginary_B_y_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
     #DEBUG# B = [np.memmap(f'data/_Imaginary_B_z_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
-
+    
+    if OUT_PARAMS["verbose"]:
+        F_Energy = np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))
+    
     if OUT_PARAMS["transform"]:
         Bx = transform_seed_magnetic_field(
             'x', Bx, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
@@ -1356,6 +1360,12 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
         utils.save_magnetic_field_seed(Bz, 'z', OUT_PARAMS["transform"], OUT_PARAMS["format"], OUT_PARAMS["run"])
     if OUT_PARAMS["memmap"]:
         os.remove(f'data/_Imaginary_B_z_temporary_file_.dat')
+        
+    if OUT_PARAMS["verbose"]:
+        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        print(f'Fourier Energy: {F_Energy}') 
+        print(f'Real Space Energy: {np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))}')
+        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
     
     return Bx, By, Bz
 
