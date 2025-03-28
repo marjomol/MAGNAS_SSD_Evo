@@ -20,13 +20,13 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # Seed Parameters #
 
 # Some tabulated values for the magnetic field amplitude and corresponding spectral index are:
-# B0 = [2, 1.87, 0.35, 0.042, 0.003]
-# alpha = [-2.9, -1, 0, 1, 2]
+# B0 =    [   2,    1.87, 0.35, 0.042, 0.003]
+# alpha = [-2.9,      -1,    0,     1,     2]
 
 SEED_PARAMS = {
-    "nmax": 256,
-    "nmay": 256,
-    "nmaz": 256,
+    "nmax": 216,
+    "nmay": 216,
+    "nmaz": 216,
     "size": 40, # Size of the box in Mpc
     "B0": 2, # Initial magnetic field amplitude in Gauss
     "alpha": -2.9, # Spectral index
@@ -48,18 +48,18 @@ SEED_PARAMS = {
 
 OUTPUT_PARAMS = {
     "save": True,
-    "chunk_factor": 2,
-    "bitformat": np.float64,
+    "chunk_factor": 4,
+    "bitformat": np.float32,
     "format": "fortran",
     "dpi": 300,
     "verbose": True,
     "debug": False,
-    "run": f'PRIMAL_Seed_Gen_modular_2',
+    "run": f'PRIMAL_Seed_Gen_norm',
     "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
     "ID1": "seed/",
-    "ID2": "optimized",
+    "ID2": "norm",
     "random_seed": 23 # Set the random seed for reproducibility
 }
 
@@ -88,7 +88,7 @@ SEED_PARAMS["a"] = a
 SEED_PARAMS["E"] = E
 SEED_PARAMS["H"] = H
 
-## The output parameters are used to create the image directories
+## The output parameters are used to create the image directories and other formatting parameters
 
 outdir = OUTPUT_PARAMS["outdir"]
 plotdir = OUTPUT_PARAMS["plotdir"]
@@ -113,6 +113,12 @@ for folder in folders:
 
 OUTPUT_PARAMS["image_folder"] = image_folder
 
+# Determine the format of the output files
+if OUTPUT_PARAMS["bitformat"] == np.float32:
+    OUTPUT_PARAMS["complex_bitformat"] = np.complex64
+elif OUTPUT_PARAMS["bitformat"] == np.float64:
+    OUTPUT_PARAMS["complex_bitformat"] = np.complex128
+
 ## Check if the arrays can fit in memory or if an alternative memory handeling method is needed
 
 # Get the total RAM capacity in bytes
@@ -125,18 +131,31 @@ print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
 
 # Calculate the size of the arrays in bytes
 array_size = SEED_PARAMS["nmax"] * SEED_PARAMS["nmay"] * SEED_PARAMS["nmaz"]
-array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
+array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["complex_bitformat"]).itemsize
 
-print(f"Size of the arrays: {array_size_bytes / (1024 ** 3):.2f} GB")
+print(f"Maximum size of the arrays involved: {array_size_bytes / (1024 ** 3):.2f} GB")
 
 # Check if the arrays will use more than 1/4 of the total RAM
-if array_size_bytes > (ram_capacity / 4):
+if array_size_bytes > (2*ram_capacity / 5):
     memmap = True
-    print("The arrays are too large to fit in memory: chunking will be used.")
-    # Implement alternative method here
+    transform = False
+    print("The arrays are too large to fit in memory: the seed will not be transformed")
+    print(" - Chunking will be used")
+    print(" - Memory mapping will be used")
+    print(" - The seed will NOT be transformed to real space")
+elif array_size_bytes > (ram_capacity / 4):
+    memmap = True
+    transform = True
+    print("The arrays are too large to fit in memory:")
+    print(" - Chunking will be used")
+    print(" - Memory mapping will be used")
 else:
     memmap = False
+    memmap = True # Uncomment this line to force the use of np.memmap
+    transform = True
     print("The arrays can fit in memory: chunking will not be used.")
-    # Proceed with the current method
+    print(" - Chunking will NOT be used")
+    print(" - Memory mapping will NOT be used")
 
 OUTPUT_PARAMS["memmap"] = memmap
+OUTPUT_PARAMS["transform"] = transform

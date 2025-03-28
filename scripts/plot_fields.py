@@ -61,26 +61,21 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, v
     ## Calculate the standard deviation of the power spectrum for each bin ##
     
     # First we need to compute the FFT, its amplitude square, and normalise it
-    Bx_fft = np.fft.fftn(Bx[0]) # Done with the scipy fft in spec, maybe the normalization is different
-    By_fft = np.fft.fftn(By[0])
-    Bz_fft = np.fft.fftn(Bz[0])
-    Bx_fourier_amplitudes = (np.abs(Bx_fft)**2).flatten() / Bx[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
-    By_fourier_amplitudes = (np.abs(By_fft)**2).flatten() / By[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
-    Bz_fourier_amplitudes = (np.abs(Bz_fft)**2).flatten() / Bz[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
-
-    del Bx_fft, By_fft, Bz_fft
-    gc.collect()
+    Bx_fourier_amplitudes = np.fft.fftn(Bx[0]) # Done with the scipy fft in spec, maybe the normalization is different
+    By_fourier_amplitudes = np.fft.fftn(By[0])
+    Bz_fourier_amplitudes = np.fft.fftn(Bz[0])
+    Bx_fourier_amplitudes = (np.abs(Bx_fourier_amplitudes)**2).flatten() / Bx[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
+    By_fourier_amplitudes = (np.abs(By_fourier_amplitudes)**2).flatten() / By[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
+    Bz_fourier_amplitudes = (np.abs(Bz_fourier_amplitudes)**2).flatten() / Bz[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
 
     # Next we obtain the frequencies
     kx = np.fft.fftfreq(nmax, dx) * 2 * np.pi # Es seguro el factor 2*pi?
     ky = np.fft.fftfreq(nmay, dx) * 2 * np.pi
     kz = np.fft.fftfreq(nmaz, dx) * 2 * np.pi
-    k_grid = np.meshgrid(kx, ky, kz, indexing='ij')
-    k_squared = k_grid[0]**2 + k_grid[1]**2 + k_grid[2]**2
-    k_magnitude = np.sqrt(k_squared).flatten()
-
-    del k_grid, k_squared
-    gc.collect()
+    
+    k_magnitude = np.meshgrid(kx, ky, kz, indexing='ij')
+    k_magnitude = k_magnitude[0]**2 + k_magnitude[1]**2 + k_magnitude[2]**2
+    k_magnitude = np.sqrt(k_magnitude).flatten()
 
     # Assuming isotropy, we can obtain the P(k) (1-dimensional power spectrum) standard deviation
     k_stats_bins = np.arange(kx[1]/2, np.abs(kx).max(), kx[1])

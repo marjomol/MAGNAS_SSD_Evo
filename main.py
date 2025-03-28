@@ -8,26 +8,20 @@ from scripts.seed_generator import generate_seed, generate_seed_properties
 from scripts.plot_fields import plot_seed_spectrum, scan_animation_3D, zoom_animation_3D
 from scripts.units import *
 npatch = np.array([0]) # We only want the zero patch for the seed
-# np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
+np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
 
+start_time = time.time()
 
 # ============================
 # Only edit the section below
 # ============================
 
-def mainx():
+def gen():
     
-    generate_seed('x', out_params["chunk_factor"], seed_params, out_params)
+    generate_seed(out_params["chunk_factor"], seed_params, out_params)
 
-def mainy():
-    
-    generate_seed('y', out_params["chunk_factor"], seed_params, out_params)
-
-def mainz():
-    
-    generate_seed('z', out_params["chunk_factor"], seed_params, out_params)
-
-def plot(Bx, By, Bz):               
+def plot(Bx, By, Bz):       
+            
     out_params["run"] = f'{out_params["run"]}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
     
     plot_seed_spectrum(seed_params["alpha"], Bx, By, Bz, seed_params["dx"], mode=1, 
@@ -39,18 +33,24 @@ def plot(Bx, By, Bz):
     scan_animation_3D(BM, seed_params["dx"], study_box=1, arrow_scale=10, units='Mpc', 
                     title=f'Gaussian Filtered Magnetic Field Scan, $\\alpha$ = {seed_params["alpha"]}', 
                     Save=out_params["save"], DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
+    
     zoom_animation_3D(BM, seed_params["dx"], arrow_scale=1, units='Mpc', 
                     title=f'Gaussian Filtered Magnetic Field Zoom, $\\alpha$ = {seed_params["alpha"]}', 
                     Save=out_params["save"], DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
 
 def load_and_plot():
-    xelements = utils.get_fortran_file_size('x', out_params["run"], dtype=np.float64)
-    yelements = utils.get_fortran_file_size('y', out_params["run"], dtype=np.float64)
-    zelements = utils.get_fortran_file_size('z', out_params["run"], dtype=np.float64)
-    print(f"X-Elements: {xelements}")
-    print(f"Y-Elements: {yelements}")
-    print(f"Z-Elements: {zelements}")
+    
+    xelements = utils.get_fortran_file_size('x', out_params["run"], dtype=out_params["bitformat"])
+    yelements = utils.get_fortran_file_size('y', out_params["run"], dtype=out_params["bitformat"])
+    zelements = utils.get_fortran_file_size('z', out_params["run"], dtype=out_params["bitformat"])
+    
+    print(f'***********************************************************')
+    print(f"Bx Elements: {xelements-2}") # Fortran files have 2 extra elements (header and footer)
+    print(f"By Elements: {yelements-2}")
+    print(f"Bz Elements: {zelements-2}")
     print(f"Expected Elements: {seed_params['nmax']*seed_params['nmay']*seed_params['nmaz']}")
+    print(f'***********************************************************')
+    
     # Load Bx, By, Bz from binary Fortran format files
     Bx = [utils.load_magnetic_field('x', out_params["run"], format='fortran')]
     By = [utils.load_magnetic_field('y', out_params["run"], format='fortran')]
@@ -61,28 +61,28 @@ def load_and_plot():
 
 
 if __name__ == "__main__":
-    start_time = time.time()
-    mainx()
-    mainy()
-    mainz()
-    load_and_plot()
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    hours, rem = divmod(elapsed_time, 3600)
-    minutes, seconds = divmod(rem, 60)
-    print(f"Execution time: {int(hours)}h {int(minutes)}m {seconds:.5f}s")
-    print(f"Box Cell Side: {seed_params['nmax'], seed_params['nmay'], seed_params['nmaz']}")
-    print(f"Cells: {seed_params['nmax']*seed_params['nmay']*seed_params['nmaz']}")
     
-# if __name__ == "__main__":
-#     load_and_plot()
+    gen()
+    # load_and_plot()
     
 # ============================
 # Only edit the section above
 # ============================
 
 if out_params["save"] == True:
+    print(f'***********************************************************')
     print(f"Plots saved in {out_params['image_folder']}")
     print(f"Results saved in PRIMAL_Seed_Gen/data")
 else:
     print("Results not saved")
+    
+end_time = time.time()
+elapsed_time = end_time - start_time
+hours, rem = divmod(elapsed_time, 3600)
+minutes, seconds = divmod(rem, 60)
+
+print(f'***********************************************************')
+print(f"Execution time: {int(hours)}h {int(minutes)}m {seconds:.5f}s")
+print(f"Box Cell Side: {seed_params['nmax'], seed_params['nmay'], seed_params['nmaz']}")
+print(f"Nº Cells: {seed_params['nmax']*seed_params['nmay']*seed_params['nmaz']}")
+print(f'***********************************************************')

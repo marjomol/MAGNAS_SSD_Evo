@@ -84,21 +84,31 @@ def delete_temp_files(temp_files):
         except OSError as e:
             print(f"Error deleting memmap file {file_path}: {e}")
             
-def save_magnetic_field_seed(B, axis, format, run):
+def save_magnetic_field_seed(B, axis, real, format, run):
     '''
     Saves the magnetic field component to a file.
     
     Args:
         - B: magnetic field component to save
         - axis: axis of the magnetic field
+        - real: whether the space of the magnetic field component is real or not (fourier)
         - run: run title
         - format: format of the file (txt, npy, hdf5, fortran)
         
     Author: Marco Molina
     '''
+    
+    assert format in ['txt', 'npy', 'hdf5', 'fortran'], 'Invalid format.'
+    assert axis in ['x', 'y', 'z'], 'Invalid axis.'
+    assert real in [True, False], 'Invalid space value.'
+    
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = os.path.join(base_dir, 'data')
-    name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+    
+    if real:
+        name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+    else:
+        name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
     os.makedirs(data_dir, exist_ok=True)
 
     if format == 'txt':
@@ -109,8 +119,12 @@ def save_magnetic_field_seed(B, axis, format, run):
         with h5py.File(os.path.join(data_dir, f'{name}.h5'), 'w') as f:
             f.create_dataset(f'{name}', data=B[0])
     elif format == 'fortran':
-        with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'w') as f:
-            f.write_record(B[0].astype(out_params["bitformat"]))
+        if real:
+            with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'w') as f:
+                f.write_record(B[0].astype(out_params["bitformat"]))
+        else:
+            with FortranFile(os.path.join(data_dir, f'{name}.bin'), 'w') as f:
+                f.write_record(B[0].astype(out_params["complex_bitformat"]))
             
 def load_magnetic_field(axis, run, format='fortran'):
     '''
@@ -164,9 +178,11 @@ def get_fortran_file_size(axis, run, dtype=np.float64):
     data_dir = os.path.join(base_dir, 'data')
     name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
     filepath = os.path.join(data_dir, f'{name}.bin')
+    
     file_size = os.path.getsize(filepath)
     element_size = np.dtype(dtype).itemsize
     num_elements = file_size // element_size
+    
     return num_elements
             
 def is_ordered(vector):
