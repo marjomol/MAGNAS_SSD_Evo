@@ -24,9 +24,9 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # alpha = [-2.9, -1, 0, 1, 2]
 
 SEED_PARAMS = {
-    "nmax": 64,
-    "nmay": 64,
-    "nmaz": 64,
+    "nmax": 256,
+    "nmay": 256,
+    "nmaz": 256,
     "size": 40, # Size of the box in Mpc
     "B0": 2, # Initial magnetic field amplitude in Gauss
     "alpha": -2.9, # Spectral index
