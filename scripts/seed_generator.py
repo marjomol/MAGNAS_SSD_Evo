@@ -114,7 +114,7 @@ def symmetrize(arr, mode = 0):
     
     return arr
 
-def merge_nyquist(arr, axis='none', memmap = False, complex_bitformat = np.complex64):
+def merge_nyquist(arr, memory = False, complex_bitformat = np.complex64):
     '''
     PRIMAL Seed Generator works with the Nyquist frequencies explicitly splited and centered in the Fourier
     space to ensure the correct signal transverse projection works. Given a 3D Fourier space array with the
@@ -123,9 +123,8 @@ def merge_nyquist(arr, axis='none', memmap = False, complex_bitformat = np.compl
     
     Args:
         - arr: imput array with the positive and negative Nyquist frequencies explicitly splited and centered
-        - axis: axis of the random magnetic field seed amplitude needed to be generated. The axis must be x, y, or z
-        - memmap: boolean to decide if the data is processed with memory cautions or not
-        - complex_bitformat: format of the complex numbers in the array. Only used if memmap is True
+        - memory: boolean to decide if the data is processed with memory cautions or not
+        - complex_bitformat: format of the complex numbers in the array. Only used if memory is True
         
     Returns:
         - arr: array with the positive and negative Nyquist frequencies merged
@@ -143,34 +142,25 @@ def merge_nyquist(arr, axis='none', memmap = False, complex_bitformat = np.compl
     assert (shape[1]-1) % 2 == 0, "The y-size of the array must be an even number"
     assert (shape[2]-1) % 2 == 0, "The z-size of the array must be an even number"
     
-    if memmap:
-        assert axis != 'none', "The axis must be x, y, or z."
-        
+    if memory:
         # Join the signal of the positive and negative Nyquist frequencies while avoiding one of the two central planes
-        # new_arr = np.memmap(f'data/_Imaginary_B_{axis}_temporary_file_.dat', dtype=complex_bitformat,
-        #                     mode='w+', shape=(shape[0]-1, shape[1]-1, ((shape[2]-1)//2)+1))
-        new_arr = np.memmap(f'data/_Imaginary_B_{axis}_temporary_file_.dat', dtype=complex_bitformat,
-                    mode='w+', shape=(shape[0]-1, shape[1]-1, shape[2]-1))
+        new_arr = np.zeros((shape[0]-1, shape[1]-1, shape[2]-1), dtype=complex_bitformat)
 
         # Only half of the Fourier space is needed to use the Real numpy inverse Fourier transform
         # as the other half is the Hermitian conjugate of the first half
-        new_arr[:shape[0]//2, :shape[0]//2, :shape[0]//2] = arr[:shape[0]//2, :shape[0]//2, :shape[0]//2]
-        new_arr[:shape[0]//2, shape[0]//2:, :shape[0]//2] = arr[:shape[0]//2, shape[0]//2+1:, :shape[0]//2]
-        new_arr[shape[0]//2:, :shape[0]//2, :shape[0]//2] = arr[shape[0]//2+1:, :shape[0]//2, :shape[0]//2]
-        new_arr[shape[0]//2:, shape[0]//2:, :shape[0]//2] = arr[shape[0]//2+1:, shape[0]//2+1:, :shape[0]//2]
+        new_arr[:shape[0]//2, :shape[1]//2, :shape[2]//2] = arr[:shape[0]//2, :shape[1]//2, :shape[2]//2]
+        new_arr[:shape[0]//2, shape[1]//2:, :shape[2]//2] = arr[:shape[0]//2, shape[1]//2+1:, :shape[2]//2]
+        new_arr[shape[0]//2:, :shape[1]//2, :shape[2]//2] = arr[shape[0]//2+1:, :shape[1]//2, :shape[2]//2]
+        new_arr[shape[0]//2:, shape[1]//2:, :shape[2]//2] = arr[shape[0]//2+1:, shape[1]//2+1:, :shape[2]//2]
         
-        new_arr[:shape[0]//2, :shape[0]//2, shape[0]//2:] = arr[:shape[0]//2, :shape[0]//2, shape[0]//2+1:]
-        new_arr[:shape[0]//2, shape[0]//2:, shape[0]//2:] = arr[:shape[0]//2, shape[0]//2+1:, shape[0]//2+1:]
-        new_arr[shape[0]//2:, :shape[0]//2, shape[0]//2:] = arr[shape[0]//2+1:, :shape[0]//2, shape[0]//2+1:]
-        new_arr[shape[0]//2:, shape[0]//2:, shape[0]//2:] = arr[shape[0]//2+1:, shape[0]//2+1:, shape[0]//2+1:]
-    
+        new_arr[:shape[0]//2, :shape[1]//2, shape[2]//2:] = arr[:shape[0]//2, :shape[1]//2, shape[2]//2+1:]
+        new_arr[:shape[0]//2, shape[1]//2:, shape[2]//2:] = arr[:shape[0]//2, shape[1]//2+1:, shape[2]//2+1:]
+        new_arr[shape[0]//2:, :shape[1]//2, shape[2]//2:] = arr[shape[0]//2+1:, :shape[1]//2, shape[2]//2+1:]
+        new_arr[shape[0]//2:, shape[1]//2:, shape[2]//2:] = arr[shape[0]//2+1:, shape[1]//2+1:, shape[2]//2+1:]
+
         del arr
         gc.collect()
-        
-        # Flush changes to disk if it's a memory-mapped array
-        if isinstance(new_arr, np.memmap):
-            new_arr.flush()
-    
+
         return new_arr
     else:
         # Join the signal of the positive and negative Nyquist frequencies
@@ -182,7 +172,7 @@ def merge_nyquist(arr, axis='none', memmap = False, complex_bitformat = np.compl
         arr = np.delete(arr, shape[0]//2+1, axis=0)
         arr = np.delete(arr, shape[1]//2+1, axis=1)
         arr = np.delete(arr, shape[2]//2+1, axis=2)
-    
+
         return arr
 
 def k_null(arr, k_val, k_mag):
@@ -384,18 +374,17 @@ def random_phase(axis, k_mag, N, epsilon = 1e-30, mode = 0):
     if mode == 3:
         
         # Randomize the arrays completely taking the array structure from k_mag        
-        iota = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
-        beta = [np.random.uniform(0, 1, size=k_mag[p].shape) for p in range(sum(npatch)+1)]
+        iota = np.random.uniform(0, 1, size=k_mag[0].shape)
+        beta = np.random.uniform(0, 1, size=k_mag[0].shape)
 
-        for p in range(sum(npatch)+1):
-            iota[p][iota[p] == 0] = epsilon
-            beta[p][beta[p] == 0] = epsilon
+        iota[iota == 0] = epsilon
+        beta[beta == 0] = epsilon
 
         # Making the random iota arrays negative symmetric so they transmit the Fourier space properties when used in the phase
-        iota = [symmetrize(iota[p], mode = 1) for p in range(sum(npatch)+1)]
+        iota = [symmetrize(iota, mode = 1) for _ in range(sum(npatch)+1)]
         
         # Making the beta arrays positive symmetric
-        beta = [symmetrize(beta[p], mode = 2) for p in range(sum(npatch)+1)]
+        beta = [symmetrize(beta, mode = 2) for _ in range(sum(npatch)+1)]
     
     return iota, beta
 
@@ -867,7 +856,7 @@ def generate_seed_magnetic_field(axis, k_grid_axis, B_random_k, k_dot_B, N, verb
     return Bk
 
 def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_factor = 1,
-                                memmap = False, verbose = False, debug = False, run = 'no_name'):
+                                memory = False, verbose = False, debug = False, run = 'no_name'):
     '''
     Generates a random magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
     used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
@@ -879,7 +868,7 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
         - size: size of the box in Mpc
         - N: number of cells in each direction
         - gauss_rad_factor: factor to multiply the Gaussian filtering radius
-        - memmap: boolean to decide if the data is processed with memory cautions or not
+        - memory: boolean to decide if the data is processed with memory cautions or not
         - verbose: boolean to print the parameters or not
         - debug: boolean to print debugging information or not
         - run: name of the run
@@ -902,13 +891,13 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
     dx = size/nmax
 
     # Get the magnetic field components in real space
-    if memmap:
-        B = [np.fft.ifftn(B[p] * np.sqrt(nmax * nmay * nmaz)) for p in range(sum(npatch)+1)]
-        B = [np.real(B[p]) for p in range(sum(npatch)+1)]
+    if memory:
+        B = [np.fft.ifftn(B[p]) for p in range(sum(npatch)+1)]
+        B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
     else:
-        B = [np.fft.ifftn(B[p] * np.sqrt(nmax * nmay * nmaz)) for p in range(sum(npatch)+1)]
+        B = [np.fft.ifftn(B[p]) for p in range(sum(npatch)+1)]
         if debug == False:
-            B = [np.real(B[p]) for p in range(sum(npatch)+1)]
+            B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
     
     if verbose:
         
@@ -919,24 +908,23 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
         print(f'Some magnetic {axis} field values: {B[0][0:3, 0:3, 0:3]}')
         print('============================================================')
         
-        depth = 5
-        fact = 5
-        col = 'red'
-        
-        imdim = np.round((fact+gauss_rad_factor)/dx, 0).astype(int)
-        section = np.sum(B[0][(B[0].shape[0]//2 - imdim):(B[0].shape[0]//2 + imdim), (B[0].shape[1]//2 - imdim):(B[0].shape[1]//2 + imdim), (B[0].shape[2]//2 - depth//2):(B[0].shape[2] + depth//2)], axis=2)
-        plt.imshow(section, cmap='viridis')
-        plt.title(f'Gaussian Filtered Magnetic {axis}-field, $\\alpha$ = {alpha_index}')
-        ctoMpc = gauss_rad_factor/dx
-        plt.arrow(imdim, imdim, ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
-        plt.text(imdim, imdim-gauss_rad_factor, f'{gauss_rad_factor} Mpc', color=col)
-        
-        name = f'B{axis}_{run}_{nmax}_{size}_{alpha_index}'
-        plt.savefig(os.path.join('data/', f'{name}.png'))
+        if memory == False:
+            depth = 5
+            fact = 5
+            col = 'red'
+            
+            imdim = np.round((fact+gauss_rad_factor)/dx, 0).astype(int)
+            section = np.sum(B[0][(B[0].shape[0]//2 - imdim):(B[0].shape[0]//2 + imdim), (B[0].shape[1]//2 - imdim):(B[0].shape[1]//2 + imdim), (B[0].shape[2]//2 - depth//2):(B[0].shape[2] + depth//2)], axis=2)
+            plt.imshow(section, cmap='viridis')
+            plt.title(f'Gaussian Filtered Magnetic {axis}-field, $\\alpha$ = {alpha_index}')
+            ctoMpc = gauss_rad_factor/dx
+            plt.arrow(imdim, imdim, ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
+            plt.text(imdim, imdim-gauss_rad_factor, f'{gauss_rad_factor} Mpc', color=col)
+            
+            name = f'B{axis}_{run}_{nmax}_{size}_{alpha_index}'
+            plt.savefig(os.path.join('data/', f'{name}.png'))
 
     if debug:
-        
-        B = [np.real(B[p] / (B[p].size)) for p in range(sum(npatch)+1)]
         
         if nmax <= 32 and nmay <= 32 and nmaz <= 32:
             utils.save_3d_array(f'data/B_k{axis}', B[0])
@@ -945,11 +933,11 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
         print(f"Debugging Test XII Passed: B_{axis} is real.")
         print('============================================================')
         
-        B = [np.real(B[p]) for p in range(sum(npatch)+1)]
+        B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
         
     return B
 
-def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS):
+def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS, memory = True):
     '''
     Process a chunk of the magnetic field seed generation.
     
@@ -963,6 +951,7 @@ def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
         - Kz: wave vector k coordinates for the z direction
         - SEED_PARAMS: dictionary with the parameters for the seed generation
         - OUT_PARAMS: dictionary with the parameters for the output
+        - memory: boolean to decide if the data is processed with memory cautions or not
         
     Returns:
         - B_chunk: magnetic field chunk in Fourier space in the given direction
@@ -991,8 +980,11 @@ def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
         gauss_rad_factor=SEED_PARAMS["smothing"], filtering=SEED_PARAMS["filtering"], verbose=OUT_PARAMS["verbose"]
         )
     
-    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
-    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    if memory:
+        iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+        beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    else:
+        iota, beta = random_phase('x', k_magnitude, (SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]), epsilon = 1e-30, mode = 3)
     
     B_random_phase = generate_seed_phase(
         'x', iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
@@ -1005,8 +997,11 @@ def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
         verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
         )
     
-    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
-    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    if memory:
+        iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+        beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    else:
+        iota, beta = random_phase('y', k_magnitude, (SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]), epsilon = 1e-30, mode = 3)
     
     B_random_phase = generate_seed_phase(
         'y', iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
@@ -1019,8 +1014,11 @@ def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
         verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"]
         )
     
-    iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
-    beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    if memory:
+        iota = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+        beta = [np.random.uniform(0, 1, (chunk_size_x, chunk_size_y, chunk_size_z)) for _ in range(sum(npatch)+1)]
+    else:
+        iota, beta = random_phase('z', k_magnitude, (SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]), epsilon = 1e-30, mode = 3)
     
     B_random_phase = generate_seed_phase(
         'z', iota, beta, [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
@@ -1061,7 +1059,8 @@ def process_seed_chunk(chunk_size, i, j, k, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
 
 def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
     '''
-    Generates the magnetic field seed in the given direction.
+    Generates the magnetic field seed in Fourier space with a chosen spectral index and filtered amplitude that can be
+    used to generate a cosmological magnetic field seed in real space using the inverse numpy Fast Fourier Transform.
 
     Args:
         - chunk_factor: factor to divide the array in chunks
@@ -1069,7 +1068,9 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
         - OUT_PARAMS: dictionary with the parameters for the output
 
     Returns:
-        - B: magnetic field component in the given direction
+        - Bx: magnetic field component in the x direction
+        - By: magnetic field component in the y direction
+        - Bz: magnetic field component in the z direction
         
     Author: Marco Molina
     '''
@@ -1083,7 +1084,7 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
     # Ensure chunk_size is a multiple of every size and a divisor of 2
     while any(cell_size % chunk_size != 0 for cell_size in (nmax, nmay, nmaz)) or (chunk_size & (chunk_size - 1)) != 0:
         chunk_size -= 1
-    if chunk_size == 1 and OUT_PARAMS["memmap"]:
+    if chunk_size == 1 and OUT_PARAMS["memory"]:
         print('Chunks are only 1 cell in size. Caution, the chunk factor is too high.')
     
     debugChunk = False
@@ -1094,18 +1095,9 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
 
     chunk_size = (chunk_size, chunk_size, chunk_size)
     
-    if OUT_PARAMS["memmap"]:
-        # Create memory-mapped file for B
-        Bx = [np.memmap(f'data/_B_kx_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='w+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
-        Bx[0][0, 0, 0] = 0.
-        By = [np.memmap(f'data/_B_ky_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='w+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
-        By[0][0, 0, 0] = 0.
-        Bz = [np.memmap(f'data/_B_kz_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='w+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
-        Bz[0][0, 0, 0] = 0.
-    else:
-        Bx = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
-        By = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
-        Bz = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
+    Bx = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
+    By = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
+    Bz = [np.zeros((nmax+1, nmay+1, nmaz+1), dtype=OUT_PARAMS["complex_bitformat"]) for _ in range(sum(npatch)+1)]
 
     # Calculate the wave numbers for a Fourier transform
     Kx = np.fft.fftfreq(nmax, dx) * 2 * np.pi
@@ -1124,7 +1116,7 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
 
     # In case the memory is not enough to generate the magnetic field in one go, we generate it in chunks
     nchunk = 1
-    if OUT_PARAMS["memmap"]:
+    if OUT_PARAMS["memory"]:
         for i in range(1, nmax+1, chunk_size[0]):
             for j in range(1, nmay+1, chunk_size[1]):
                 for k in range(1, nmaz//2 + 1, chunk_size[2]):
@@ -1260,6 +1252,10 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
         Bz[0][0, 1:, 1:(nmaz//2 + 1)] = B_chunk_z[0][0, :, :]
         Bz[0][0, 1:, (nmaz//2 + 1):] = np.flip(np.flip(np.conj(B_chunk_z[0][0, :, :]), axis=0), axis=1)
         
+        Bx[0][0, 0, 0] = 0.
+        By[0][0, 0, 0] = 0.
+        Bz[0][0, 0, 0] = 0.
+        
         if OUT_PARAMS["debug"] or debugChunk:
             print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
             print(f'DEBUG BxXY:')
@@ -1286,89 +1282,175 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
             print('YZ Null Plane completed')
             print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
             print(f'Chunking Completed')
-            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-        
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~') 
     else:
-        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk((nmax+1, nmay+1, nmaz+1), 0, 0, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS)
+        B_chunk_x, B_chunk_y, B_chunk_z = process_seed_chunk((nmax+1, nmay+1, nmaz+1), 0, 0, 0, Kx, Ky, Kz, SEED_PARAMS, OUT_PARAMS, memory=OUT_PARAMS["memory"])
         Bx[0] = B_chunk_x[0]
         Bx[0][0, 0, 0] = 0.
         By[0] = B_chunk_y[0]
         By[0][0, 0, 0] = 0.
         Bz[0] = B_chunk_z[0]
         Bz[0][0, 0, 0] = 0.
+    
+    del B_chunk_x, B_chunk_y, B_chunk_z
+    gc.collect()
+    
+    if OUT_PARAMS["transform"] == False:
         
-    #DEBUG# B = [np.memmap(f'data/_B_kx_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
-    #DEBUG# B = [np.memmap(f'data/_B_ky_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
-    #DEBUG# B = [np.memmap(f'data/_B_kz_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax+1, nmay+1, nmaz+1)) for _ in range(sum(npatch)+1)]
-
-    # After handling the transverse proyection and building the entire magnetic field in Fourier space, 
-    # we can finally merge the explicitly separated positive and negative Nyquist frequencies
-    Bx = [merge_nyquist(Bx[p], axis='x', memmap=OUT_PARAMS["memmap"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
-    if OUT_PARAMS["memmap"]:
-        os.remove(f'data/_B_kx_temporary_file_.dat')
-    By = [merge_nyquist(By[p], axis='y', memmap=OUT_PARAMS["memmap"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
-    if OUT_PARAMS["memmap"]:
-        os.remove(f'data/_B_ky_temporary_file_.dat')
-    Bz = [merge_nyquist(Bz[p], axis='z', memmap=OUT_PARAMS["memmap"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
-    if OUT_PARAMS["memmap"]:
-        os.remove(f'data/_B_kz_temporary_file_.dat')
+        # Save the Fourier space magnetic field seed in the given directory in npy format to not overload the RAM
+        for axis in ['x', 'y', 'z']:
+            if axis == 'x':
+                utils.save_magnetic_field_seed(Bx, axis, False, OUT_PARAMS["data_folder"], 'npy', OUT_PARAMS["run"])
+                del Bx
+                gc.collect()
+                if OUT_PARAMS["verbose"]:
+                    try:
+                        print(Bx)  # Check if Bx still exists
+                    except NameError:
+                        print("Fourier Bx was successfully deleted from RAM.")
+            elif axis == 'y':
+                utils.save_magnetic_field_seed(By, axis, False, OUT_PARAMS["data_folder"], 'npy', OUT_PARAMS["run"])
+                del By
+                gc.collect()
+                if OUT_PARAMS["verbose"]:
+                    try:
+                        print(By)
+                    except NameError:
+                        print("Fourier By was successfully deleted from RAM.")
+            elif axis == 'z':
+                utils.save_magnetic_field_seed(Bz, axis, False, OUT_PARAMS["data_folder"], 'npy', OUT_PARAMS["run"])
+                del Bz
+                gc.collect()
+                if OUT_PARAMS["verbose"]:
+                    try:
+                        print(Bz)
+                    except NameError:
+                        print("Fourier Bz was successfully deleted from RAM.")
+        
+        print(f'Fourier Space Magnetic Field Seed Generation Completed:')
+        print(' - Real space seed components must be inverse transformed individually.')
+    else:
+        
+        # After handling the transverse proyection and building the entire magnetic field in Fourier space, 
+        # we can finally merge the explicitly separated positive and negative Nyquist frequencies
+        Bx = [merge_nyquist(Bx[p], memory=OUT_PARAMS["memory"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
+        By = [merge_nyquist(By[p], memory=OUT_PARAMS["memory"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
+        Bz = [merge_nyquist(Bz[p], memory=OUT_PARAMS["memory"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
     
-    if OUT_PARAMS["verbose"]:
-        print('============================================================')
-        print(f'Nyquist Frequencies Merging Completed')
-        print('============================================================')
-    
-    #DEBUG# B = [np.memmap(f'data/_Imaginary_B_x_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
-    #DEBUG# B = [np.memmap(f'data/_Imaginary_B_y_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
-    #DEBUG# B = [np.memmap(f'data/_Imaginary_B_z_temporary_file_.dat', dtype=OUT_PARAMS["complex_bitformat"], mode='r+', shape=(nmax, nmay, nmaz//2 + 1)) for _ in range(sum(npatch)+1)]
-    
-    if OUT_PARAMS["verbose"]:
-        F_Energy = np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))
-    
-    if OUT_PARAMS["transform"]:
+        if OUT_PARAMS["verbose"]:
+            
+            print('============================================================')
+            print(f'Nyquist Frequencies Merging Completed')
+            print('============================================================')
+        
+            F_Energy = np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))
+        
         Bx = transform_seed_magnetic_field(
             'x', Bx, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
             [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
-            gauss_rad_factor=SEED_PARAMS["smothing"], memmap=OUT_PARAMS["memmap"],
+            gauss_rad_factor=SEED_PARAMS["smothing"], memory=OUT_PARAMS["memory"],
             verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
             )
-    if OUT_PARAMS["save"]:
-        utils.save_magnetic_field_seed(Bx, 'x', OUT_PARAMS["transform"], OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
-    if OUT_PARAMS["memmap"]:
-        os.remove(f'data/_Imaginary_B_x_temporary_file_.dat')
-        
-    if OUT_PARAMS["transform"]:
         By = transform_seed_magnetic_field(
             'y', By, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
             [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
-            gauss_rad_factor=SEED_PARAMS["smothing"], memmap=OUT_PARAMS["memmap"],
+            gauss_rad_factor=SEED_PARAMS["smothing"], memory=OUT_PARAMS["memory"],
             verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
             )
-    if OUT_PARAMS["save"]:
-        utils.save_magnetic_field_seed(By, 'y', OUT_PARAMS["transform"], OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
-    if OUT_PARAMS["memmap"]:
-        os.remove(f'data/_Imaginary_B_y_temporary_file_.dat')
-        
-    if OUT_PARAMS["transform"]:
         Bz = transform_seed_magnetic_field(
             'z', Bz, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
             [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
-            gauss_rad_factor=SEED_PARAMS["smothing"], memmap=OUT_PARAMS["memmap"],
+            gauss_rad_factor=SEED_PARAMS["smothing"], memory=OUT_PARAMS["memory"],
             verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
             )
-    if OUT_PARAMS["save"]:
-        utils.save_magnetic_field_seed(Bz, 'z', OUT_PARAMS["transform"], OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
-    if OUT_PARAMS["memmap"]:
-        os.remove(f'data/_Imaginary_B_z_temporary_file_.dat')
         
-    if OUT_PARAMS["verbose"]:
-        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-        print(f'Fourier Energy: {F_Energy}') 
-        print(f'Real Space Energy: {np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))}')
-        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-    
-    return Bx, By, Bz
+        if OUT_PARAMS["save"]:
+            
+            utils.save_magnetic_field_seed(Bx, 'x', True, OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+            utils.save_magnetic_field_seed(By, 'y', True, OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+            utils.save_magnetic_field_seed(Bz, 'z', True, OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+            
+        if OUT_PARAMS["verbose"]:
+            
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            print(f'Fourier Energy: {F_Energy}') 
+            print(f'Real Space Energy: {np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))}')
+            print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+        
+        return Bx, By, Bz
 
+def load_and_merge_nyquist(axis, SEED_PARAMS, OUT_PARAMS):
+    '''
+    Loads the magnetic field seed in Fourier space and merges the Nyquist frequencies
+    saving it in the given directory with the given format.
+    
+    Args:
+        - axis: axis of the magnetic field seed
+        - SEED_PARAMS: dictionary with the parameters for the seed generation
+        - OUT_PARAMS: dictionary with the parameters for the output
+        
+    Returns:
+        - B: transformed magnetic field seed in real space
+    '''
+    
+    rshape = (SEED_PARAMS["nmax"]+1, SEED_PARAMS["nmay"]+1, SEED_PARAMS["nmaz"]+1)
+    
+    # Load the magnetic field seed in Fourier space
+    B = [utils.load_magnetic_field(axis, False, rshape, OUT_PARAMS["data_folder"], 'npy', OUT_PARAMS["run"]) for _ in range(sum(npatch)+1)]
+    
+    print(f'DEBUG B{axis}: Seed Loaded')
+    
+    # Merge the Nyquist frequencies
+    B = [merge_nyquist(B[p], memory=OUT_PARAMS["memory"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
+    
+    print(f'DEBUG B{axis}: Nyquist Frequencies Merged')
+    
+    # Save the transformed magnetic field seed
+    utils.save_magnetic_field_seed(B, axis, False, OUT_PARAMS["data_folder"], 'npy', OUT_PARAMS["run"])
+    
+    print(f'DEBUG B{axis}: Merged Seed Saved')
+    
+def load_and_transform_seed(axis, SEED_PARAMS, OUT_PARAMS, delete = False):
+    '''
+    Loads the magnetic field seed in Fourier space, merges the Nyquist frequencies,
+    and transforms it to real space saving it in the given directory with the given format.
+    
+    Args:
+        - axis: axis of the magnetic field seed
+        - SEED_PARAMS: dictionary with the parameters for the seed generation
+        - OUT_PARAMS: dictionary with the parameters for the output
+        - delete: boolean to decide if the Fourier seed is deleted or not
+        
+    Returns:
+        - B: transformed magnetic field seed in real space
+    '''
+    
+    rshape = (SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"])
+    
+    # Load the magnetic field seed in Fourier space
+    B = [utils.load_magnetic_field(axis, False, rshape, OUT_PARAMS["data_folder"], 'npy', OUT_PARAMS["run"]) for _ in range(sum(npatch)+1)]
+    
+    print(f'DEBUG B{axis}: Seed Loaded')
+    
+    # Transform the magnetic field seed to real space
+    B = transform_seed_magnetic_field(
+            axis, B, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
+            [SEED_PARAMS["nmax"], SEED_PARAMS["nmay"], SEED_PARAMS["nmaz"]],
+            gauss_rad_factor=SEED_PARAMS["smothing"], memory=OUT_PARAMS["memory"],
+            verbose=OUT_PARAMS["verbose"], debug=OUT_PARAMS["debug"], run=OUT_PARAMS["run"]
+            )
+    
+    print(f'DEBUG B{axis}: Seed Transformed')
+    
+    # Delete the Fourier space seed from disk
+    if delete:
+        name = f'B{axis}_fourier_{OUT_PARAMS["run"]}_{SEED_PARAMS["nmax"]}_{SEED_PARAMS["size"]}_{SEED_PARAMS["alpha"]}'
+        os.remove(os.path.join(OUT_PARAMS["data_folder"], f'{name}.npy'))
+    
+    # Save the transformed magnetic field seed
+    utils.save_magnetic_field_seed(B, axis, True, OUT_PARAMS["data_folder"], OUT_PARAMS["format"], OUT_PARAMS["run"])
+    
+    print(f'DEBUG B{axis}: Seed Saved')
 
 def generate_seed_properties(Bx, By, Bz, alpha_index, size, N, verbose = False):
     '''

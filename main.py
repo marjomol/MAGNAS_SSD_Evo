@@ -4,7 +4,7 @@ import gc
 import scripts.utils as utils
 from config import SEED_PARAMS as seed_params
 from config import OUTPUT_PARAMS as out_params
-from scripts.seed_generator import generate_seed, generate_seed_properties
+from scripts.seed_generator import generate_seed, load_and_transform_seed, load_and_merge_nyquist
 from scripts.plot_fields import plot_seed_spectrum, scan_animation_3D, zoom_animation_3D
 from scripts.units import *
 npatch = np.array([0]) # We only want the zero patch for the seed
@@ -15,10 +15,6 @@ start_time = time.time()
 # ============================
 # Only edit the section below
 # ============================
-
-def gen():
-    
-    generate_seed(out_params["chunk_factor"], seed_params, out_params)
 
 def plot(Bx, By, Bz):       
             
@@ -40,31 +36,26 @@ def plot(Bx, By, Bz):
 
 def load_and_plot():
     
-    xelements = utils.get_fortran_file_size('x', out_params["run"], dtype=out_params["bitformat"])
-    yelements = utils.get_fortran_file_size('y', out_params["run"], dtype=out_params["bitformat"])
-    zelements = utils.get_fortran_file_size('z', out_params["run"], dtype=out_params["bitformat"])
-    
-    print(f'***********************************************************')
-    print(f"Bx Elements: {xelements-2}") # Fortran files have 2 extra elements (header and footer)
-    print(f"By Elements: {yelements-2}")
-    print(f"Bz Elements: {zelements-2}")
-    print(f"Expected Elements: {seed_params['nmax']*seed_params['nmay']*seed_params['nmaz']}")
-    print(f'***********************************************************')
-    
     # Load Bx, By, Bz from binary Fortran format files
-    Bx = [utils.load_magnetic_field('x', out_params["run"], format='fortran')]
-    By = [utils.load_magnetic_field('y', out_params["run"], format='fortran')]
-    Bz = [utils.load_magnetic_field('z', out_params["run"], format='fortran')]
+    rshape = (seed_params["nmax"], seed_params["nmay"], seed_params["nmaz"])
+    Bx = [utils.load_magnetic_field('x', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
+    By = [utils.load_magnetic_field('y', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
+    Bz = [utils.load_magnetic_field('z', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
     
     # Call the plot function
     plot(Bx, By, Bz)
 
-
 if __name__ == "__main__":
     
-    gen()
+    if out_params["transform"]:
+        Bx, By, Bz = generate_seed(out_params["chunk_factor"], seed_params, out_params)
+    else:
+        # generate_seed(out_params["chunk_factor"], seed_params, out_params)
+        for axis in ['x', 'y', 'z']:
+            load_and_merge_nyquist(axis, seed_params, out_params)
+            # load_and_transform_seed(axis, seed_params, out_params, delete=False)
     # load_and_plot()
-    
+        
 # ============================
 # Only edit the section above
 # ============================

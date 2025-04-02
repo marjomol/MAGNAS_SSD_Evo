@@ -24,9 +24,9 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # alpha = [-2.9,      -1,    0,     1,     2]
 
 SEED_PARAMS = {
-    "nmax": 256,
-    "nmay": 256,
-    "nmaz": 256,
+    "nmax": 2048,
+    "nmay": 2048,
+    "nmaz": 2048,
     "size": 40, # Size of the box in Mpc
     "B0": 2, # Initial magnetic field amplitude in Gauss
     "alpha": -2.9, # Spectral index
@@ -48,18 +48,18 @@ SEED_PARAMS = {
 
 OUTPUT_PARAMS = {
     "save": True,
-    "chunk_factor": 4,
+    "chunk_factor": 8,
     "bitformat": np.float32,
     "format": "fortran",
     "dpi": 300,
     "verbose": True,
     "debug": False,
-    "run": f'PRIMAL_Seed_Gen_norm',
-    "outdir": "/scratch/molina/output_files_PRIMAL_",
+    "run": f'PRIMAL_Seed_Gen_def',
+    "outdir": "/scratch/marcomol/output_files_PRIMAL_",
     "plotdir": "plots/",
     "rawdir": "raw_data/",
     "ID1": "seed/",
-    "ID2": "norm",
+    "ID2": "def",
     "random_seed": 23 # Set the random seed for reproducibility
 }
 
@@ -138,26 +138,30 @@ array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["complex_bitformat"]).it
 print(f"Maximum size of the arrays involved: {array_size_bytes / (1024 ** 3):.2f} GB")
 
 # Check if the arrays will use more than 1/4 of the total RAM
-if array_size_bytes > (2*ram_capacity / 5):
-    memmap = True
-    transform = False
-    print("The arrays are too large to fit in memory: the seed will not be transformed")
-    print(" - Chunking will be used")
-    print(" - Memory mapping will be used")
-    print(" - The seed will NOT be transformed to real space")
-elif array_size_bytes > (ram_capacity / 4):
-    memmap = True
-    transform = True
+if array_size_bytes > (ram_capacity / 4):
+    mem = True
+    trans = False
     print("The arrays are too large to fit in memory:")
     print(" - Chunking will be used")
-    print(" - Memory mapping will be used")
+    print(" - The seed will NOT be transformed to real space")
+    print(" - The seed will be saved in the raw data folder, not as a variable")
 else:
-    memmap = False
-    # memmap = True # Uncomment this line to force the use of np.memmap
-    transform = True
-    print("The arrays can fit in memory: chunking will not be used.")
-    print(" - Chunking will NOT be used")
-    print(" - Memory mapping will NOT be used")
+    print("The arrays can fit in memory:")
+    ask = input("Do you want to use chunking? (y/n): ")
+    if ask.lower() == 'y':
+        mem = True
+        trans = True
+        print(" - Chunking will be used")
+        print(" - The seed will be transformed to real space directly")
+        print(" - The seed will be saved as a variable")
+    else:
+        mem = False
+        trans = True
+        print(" - Chunking will NOT be used")
+        print(" - The seed will be transformed to real space directly")
+        print(" - The seed will be saved as a variable")
 
-OUTPUT_PARAMS["memmap"] = memmap
-OUTPUT_PARAMS["transform"] = transform
+# trans = False # Force the transformation to be false for testing purposes
+
+OUTPUT_PARAMS["memory"] = mem
+OUTPUT_PARAMS["transform"] = trans
