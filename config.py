@@ -24,9 +24,9 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # alpha = [-2.9,      -1,    0,     1,     2]
 
 SEED_PARAMS = {
-    "nmax": 2048,
-    "nmay": 2048,
-    "nmaz": 2048,
+    "nmax": 512,
+    "nmay": 512,
+    "nmaz": 512,
     "size": 40, # Size of the box in Mpc
     "B0": 2, # Initial magnetic field amplitude in Gauss
     "alpha": -2.9, # Spectral index
@@ -47,19 +47,20 @@ SEED_PARAMS = {
 # Directories and Results Parameters #
 
 OUTPUT_PARAMS = {
-    "save": True,
-    "chunk_factor": 8,
+    "save": False,
+    "chunk_factor": 2,
     "bitformat": np.float32,
-    "format": "fortran",
+    "format": "npy",
+    "ncores": 1,
     "dpi": 300,
     "verbose": True,
     "debug": False,
-    "run": f'PRIMAL_Seed_Gen_def',
-    "outdir": "/scratch/marcomol/output_files_PRIMAL_",
+    "run": f'PRIMAL_Seed_Gen_norm',
+    "outdir": "/scratch/molina/output_files_PRIMAL_",
     "plotdir": "plots/",
     "rawdir": "raw_data/",
     "ID1": "seed/",
-    "ID2": "def",
+    "ID2": "norm",
     "random_seed": 23 # Set the random seed for reproducibility
 }
 
@@ -144,7 +145,7 @@ if array_size_bytes > (ram_capacity / 4):
     print("The arrays are too large to fit in memory:")
     print(" - Chunking will be used")
     print(" - The seed will NOT be transformed to real space")
-    print(" - The seed will be saved in the raw data folder, not as a variable")
+    print(" - The seed will be saved in the raw data folder, NOT as a variable")
 else:
     print("The arrays can fit in memory:")
     ask = input("Do you want to use chunking? (y/n): ")
@@ -153,14 +154,20 @@ else:
         trans = True
         print(" - Chunking will be used")
         print(" - The seed will be transformed to real space directly")
-        print(" - The seed will be saved as a variable")
+        if OUTPUT_PARAMS["save"]:
+            print(" - The seed will be saved in the raw data folder, NOT as a variable")
+        else:
+            print(" - The seed will be saved as a variable")
     else:
         mem = False
         trans = True
         print(" - Chunking will NOT be used")
         print(" - The seed will be transformed to real space directly")
-        print(" - The seed will be saved as a variable")
-
+        if OUTPUT_PARAMS["save"]:
+            print(" - The seed will be saved in the raw data folder, NOT as a variable")
+        else:
+            print(" - The seed will be saved as a variable")
+    
 # trans = False # Force the transformation to be false for testing purposes
 
 OUTPUT_PARAMS["memory"] = mem

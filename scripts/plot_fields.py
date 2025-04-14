@@ -15,11 +15,12 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.colors import LogNorm
 from scipy import stats
+from scipy import fft
 import plotly.graph_objects as go
 import os
 from . import spectral
 
-def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, verbose = True, Save = False, DPI = 300, run = '_', folder = None):
+def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, ncores=1, verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Plots the power spectrum of the magnetic field seed and other interesting quantities to check the generation.
     
@@ -31,6 +32,7 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, v
         - dx: cell size in Mpc
         - mode: integer to choose the plot mode
         - epsilon: small number to avoid division by zero
+        - ncores: number of cores to use for the FFT
         - verbose: boolean to print the progress of the function
         - Save: boolean to save the plot or not
         - DPI: dots per inch in the plot
@@ -43,6 +45,9 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, v
     Author: Marco Molina
     '''
     nmax, nmay, nmaz = Bx[0].shape
+    
+    klim = 1 # Set axis limits in the power spectrum plot (klim=1 and k0=0 for showing all, ko defines the starting point of the trend line)
+    k0 = 0
     
     # Compute the magnetic field magnitude
     Bmag = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
@@ -61,9 +66,9 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, v
     ## Calculate the standard deviation of the power spectrum for each bin ##
     
     # First we need to compute the FFT, its amplitude square, and normalise it
-    Bx_fourier_amplitudes = np.fft.fftn(Bx[0]) # Done with the scipy fft in spec, maybe the normalization is different
-    By_fourier_amplitudes = np.fft.fftn(By[0])
-    Bz_fourier_amplitudes = np.fft.fftn(Bz[0])
+    Bx_fourier_amplitudes = fft.fftn(Bx[0], s=Bx[0].shape, workers=ncores) # Done with the scipy fft in spec, maybe the normalization is different
+    By_fourier_amplitudes = fft.fftn(By[0], s=By[0].shape, workers=ncores)
+    Bz_fourier_amplitudes = fft.fftn(Bz[0], s=Bz[0].shape, workers=ncores)
     Bx_fourier_amplitudes = (np.abs(Bx_fourier_amplitudes)**2).flatten() / Bx[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
     By_fourier_amplitudes = (np.abs(By_fourier_amplitudes)**2).flatten() / By[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
     Bz_fourier_amplitudes = (np.abs(Bz_fourier_amplitudes)**2).flatten() / Bz[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
@@ -92,6 +97,15 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, v
     del P_k_x_std, P_k_y_std, P_k_z_std
     gc.collect()
     
+    per = 100
+    while np.any(P_k[k0:-klim] - P_k_std[k0:-klim] <= 0):
+        P_k_std = P_k_std * per/100
+        per = per - 5
+        if per <= 0:
+            print("Warning: Unable to resolve condition within 100 iterations, standard deviation set to zero.")
+            P_k_std = np.zeros_like(P_k_std)
+            break
+        
     if verbose == True:
         print(f'Plotting... Magnetic Field Seed Power Spectrum Standard Deviation computed')
     
@@ -102,10 +116,7 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, v
         print(f'Plotting... Magnetic Field Seed Divergence computed')
 
     # Calculate the expected trend lines starting from specifict values of P_k
-    klim = 1 # Set axis limits in the power spectrum plot (klim=1 and k0=0 for showing all, ko defines the starting point of the trend line)
-    k0 = 0
     ko = 3
-    
     trend_line = P_k[k0+ko] * (k_bins[k0+ko:-klim] / k_bins[k0+ko])**(alpha_index)
         
     # Plot the magnetic power spectrum
@@ -244,9 +255,21 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, v
     ax[0].fill_between(k_bins[k0:-klim], P_k[k0:-klim] - P_k_std[k0:-klim], P_k[k0:-klim] + P_k_std[k0:-klim], color='gray', alpha=0.25)
     ax[0].loglog(k_bins[k0+ko:-klim], trend_line, linestyle='dotted', label=f'$k^{{{np.round(alpha_index,2)}}}$')
     ax[0].legend()
-    ax[0].set_xlim(k_bins[k0] - 1, k_bins[-klim] + 1)
-    ax[0].set_ylim(1e-28, 1e-12)
+    ax[0].set_xlim(0, k_bins[-klim] + 1)
+    # ax[0].set_ylim(1e-28, 1e-12)
     ax[0].legend(loc='lower center')
+
+    # Annotate the confidence percentage near the error area
+    ax[0].text(
+        k_bins[k0:-klim][0] + ((k_bins[k0:-klim][1] - k_bins[k0:-klim][0]) / 4),  # x-coordinate
+        P_k[k0:-klim][1] - P_k_std[k0:-klim][1],  # y-coordinate (just above the error area)
+        f"{per}% $\\sigma$",  # Annotation text
+        fontsize=10,  # Font size
+        color="gray",  # Text color
+        ha="center",  # Horizontal alignment
+        va="bottom",  # Vertical alignment
+        # bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray")  # Background box for better visibility
+    )
     
     if verbose == True:
         print(f'Plotting... Magnetic Field Seed Power Spectrum plotted')

@@ -21,23 +21,24 @@ def plot(Bx, By, Bz):
     out_params["run"] = f'{out_params["run"]}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
     
     plot_seed_spectrum(seed_params["alpha"], Bx, By, Bz, seed_params["dx"], mode=1, 
-                        epsilon=seed_params["epsilon"], Save=out_params["save"], DPI=out_params["dpi"], 
-                        run=out_params["run"], folder=out_params["image_folder"])
+                        epsilon=seed_params["epsilon"], ncores=out_params["ncores"], verbose=out_params["verbose"],
+                        Save=True, DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
     
-    BM = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
+    # BM = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
     
-    scan_animation_3D(BM, seed_params["dx"], study_box=1, arrow_scale=10, units='Mpc', 
-                    title=f'Gaussian Filtered Magnetic Field Scan, $\\alpha$ = {seed_params["alpha"]}', 
-                    Save=out_params["save"], DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
+    # scan_animation_3D(BM, seed_params["dx"], study_box=1, arrow_scale=10, units='Mpc', 
+    #                 title=f'Gaussian Filtered Magnetic Field Scan, $\\alpha$ = {seed_params["alpha"]}', verbose=out_params["verbose"], 
+    #                 Save=True, DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
     
-    zoom_animation_3D(BM, seed_params["dx"], arrow_scale=1, units='Mpc', 
-                    title=f'Gaussian Filtered Magnetic Field Zoom, $\\alpha$ = {seed_params["alpha"]}', 
-                    Save=out_params["save"], DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
+    # zoom_animation_3D(BM, seed_params["dx"], arrow_scale=1, units='Mpc', 
+    #                 title=f'Gaussian Filtered Magnetic Field Zoom, $\\alpha$ = {seed_params["alpha"]}', verbose=out_params["verbose"], 
+    #                 Save=True, DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
 
 def load_and_plot():
     
     # Load Bx, By, Bz from binary Fortran format files
     rshape = (seed_params["nmax"], seed_params["nmay"], seed_params["nmaz"])
+    
     Bx = [utils.load_magnetic_field('x', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
     By = [utils.load_magnetic_field('y', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
     Bz = [utils.load_magnetic_field('z', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
@@ -48,13 +49,21 @@ def load_and_plot():
 if __name__ == "__main__":
     
     if out_params["transform"]:
-        Bx, By, Bz = generate_seed(out_params["chunk_factor"], seed_params, out_params)
+        if out_params["save"] == True:
+            generate_seed(out_params["chunk_factor"], seed_params, out_params)
+            load_and_plot()
+            # utils.compare_arrays('x', True, out_params["data_folder"], out_params["run"])
+            # utils.compare_arrays('y', True, out_params["data_folder"], out_params["run"])
+            # utils.compare_arrays('z', True, out_params["data_folder"], out_params["run"])
+        else:
+            Bx, By, Bz = generate_seed(out_params["chunk_factor"], seed_params, out_params)
+            plot(Bx, By, Bz)
     else:
-        # generate_seed(out_params["chunk_factor"], seed_params, out_params)
+        generate_seed(out_params["chunk_factor"], seed_params, out_params)
         for axis in ['x', 'y', 'z']:
             load_and_merge_nyquist(axis, seed_params, out_params)
-            # load_and_transform_seed(axis, seed_params, out_params, delete=False)
-    # load_and_plot()
+            load_and_transform_seed(axis, seed_params, out_params, delete=False)
+        load_and_plot()
         
 # ============================
 # Only edit the section above

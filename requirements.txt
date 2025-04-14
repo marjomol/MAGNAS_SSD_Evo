@@ -4,3 +4,4 @@ matplotlib
 plotly
 numba
 h5py
+psutil

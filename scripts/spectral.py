@@ -48,9 +48,9 @@ def power_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False,
     nx,ny,nz = data.shape
 
     # Step 2. Obtain the frequencies
-    frequencies_x = np.fft.fftfreq(shape[0], d=dx)
-    frequencies_y = np.fft.fftfreq(shape[1], d=dx)
-    frequencies_z = np.fft.fftfreq(shape[2], d=dx)
+    frequencies_x = np.fft.fftfreq(shape[0], d=dx) * 2 * np.pi # Es seguro el factor 2*pi?
+    frequencies_y = np.fft.fftfreq(shape[1], d=dx) * 2 * np.pi 
+    frequencies_z = np.fft.fftfreq(shape[2], d=dx) * 2 * np.pi 
     a,b,c=np.meshgrid(frequencies_x, frequencies_y, frequencies_z, indexing='ij')
     knrm=np.sqrt(a**2+b**2+c**2).flatten()
 

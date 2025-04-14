@@ -71,6 +71,10 @@ def save_3d_array(filename, array):
 def save_magnetic_field_seed(B, axis, real, dir, format, run):
     '''
     Saves the magnetic field component to a file.
+    For Fortran files, the data is saved in binary unformatted format, writing the volume
+    slice by slice and transposing it to Fortran order (column-major order). Metadata is
+    written at the beginning of the file, including the dimensions of the array, the precision
+    (float or double), and the complex flag (0 for real, 1 for complex).
     
     Args:
         - B: magnetic field component to save
@@ -88,27 +92,53 @@ def save_magnetic_field_seed(B, axis, real, dir, format, run):
     assert real in [True, False], 'Invalid space value.'
     
     if real:
+        if out_params["bitformat"] == np.float32:
+            precision_flag = 1
+            complex_flag = 0
+        elif out_params["bitformat"] == np.float64:
+            precision_flag = 2
+            complex_flag = 0
+    else:
+        if out_params["complex_bitformat"] == np.complex64:
+            precision_flag = 1
+            complex_flag = 1
+        elif out_params["complex_bitformat"] == np.complex128:
+            precision_flag = 2
+            complex_flag = 1
+    
+    if complex_flag == 0:
         name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
     else:
         name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+    
     os.makedirs(dir, exist_ok=True)
+    
+    Nx, Ny, Nz = B[0].shape
 
     if format == 'txt':
         with open(os.path.join(dir, f'{name}.txt'), 'w') as f:
             for slice in B[0]:
                 np.savetxt(f, slice)
     elif format == 'npy':
-        np.save(os.path.join(dir, f'{name}.npy'), B[0])
+        if complex_flag == 0:
+            np.save(os.path.join(dir, f'{name}.npy'), B[0].astype(out_params["bitformat"]))
+        else:
+            np.save(os.path.join(dir, f'{name}.npy'), B[0].astype(out_params["complex_bitformat"]))
     elif format == 'hdf5':
         with h5py.File(os.path.join(dir, f'{name}.h5'), 'w') as f:
             f.create_dataset(f'{name}', data=B[0], chunks=True)
     elif format == 'fortran':
-        if real:
-            with FortranFile(os.path.join(dir, f'{name}.bin'), 'w') as f:
-                f.write_record(B[0].astype(out_params["bitformat"]))
-        else:
-            with FortranFile(os.path.join(dir, f'{name}.bin'), 'w') as f:
-                f.write_record(B[0].astype(out_params["complex_bitformat"]))
+        with FortranFile(os.path.join(dir, f'{name}.bin'), 'w') as f:
+            metadata = np.array([Nx, Ny, Nz, precision_flag, complex_flag], dtype=np.int32)
+            f.write_record(metadata)
+            for k in range(B[0].shape[2]):
+                if complex_flag == 0:
+                    slice = B[0][:, :, k].astype(out_params["bitformat"]).T
+                else:
+                    slice = B[0][:, :, k].astype(out_params["complex_bitformat"]).T
+                f.write_record(slice)
+
+    print(f'B{axis} Seed saved as {os.path.join(dir, name)}.({format})')
             
 def load_magnetic_field(axis, real, rshape, dir, format, run):
     '''
@@ -137,6 +167,8 @@ def load_magnetic_field(axis, real, rshape, dir, format, run):
     else:
         name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
 
+    print(f"Loading {name} from {dir}...")
+    
     if format == 'txt':
         # Load slice by slice if the file was saved in chunks
         B = []
@@ -151,32 +183,62 @@ def load_magnetic_field(axis, real, rshape, dir, format, run):
         with h5py.File(os.path.join(dir, f'{name}.h5'), 'r') as f:
             B = f[f'{name}'][:]  # Load the entire dataset
     elif format == 'fortran':
-        if real:
-            elements = get_fortran_file_size(axis, True, out_params["data_folder"], out_params["run"])
-            print(f'File elements: {elements}')
-            print(f'Expected elements: {rshape[0] * rshape[1] * rshape[2]}')
-            print(f'Expected size: {np.prod(rshape) * np.dtype(out_params["bitformat"]).itemsize}')
-            inspect_fortran_file(axis, real, dir, run)
+        with FortranFile(os.path.join(dir, f'{name}.bin'), 'r') as f:
+                # Read metadata
+                metadata = f.read_record(np.int32)
+                if metadata.size != 5:
+                    raise ValueError("Invalid metadata size. Expected 5 integers.")
+                Nx, Ny, Nz, precision_flag, complex_flag = metadata
+
+                if precision_flag == 1 and complex_flag == 0:
+                    dtype = np.float32
+                elif precision_flag == 2 and complex_flag == 0:
+                    dtype = np.float64
+                elif precision_flag == 1 and complex_flag == 1:
+                    dtype = np.complex64
+                elif precision_flag == 2 and complex_flag == 1:
+                    dtype = np.complex128
+                else:
+                    raise ValueError(f"Unsupported combination: precision_flag={precision_flag}, complex_flag={complex_flag}")
+
+                # Prepare empty array
+                B = np.empty((Nx, Ny, Nz), dtype=dtype)
+                
+                slice = np.empty((Ny, Nx), dtype=dtype)
+                
+                for k in range(Nz):
+                    slice[:, :] = f.read_record(dtype).reshape(Ny, Nx)
+                    B[:, :, k] = slice.T
+        # if real:
+        #     elements = get_fortran_file_size(axis, True, out_params["data_folder"], out_params["run"])
+        #     print(f'File elements: {elements-2}')
+        #     print(f'Expected elements: {rshape[0] * rshape[1] * rshape[2]}')
+        #     print(f'Expected size: {np.prod(rshape) * np.dtype(out_params["bitformat"]).itemsize}')
+        #     inspect_fortran_file(axis, real, dir, run)
             
-            with FortranFile(os.path.join(dir, f'{name}.bin'), 'r') as f:
-                B = f.read_record(dtype=out_params["bitformat"])
-            B = np.frombuffer(B, dtype=out_params["bitformat"]).reshape(rshape)  # Reshape to the original shape
-        else:
-            elements = get_fortran_file_size(axis, False, out_params["data_folder"], out_params["run"])
-            print(f'File elements: {elements}')
-            print(f'Expected elements: {rshape[0] * rshape[1] * rshape[2]}')
-            print(f'Expected size: {np.prod(rshape) * np.dtype(out_params["complex_bitformat"]).itemsize}')
-            inspect_fortran_file(axis, real, dir, run)
+        #     B = np.fromfile(os.path.join(dir, f'{name}.bin'), dtype=out_params["bitformat"], offset=4)[:-1].reshape(rshape) 
+        #     # with open(os.path.join(dir, f'{name}.bin'), 'r') as f:
+        #     #     B = read_record(f, dtype=out_params["bitformat"]).reshape(rshape)
+        #     # # B = np.frombuffer(B, dtype=out_params["bitformat"]).reshape(rshape)  # Reshape to the original shape
+        #     B = B.T
+        # else:
+        #     elements = get_fortran_file_size(axis, False, out_params["data_folder"], out_params["run"])
+        #     print(f'File elements: {elements-2}')
+        #     print(f'Expected elements: {rshape[0] * rshape[1] * rshape[2]}')
+        #     print(f'Expected size: {np.prod(rshape) * np.dtype(out_params["complex_bitformat"]).itemsize}')
+        #     inspect_fortran_file(axis, real, dir, run)
             
-            with FortranFile(os.path.join(dir, f'{name}.bin'), 'r') as f:
-                B = f.read_record(dtype=out_params["complex_bitformat"])
-            B = np.frombuffer(B, dtype=out_params["omplex_bitformat"]).reshape(rshape)  # Reshape to the original shape
+        #     B = np.fromfile(os.path.join(dir, f'{name}.bin'), dtype=out_params["complex_bitformat"], offset=4)[:-1].reshape(rshape) 
+        #     # with open(os.path.join(dir, f'{name}.bin'), 'r') as f:
+        #     #     B = read_record(f, dtype=out_params["complex_bitformat"]).reshape(rshape)
+        #     # # B = np.frombuffer(B, dtype=out_params["omplex_bitformat"]).reshape(rshape)  # Reshape to the original shape
+        #     B = B.T
     
     return B
 
 def inspect_fortran_file(axis, real, dir, run):
     '''
-    Inspects the Fortran binary file to check the header and footer.
+    Inspects the Fortran binary file to check the header, footer and content.
     
     Args:
         - axis: axis of the magnetic field component
@@ -195,20 +257,16 @@ def inspect_fortran_file(axis, real, dir, run):
     filepath = os.path.join(dir, f'{name}.bin')
     
     with open(filepath, 'rb') as f:
-        # Read the first 4 or 8 bytes (header)
-        header = f.read(4)  # Adjust to 8 if needed
-        print(f"Header (raw): {header}")
-        print(f"Header (int): {int.from_bytes(header, byteorder='little')}")
-
-        # Read the rest of the file
+        header = f.read(4)
         data = f.read()
-        print(f"Data size: {len(data)} bytes")
-
-        # Read the last 4 or 8 bytes (footer)
-        f.seek(-4, os.SEEK_END)  # Adjust to -8 if needed
+        f.seek(-4, os.SEEK_END)
         footer = f.read(4)
+        
+        print(f"Header (raw): {header}")
         print(f"Footer (raw): {footer}")
+        print(f"Header (int): {int.from_bytes(header, byteorder='little')}")
         print(f"Footer (int): {int.from_bytes(footer, byteorder='little')}")
+        print(f"Data size:    {len(data)-4}")
 
 def get_fortran_file_size(axis, real, dir, run):
     """
@@ -240,6 +298,42 @@ def get_fortran_file_size(axis, real, dir, run):
     num_elements = file_size // element_size
     
     return num_elements
+
+def compare_arrays(axis, real, dir, run):
+    '''
+    Compares two arrays to check if they are equal.
+    
+    Args:
+        - axis: axis of the magnetic field
+        - real: whether the space of the magnetic field component is real or not (fourier)
+        - dir: directory to load the seed from
+        - run: run number
+    
+    Author: Marco Molina
+    '''
+    
+    # Your original data
+    if real:
+        dtype = out_params["bitformat"]
+        Nx, Ny, Nz = seed_params["nmax"], seed_params["nmay"], seed_params["nmaz"]
+        original_data = np.load(f'{dir}/B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}.npy')
+    else:
+        dtype = out_params["complex_bitformat"]
+        Nx, Ny, Nz = seed_params["nmax"]+1, seed_params["nmay"]+1, seed_params["nmaz"]+1
+        original_data = np.load(f'{dir}/B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}.npy')
+    
+    # Fortran-loaded data
+    fortran_data = np.fromfile(f'fortran_output_raw_{axis}.bin', dtype=dtype)
+    fortran_data = fortran_data.reshape((Nx, Ny, Nz)).T
+
+    # Compare them
+    are_equal = np.allclose(original_data, fortran_data, atol=1e-6)
+
+    print(f"Arrays are {'equal' if are_equal else 'different'}!")
+
+    if not are_equal:
+        diff = np.abs(original_data - fortran_data)
+        print(f"Max difference: {np.max(diff)}")
             
 def is_ordered(vector):
     '''
