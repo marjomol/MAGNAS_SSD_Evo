@@ -2,7 +2,7 @@
 
 ## Overview
 
-The PRIMAL Seed Gen (PRImordial MAgnetic FieLd Seed Generator) repository contains a set of Python scripts and functions to generate cosmological magnetic field seeds from scratch. The generated seeds can show different levels of complexity, pressence of paterns, randomness, and scale signals to be used in cosmological simulations. The repository also includes tools to plot and analyze the generated magnetic field seeds.
+The PRIMAL Seed Gen (PRImordial MAgnetic FieLd Seed Generator) repository contains a set of Python scripts and functions to generate cosmological magnetic field seeds from scratch. The generated seeds can display different spectral indexes and randomness to be used in cosmological simulations. The repository also includes tools to plot and analyze the generated magnetic field seeds.
 
 ## Repository Structure
 
