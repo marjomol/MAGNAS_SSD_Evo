@@ -60,18 +60,25 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, n
     P_k = np.where(P_k == 0, epsilon, P_k)
     k_bins = k_bins * 2 * np.pi
     
+    # Compute the integral of the power spectrum
+    integral_Pk = np.trapz(P_k, k_bins)
+    
     if verbose == True:
         print(f'Plotting... Magnetic Field Seed Power Spectrum computed')
     
     ## Calculate the standard deviation of the power spectrum for each bin ##
     
     # First we need to compute the FFT, its amplitude square, and normalise it
-    Bx_fourier_amplitudes = fft.fftn(Bx[0], s=Bx[0].shape, workers=ncores) # Done with the scipy fft in spec, maybe the normalization is different
-    By_fourier_amplitudes = fft.fftn(By[0], s=By[0].shape, workers=ncores)
-    Bz_fourier_amplitudes = fft.fftn(Bz[0], s=Bz[0].shape, workers=ncores)
-    Bx_fourier_amplitudes = (np.abs(Bx_fourier_amplitudes)**2).flatten() / Bx[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
-    By_fourier_amplitudes = (np.abs(By_fourier_amplitudes)**2).flatten() / By[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
-    Bz_fourier_amplitudes = (np.abs(Bz_fourier_amplitudes)**2).flatten() / Bz[0].size**2 * (nmax*nmay*nmaz)*(dx)**3
+    # Bx_fourier_amplitudes = fft.fftn(Bx[0], s=Bx[0].shape, workers=ncores) / np.sqrt(nmax*nmay*nmaz)
+    # By_fourier_amplitudes = fft.fftn(By[0], s=By[0].shape, workers=ncores) / np.sqrt(nmax*nmay*nmaz)
+    # Bz_fourier_amplitudes = fft.fftn(Bz[0], s=Bz[0].shape, workers=ncores) / np.sqrt(nmax*nmay*nmaz)
+    Bx_fourier_amplitudes = fft.fftn(Bx[0], s=Bx[0].shape, norm="ortho", workers=ncores)
+    By_fourier_amplitudes = fft.fftn(By[0], s=By[0].shape, norm="ortho", workers=ncores)
+    Bz_fourier_amplitudes = fft.fftn(Bz[0], s=Bz[0].shape, norm="ortho", workers=ncores)
+
+    Bx_fourier_amplitudes = (np.abs(Bx_fourier_amplitudes)**2).flatten()
+    By_fourier_amplitudes = (np.abs(By_fourier_amplitudes)**2).flatten()
+    Bz_fourier_amplitudes = (np.abs(Bz_fourier_amplitudes)**2).flatten()
 
     # Next we obtain the frequencies
     kx = np.fft.fftfreq(nmax, dx) * 2 * np.pi # Es seguro el factor 2*pi?
@@ -251,12 +258,16 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, n
     ax[0].set_title(f'Random Transverse Projected Magnetic Field Power Spectrum')
     ax[0].set_xlabel('k')
     ax[0].set_ylabel('P(k)')
-    ax[0].loglog(k_bins[k0:-klim], P_k[k0:-klim], label='Magnetic Power Spectrum')
+    ax[0].loglog(
+        k_bins[k0:-klim],
+        P_k[k0:-klim],
+        label=f'Magnetic Power Spectrum\n$\int P(k) dk$ = {integral_Pk:.2e}'
+    )
     ax[0].fill_between(k_bins[k0:-klim], P_k[k0:-klim] - P_k_std[k0:-klim], P_k[k0:-klim] + P_k_std[k0:-klim], color='gray', alpha=0.25)
     ax[0].loglog(k_bins[k0+ko:-klim], trend_line, linestyle='dotted', label=f'$k^{{{np.round(alpha_index,2)}}}$')
     ax[0].legend()
-    ax[0].set_xlim(0, k_bins[-klim] + 1)
-    # ax[0].set_ylim(1e-28, 1e-12)
+    # ax[0].set_xlim(0, k_bins[-klim] + 1)
+    # ax[0].set_ylim(1e4, 1e12)
     ax[0].legend(loc='lower center')
 
     # Annotate the confidence percentage near the error area

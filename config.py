@@ -56,9 +56,10 @@ OUTPUT_PARAMS = {
     "verbose": True,
     "debug": False,
     "run": f'PRIMAL_Seed_Gen_norm',
-    "outdir": "/scratch/molina/output_files_PRIMAL_",
+    # "outdir": "/scratch/marcomol/output_files_PRIMAL_",
+    "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
-    "rawdir": "raw_data/",
+    "rawdir": "raw_data_out/",
     "ID1": "seed/",
     "ID2": "norm",
     "random_seed": 23 # Set the random seed for reproducibility

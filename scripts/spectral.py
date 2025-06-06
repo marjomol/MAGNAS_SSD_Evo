@@ -43,8 +43,9 @@ def power_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False,
         shape = [zero_pad_factor*s for s in data.shape]
     ### END SPECIAL TREATMENT OF ZERO-PADDING
         
-    fft_data = fft.fftn(data, s=shape, workers=ncores)
-    fourier_amplitudes = (np.abs(fft_data)**2).flatten() / data.size**2 * (data.shape[0]*dx)**3
+    fft_data = fft.fftn(data, s=shape, workers=ncores) / np.sqrt(shape[0]*shape[1]*shape[2])
+    fourier_amplitudes = (np.abs(fft_data)**2).flatten()
+    # fourier_amplitudes = (np.abs(fft_data)**2).flatten() / data.size**2 * (data.shape[0]*dx)**3
     nx,ny,nz = data.shape
 
     # Step 2. Obtain the frequencies

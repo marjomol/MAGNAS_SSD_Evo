@@ -685,9 +685,8 @@ def generate_random_seed_amplitudes(axis, k_grid_axis, k_magnitude, P_B, B_phase
     nmax, nmay, nmaz = N
     
     # Generate the random magnetic field components in Fourier space by agregating the phase and amplitude
-    B_random_k = [np.sqrt(((size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid_axis/k_magnitude[p])**2))/2) * B_phase_axis[p] for p in range(sum(npatch)+1)]
-    
     ##Revisar## Proyección transversal en la magnitud
+    B_random_k = [np.sqrt(((size**3) * ((2 * np.pi)**3) * P_B[p] * (1 - (k_grid_axis/k_magnitude[p])**2))/2) * B_phase_axis[p] for p in range(sum(npatch)+1)]
     # B_random_k = [np.sqrt(((size**3) * ((2 * np.pi)**3) * P_B[p])/2) * B_phase_axis[p] for p in range(sum(npatch)+1)]
     
     # We need to habdle the null frequency after applying the magnitude proyection or the signal would tend to infity.
@@ -894,14 +893,20 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
     
     # Get the magnetic field components in real space
     if memory:
-        B = [fft.ifftn(B[p], s=B[p].shape, workers=ncores) for p in range(sum(npatch)+1)]
-        B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
-        # B = [np.real(B[p]) for p in range(sum(npatch)+1)]
+        # B = [fft.ifftn(B[p], s=B[p].shape, workers=ncores) for p in range(sum(npatch)+1)]
+        # B = [fft.ifftn(B[p] * np.sqrt(nmax * nmay * nmaz), s=B[p].shape, workers=ncores) for p in range(sum(npatch)+1)]
+        B = [fft.ifftn(B[p], s=B[p].shape, norm="ortho", workers=ncores) for p in range(sum(npatch)+1)]
+        
+        # B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
+        B = [np.real(B[p]) for p in range(sum(npatch)+1)]
     else:
-        B = [fft.ifftn(B[p], s=B[p].shape, workers=ncores) for p in range(sum(npatch)+1)]
+        # B = [fft.ifftn(B[p], s=B[p].shape, workers=ncores) for p in range(sum(npatch)+1)]
+        # B = [fft.ifftn(B[p] * np.sqrt(nmax * nmay * nmaz), s=B[p].shape, workers=ncores) for p in range(sum(npatch)+1)]
+        B = [fft.ifftn(B[p], s=B[p].shape, norm="ortho", workers=ncores) for p in range(sum(npatch)+1)]
         if debug == False:
-            B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
-                # B = [np.real(B[p]) for p in range(sum(npatch)+1)]
+            # B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
+            B = [np.real(B[p]) for p in range(sum(npatch)+1)]
+            
     if verbose:
         
         print('============================================================')
@@ -936,8 +941,8 @@ def transform_seed_magnetic_field(axis, B, alpha_index, size, N, gauss_rad_facto
         print(f"Debugging Test XII Passed: B_{axis} is real.")
         print('============================================================')
         
-        B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
-        # B = [np.real(B[p]) for p in range(sum(npatch)+1)]
+        # B = [np.real(B[p]) * np.sqrt(nmax * nmay * nmaz) for p in range(sum(npatch)+1)]
+        B = [np.real(B[p]) for p in range(sum(npatch)+1)]
         
     return B
 
@@ -1349,6 +1354,10 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
         Bx = [merge_nyquist(Bx[p], memory=OUT_PARAMS["memory"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
         By = [merge_nyquist(By[p], memory=OUT_PARAMS["memory"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
         Bz = [merge_nyquist(Bz[p], memory=OUT_PARAMS["memory"], complex_bitformat = OUT_PARAMS["complex_bitformat"]) for p in range(sum(npatch)+1)]
+        
+        # Bx = [Bx[p]/np.sqrt(nmax*nmay*nmaz) for p in range(sum(npatch)+1)]
+        # By = [By[p]/np.sqrt(nmax*nmay*nmaz) for p in range(sum(npatch)+1)]
+        # Bz = [Bz[p]/np.sqrt(nmax*nmay*nmaz) for p in range(sum(npatch)+1)]
     
         if OUT_PARAMS["verbose"]:
             
@@ -1357,8 +1366,15 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
             print('============================================================')
         
             if OUT_PARAMS["save"] == False:
-                F_Energy = np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))
+                Fx_Energy = np.sqrt(np.sum(np.abs(Bx[0])**2))
+                Fy_Energy = np.sqrt(np.sum(np.abs(By[0])**2))
+                Fz_Energy = np.sqrt(np.sum(np.abs(Bz[0])**2))
+                F_Energy = np.sqrt(Fx_Energy**2 + Fy_Energy**2 + Fz_Energy**2)
         
+        
+        # Bx = [Bx[p]*np.sqrt(nmax*nmay*nmaz) for p in range(sum(npatch)+1)]
+        # By = [By[p]*np.sqrt(nmax*nmay*nmaz) for p in range(sum(npatch)+1)]
+        # Bz = [Bz[p]*np.sqrt(nmax*nmay*nmaz) for p in range(sum(npatch)+1)]
         
         Bx = transform_seed_magnetic_field(
             'x', Bx, SEED_PARAMS["alpha"], SEED_PARAMS["size"],
@@ -1401,8 +1417,17 @@ def generate_seed(chunk_factor, SEED_PARAMS, OUT_PARAMS):
             
             if OUT_PARAMS["verbose"]:
                 print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-                print(f'Fourier Energy: {F_Energy}') 
-                print(f'Real Space Energy: {np.sqrt(np.sum(np.abs(Bx[0])**2)+np.sum(np.abs(By[0])**2)+np.sum(np.abs(Bz[0])**2))}')
+                print(f'Fourier Bx Energy: {Fx_Energy}')
+                print(f'Fourier By Energy: {Fy_Energy}')
+                print(f'Fourier Bz Energy: {Fz_Energy}')
+                print(f'Fourier Total Energy: {F_Energy}')
+                Rx_Energy = np.sqrt(np.sum(np.abs(Bx[0])**2))
+                Ry_Energy = np.sqrt(np.sum(np.abs(By[0])**2))
+                Rz_Energy = np.sqrt(np.sum(np.abs(Bz[0])**2))
+                print(f'Real Bx Energy: {Rx_Energy}')
+                print(f'Real By Energy: {Ry_Energy}')
+                print(f'Real Bz Energy: {Rz_Energy}')
+                print(f'Real Total Energy: {np.sqrt(Rx_Energy**2 + Ry_Energy**2 + Rz_Energy**2)}')
                 print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
             
             return Bx, By, Bz
