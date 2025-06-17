@@ -52,6 +52,7 @@ OUTPUT_PARAMS = {
     "bitformat": np.float32,
     "format": "npy",
     "ncores": 1,
+    "norm": "backward", # Options: "backward", "forward", "ortho"
     "dpi": 300,
     "verbose": True,
     "debug": False,

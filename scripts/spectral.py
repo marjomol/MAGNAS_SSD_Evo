@@ -11,7 +11,7 @@ Created by David Vallés for MASCLET framework
 import numpy as np
 from scipy import fft, stats
 
-def power_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False,
+def power_spectrum_scalar_field(data, dx=1., ncores=1, norm="backward", do_zero_pad=False,
                                 zero_pad_factor=1.):
     '''
     This function computes the power spectrum, P(k), of a 3D cubic scalar field.
@@ -20,6 +20,7 @@ def power_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False,
         - data: the 3D array containing the input field
         - dx: uniform spacing of the grid in the desired input units
         - ncores: number of workers for parallel computation of the FFT
+        - norm: normalization of the FFT, can be "backward", "forward" or "ortho"
         - do_zero_pad: if True, the FFTs are computed using 0-padding, doubling the domain
         - zero_pad_factor: if do_zero_pad is True, this is the factor by which the domain is 
                 increased. For example, if zero_pad_factor=2, the domain is doubled. Should
@@ -42,10 +43,23 @@ def power_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False,
         zero_pad_factor = int(zero_pad_factor)
         shape = [zero_pad_factor*s for s in data.shape]
     ### END SPECIAL TREATMENT OF ZERO-PADDING
-        
-    fft_data = fft.fftn(data, s=shape, workers=ncores) / np.sqrt(shape[0]*shape[1]*shape[2])
-    fourier_amplitudes = (np.abs(fft_data)**2).flatten()
-    # fourier_amplitudes = (np.abs(fft_data)**2).flatten() / data.size**2 * (data.shape[0]*dx)**3
+    
+    if norm == "backward":
+        # Normalization for backward FFT
+        fft_data = fft.fftn(data, s=shape, workers=ncores, norm="backward")
+        fourier_amplitudes = (np.abs(fft_data)**2).flatten() / (data.shape[0]*dx)**(6)
+    elif norm == "forward":
+        # Normalization for forward FFT
+        fft_data = fft.fftn(data, s=shape, workers=ncores, norm="forward")
+        fourier_amplitudes = (np.abs(fft_data)**2).flatten()
+    elif norm == "ortho":
+        # Normalization for orthonormal FFT
+        fft_data = fft.fftn(data, s=shape, workers=ncores, norm="ortho")
+        fourier_amplitudes = (np.abs(fft_data)**2).flatten() / (data.shape[0]*dx)**(3)
+    
+    # fourier_amplitudes = (np.abs(fft_data)**2).flatten() / data.size**2
+    # fourier_amplitudes = (np.abs(fft_data)**2).flatten()
+    
     nx,ny,nz = data.shape
 
     # Step 2. Obtain the frequencies
@@ -72,7 +86,7 @@ def power_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False,
 
     return kvals, Pk
 
-def power_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, do_zero_pad=False,
+def power_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, norm="backward", do_zero_pad=False,
                                 zero_pad_factor=1.):
     '''
     This function computes the power spectrum, P(k), of a 3D cubic vector field.
@@ -81,6 +95,7 @@ def power_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, do_zero
         - data_x, data_y, data_z: the 3D arrays containing the 3 components of the vector field
         - dx: uniform spacing of the grid in the desired input units
         - ncores: number of workers for parallel computation of the FFT
+        - norm: normalization of the FFT, can be "backward", "forward" or "ortho"
         - do_zero_pad: if True, the FFTs are computed using 0-padding, doubling the domain
         - zero_pad_factor: if do_zero_pad is True, this is the factor by which the domain is
                 increased. For example, if zero_pad_factor=2, the domain is doubled. Should
@@ -93,18 +108,18 @@ def power_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, do_zero
 
     '''
 
-    kvals, Pk_x = power_spectrum_scalar_field(data_x, dx=dx, ncores=ncores, do_zero_pad=do_zero_pad,
+    kvals, Pk_x = power_spectrum_scalar_field(data_x, dx=dx, ncores=ncores, norm=norm, do_zero_pad=do_zero_pad,
                                             zero_pad_factor=zero_pad_factor)
-    kvals, Pk_y = power_spectrum_scalar_field(data_y, dx=dx, ncores=ncores, do_zero_pad=do_zero_pad,
+    kvals, Pk_y = power_spectrum_scalar_field(data_y, dx=dx, ncores=ncores, norm=norm, do_zero_pad=do_zero_pad,
                                             zero_pad_factor=zero_pad_factor)
-    kvals, Pk_z = power_spectrum_scalar_field(data_z, dx=dx, ncores=ncores, do_zero_pad=do_zero_pad,
+    kvals, Pk_z = power_spectrum_scalar_field(data_z, dx=dx, ncores=ncores, norm=norm, do_zero_pad=do_zero_pad,
                                             zero_pad_factor=zero_pad_factor)
 
     Pk = Pk_x+Pk_y+Pk_z
 
     return kvals, Pk
 
-def energy_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False, zero_pad_factor=1.):
+def energy_spectrum_scalar_field(data, dx=1., ncores=1, norm="backward", do_zero_pad=False, zero_pad_factor=1.):
     '''
     This function computes the energy power spectrum, E(k), of a 3D cubic scalar field.
 
@@ -118,6 +133,7 @@ def energy_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False, zero_
         - data: the 3D array containing the input field
         - dx: uniform spacing of the grid in the desired input units
         - ncores: number of workers for parallel computation of the FFT
+        - norm: normalization of the FFT, can be "backward", "forward" or "ortho"
         - do_zero_pad: if True, the FFTs are computed using 0-padding, doubling the domain
         - zero_pad_factor: if do_zero_pad is True, this is the factor by which the domain is
                 increased. For example, if zero_pad_factor=2, the domain is doubled. Should
@@ -130,13 +146,13 @@ def energy_spectrum_scalar_field(data, dx=1., ncores=1, do_zero_pad=False, zero_
 
     '''
 
-    kvals, pk = power_spectrum_scalar_field(data, dx=dx, ncores=ncores, do_zero_pad=do_zero_pad,
+    kvals, pk = power_spectrum_scalar_field(data, dx=dx, ncores=ncores, norm=norm, do_zero_pad=do_zero_pad,
                                             zero_pad_factor=zero_pad_factor)
     Ek = pk * (2*np.pi*kvals**2)
 
     return kvals, Ek
 
-def energy_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, do_zero_pad=False,
+def energy_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, norm="backward", do_zero_pad=False,
                                 zero_pad_factor=1.):
     '''
     This function computes the energy power spectrum, E(k), of a 3D cubic vector field.
@@ -151,6 +167,7 @@ def energy_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, do_zer
         - data_x, data_y, data_z: the 3D arrays containing the 3 components of the vector field
         - dx: uniform spacing of the grid in the desired input units
         - ncores: number of workers for parallel computation of the FFT
+        - norm: normalization of the FFT, can be "backward", "forward" or "ortho"
         - do_zero_pad: if True, the FFTs are computed using 0-padding, doubling the domain
         - zero_pad_factor: if do_zero_pad is True, this is the factor by which the domain is
                 increased. For example, if zero_pad_factor=2, the domain is doubled. Should
@@ -162,7 +179,7 @@ def energy_spectrum_vector_field(data_x, data_y, data_z, dx=1., ncores=1, do_zer
         - Ek: the energy power spectrum at the kvals spatial frequency points
 
     '''
-    kvals, pk = power_spectrum_vector_field(data_x, data_y, data_z, dx=dx, ncores=ncores, 
+    kvals, pk = power_spectrum_vector_field(data_x, data_y, data_z, dx=dx, ncores=ncores, norm=norm,
                                             do_zero_pad=do_zero_pad, zero_pad_factor=zero_pad_factor)
     Ek = pk * (2*np.pi*kvals**2)
     return kvals, Ek
