@@ -1,4 +1,4 @@
-# PRIMAL Seed Generator
+# MAGNAS Small Scale Dynamo Evolution
 
 ## Overview
 
