@@ -1,6 +1,6 @@
 """
-PRIMAL Seed Generator
-A tool to generate initial conditions for cosmological simulations of primordial magnetic fields.
+MAGNAS SSD Evolution
+A tool to analyse simulated cosmological magnetic field induction and the Small Scale Dynamo amplification.
 
 units module
 Contains the basic units of the simulation code (MASCLET units by defoult).

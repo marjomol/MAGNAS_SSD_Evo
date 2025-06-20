@@ -1,6 +1,6 @@
 """
-PRIMAL Seed Generator
-A tool to generate initial conditions for cosmological simulations of primordial magnetic fields.
+MAGNAS SSD Evolution
+A tool to analyse simulated cosmological magnetic field induction and the Small Scale Dynamo amplification.
 
 config module
 Defines configuration parameters for the simulation, including seed parameters and output parameters.
@@ -17,22 +17,27 @@ from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
 # Only edit the section below
 # ============================
 
-# Seed Parameters #
+# Induction Parameters #
 
-# Some tabulated values for the magnetic field amplitude and corresponding spectral index are:
-# B0 =    [   2,    1.87, 0.35, 0.042, 0.003]
-# alpha = [-2.9,      -1,    0,     1,     2]
-
-SEED_PARAMS = {
+IND_PARAMS = {
     "nmax": 512,
     "nmay": 512,
     "nmaz": 512,
-    "size": 40, # Size of the box in Mpc
-    "B0": 2, # Initial magnetic field amplitude in Gauss
-    "alpha": -2.9, # Spectral index
-    "lambda_comoving": 1.0, # Comoving smoothing length
-    "smothing": 1,
-    "filtering": True,
+    "size": [40], # Size of the box in Mpc
+    "evolution": True, # Calculate the evolution of the energy budget
+    "mag": False, # Calculate magnetic induction components magnitudes
+    "profiles": False, # Calculate the profiles
+    "nbins": 25, # Number of bins for the profiles histograms
+    "logbins": True, # Use logarithmic bins
+    "F": 1.0, # Factor to multiply the viral radius to define the box size
+    "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
+    "rad_kind": 1, # 1: Comoving, 2: Physical
+    "rmin": 0.01, # Minimum radius to calculate the profiles
+    "A2U": True, # Transform the AMR grid to a uniform grid
+    "level": 1000, # Max. level of the AMR grid to be used
+    "up_to_level": 3, # AMR level up to which calculate
+    "BOX": False, # Use a box shaped subvolume for the amr2uniform transformation
+    "SPH": False, # Use a sphere shaped subvolume for the amr2uniform transformation
     "epsilon": 1e-30,
     "npalev": 13000,
     "nlevels": 7,
@@ -41,7 +46,7 @@ SEED_PARAMS = {
     "namrz": 32,
     "a0": a0_masclet,
     "H0": H0_masclet,
-    "zeta": 100,
+    "zeta": 100
 }
 
 # Directories and Results Parameters #
@@ -52,17 +57,26 @@ OUTPUT_PARAMS = {
     "bitformat": np.float32,
     "format": "npy",
     "ncores": 1,
-    "norm": "backward", # Options: "backward", "forward", "ortho"
+    "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
+    "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
     "dpi": 300,
     "verbose": True,
     "debug": False,
-    "run": f'PRIMAL_Seed_Gen_norm',
+    "run": f'MAGNAS_SSD_Evo_test',
+    "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
+    "it": [1050], # For different redshift snap iterations analysis
+    # "it": list(range(1000, 2001, 50)) + [2119], 
+    "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF",
+    "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX",
     # "outdir": "/scratch/marcomol/output_files_PRIMAL_",
     "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
-    "ID1": "seed/",
-    "ID2": "norm",
+    "ID1": "dynamo/",
+    "ID2": "test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
 
@@ -72,24 +86,24 @@ OUTPUT_PARAMS = {
 
 ## Some seed parameters are calculated from the previous ones
 
-size = SEED_PARAMS["size"]
-nmax = SEED_PARAMS["nmax"]
-a0 = SEED_PARAMS["a0"]
-H0 = SEED_PARAMS["H0"]
-zeta = SEED_PARAMS["zeta"]
+size = IND_PARAMS["size"]
+nmax = IND_PARAMS["nmax"]
+a0 = IND_PARAMS["a0"]
+H0 = IND_PARAMS["H0"]
+zeta = IND_PARAMS["zeta"]
 
-dx = size/nmax # Size of the cells in Mpc
-volume = size**3 # (Mpc)^3
+dx = size[0]/nmax # Size of the cells in Mpc
+volume = size[0]**3 # (Mpc)^3
 
 a = a0 / (1 + zeta)
 E = (omega_lambda + omega_k/a**2 + omega_m/a**3)**(1/2)
 H = H0*E
 
-SEED_PARAMS["dx"] = dx
-SEED_PARAMS["volume"] = volume
-SEED_PARAMS["a"] = a
-SEED_PARAMS["E"] = E
-SEED_PARAMS["H"] = H
+IND_PARAMS["dx"] = dx
+IND_PARAMS["volume"] = volume
+IND_PARAMS["a"] = a
+IND_PARAMS["E"] = E
+IND_PARAMS["H"] = H
 
 ## The output parameters are used to create the image directories and other formatting parameters
 
@@ -135,7 +149,7 @@ ram_capacity_gb = ram_capacity / (1024 ** 3)
 print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
 
 # Calculate the size of the arrays in bytes
-array_size = SEED_PARAMS["nmax"] * SEED_PARAMS["nmay"] * SEED_PARAMS["nmaz"]
+array_size = IND_PARAMS["nmax"] * IND_PARAMS["nmay"] * IND_PARAMS["nmaz"]
 array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["complex_bitformat"]).itemsize
 
 print(f"Maximum size of the arrays involved: {array_size_bytes / (1024 ** 3):.2f} GB")
