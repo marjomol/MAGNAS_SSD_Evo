@@ -4,7 +4,7 @@ import gc
 import scripts.utils as utils
 from config import SEED_PARAMS as seed_params
 from config import OUTPUT_PARAMS as out_params
-from scripts.seed_generator import generate_seed, load_and_transform_seed, load_and_merge_nyquist
+from programs.MAGNAS_SSD_Evo.scripts.induction_evo import generate_seed, load_and_transform_seed, load_and_merge_nyquist
 from scripts.plot_fields import plot_seed_spectrum, scan_animation_3D, zoom_animation_3D
 from scripts.units import *
 npatch = np.array([0]) # We only want the zero patch for the seed

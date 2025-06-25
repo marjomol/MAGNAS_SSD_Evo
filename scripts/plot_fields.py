@@ -10,15 +10,23 @@ Created by Marco Molina Pradillo
 
 import numpy as np
 import gc
+import os
 import scripts.diff as diff
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from matplotlib.font_manager import FontProperties
 from matplotlib.colors import LogNorm
 from scipy import stats
 from scipy import fft
+from scipy.ndimage import gaussian_filter1d
+from scipy.interpolate import interp1d
 import plotly.graph_objects as go
-import os
 from . import spectral
+import multiprocessing
+import time
+from time import strftime
+from time import gmtime
+import sys
 
 def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, ncores=1, verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''

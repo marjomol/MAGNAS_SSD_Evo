@@ -12,6 +12,7 @@ import numpy as np
 import os
 import psutil
 from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
+from scripts.readers import write_parameters
 
 # ============================
 # Only edit the section below
@@ -84,26 +85,6 @@ OUTPUT_PARAMS = {
 # Only edit the section above
 # ============================
 
-## Some seed parameters are calculated from the previous ones
-
-size = IND_PARAMS["size"]
-nmax = IND_PARAMS["nmax"]
-a0 = IND_PARAMS["a0"]
-H0 = IND_PARAMS["H0"]
-zeta = IND_PARAMS["zeta"]
-
-dx = size[0]/nmax # Size of the cells in Mpc
-volume = size[0]**3 # (Mpc)^3
-
-a = a0 / (1 + zeta)
-E = (omega_lambda + omega_k/a**2 + omega_m/a**3)**(1/2)
-H = H0*E
-
-IND_PARAMS["dx"] = dx
-IND_PARAMS["volume"] = volume
-IND_PARAMS["a"] = a
-IND_PARAMS["E"] = E
-IND_PARAMS["H"] = H
 
 ## The output parameters are used to create the image directories and other formatting parameters
 
@@ -114,8 +95,8 @@ ID1 = OUTPUT_PARAMS["ID1"]
 ID2 = OUTPUT_PARAMS["ID2"]
 
 # We create the folder for the plots and data
-image_folder = outdir + plotdir + ID1 + f'PRIMAL_Seed_{ID2}'
-data_folder = outdir + rawdir + ID1 + f'PRIMAL_Seed_{ID2}'
+image_folder = outdir + plotdir + ID1 + f'MAGNAS_SSD_{ID2}'
+data_folder = outdir + rawdir + ID1 + f'MAGNAS_SSD_{ID2}'
 
 # List of folders to check
 folders = [image_folder, data_folder]
@@ -137,6 +118,37 @@ if OUTPUT_PARAMS["bitformat"] == np.float32:
     OUTPUT_PARAMS["complex_bitformat"] = np.complex64
 elif OUTPUT_PARAMS["bitformat"] == np.float64:
     OUTPUT_PARAMS["complex_bitformat"] = np.complex128
+    
+    
+## Some seed parameters are calculated from the previous ones
+
+size = IND_PARAMS["size"]
+nmax = IND_PARAMS["nmax"]
+a0 = IND_PARAMS["a0"]
+H0 = IND_PARAMS["H0"]
+zeta = IND_PARAMS["zeta"]
+
+dx = size[0]/nmax # Size of the cells in Mpc
+
+a = a0 / (1 + zeta)
+E = (omega_lambda + omega_k/a**2 + omega_m/a**3)**(1/2)
+H = H0*E
+
+volume = [] # (Mpc)^3
+
+for i in range(len(OUTPUT_PARAMS['sims'])):
+    
+    volume.append(size[i]**3) # (Mpc/h)^3
+    write_parameters(IND_PARAMS['nmax'], IND_PARAMS['nmay'], IND_PARAMS['nmaz'],
+                    IND_PARAMS['npalev'], IND_PARAMS['nlevels'], IND_PARAMS['namrx'],
+                    IND_PARAMS['namry'], IND_PARAMS['namrz'], size[i], path=data_folder + OUTPUT_PARAMS['sims'][i]+'/')
+
+IND_PARAMS["dx"] = dx
+IND_PARAMS["volume"] = volume
+IND_PARAMS["a"] = a
+IND_PARAMS["E"] = E
+IND_PARAMS["H"] = H
+
 
 ## Check if the arrays can fit in memory or if an alternative memory handeling method is needed
 
@@ -150,41 +162,36 @@ print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
 
 # Calculate the size of the arrays in bytes
 array_size = IND_PARAMS["nmax"] * IND_PARAMS["nmay"] * IND_PARAMS["nmaz"]
-array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["complex_bitformat"]).itemsize
+array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
 
 print(f"Maximum size of the arrays involved: {array_size_bytes / (1024 ** 3):.2f} GB")
 
 # Check if the arrays will use more than 1/4 of the total RAM
 if array_size_bytes > (ram_capacity / 4):
     mem = True
-    trans = False
+    para = True
     print("The arrays are too large to fit in memory:")
-    print(" - Chunking will be used")
-    print(" - The seed will NOT be transformed to real space")
-    print(" - The seed will be saved in the raw data folder, NOT as a variable")
+    print(" - Parallel chunking will be used")
+    print(" - Arrays will be saved in the raw data folder, NOT as variables")
 else:
     print("The arrays can fit in memory:")
     ask = input("Do you want to use chunking? (y/n): ")
     if ask.lower() == 'y':
         mem = True
-        trans = True
         print(" - Chunking will be used")
-        print(" - The seed will be transformed to real space directly")
-        if OUTPUT_PARAMS["save"]:
-            print(" - The seed will be saved in the raw data folder, NOT as a variable")
-        else:
-            print(" - The seed will be saved as a variable")
+        ask2 = input("Do you want to use parallel chunking? (y/n): ")
+        if ask2.lower() == 'y':
+            para = True
+            print(" - Parallel chunking will be used")
     else:
         mem = False
-        trans = True
+        para = False
         print(" - Chunking will NOT be used")
-        print(" - The seed will be transformed to real space directly")
-        if OUTPUT_PARAMS["save"]:
-            print(" - The seed will be saved in the raw data folder, NOT as a variable")
-        else:
-            print(" - The seed will be saved as a variable")
-    
-# trans = False # Force the transformation to be false for testing purposes
+            
+    if OUTPUT_PARAMS["save"]:
+        print(" - Arrays will be saved in the raw data folder, NOT as variables")
+    else:
+        print(" - Arrays will be saved as variables")
 
 OUTPUT_PARAMS["memory"] = mem
-OUTPUT_PARAMS["transform"] = trans
+OUTPUT_PARAMS["parallel"] = para

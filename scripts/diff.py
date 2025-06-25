@@ -1,10 +1,10 @@
 """
-PRIMAL Seed Generator
-A tool to generate initial conditions for cosmological simulations of primordial magnetic fields.
+MAGNAS SSD Evolution
+A tool to analyse simulated cosmological magnetic field induction and the Small Scale Dynamo amplification.
 
 diff module
 Provides functions to compute gradients, divergences, curls of scalar and vector fields defined
-on the hierarchy of AMR simulations, eventhoug the seed generator only works with the zero patch.
+on the hierarchy of AMR simulations.
 
 Created by David Vallés and enriched by Marco Molina Pradillo.
 """

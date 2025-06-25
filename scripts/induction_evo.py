@@ -1,10 +1,10 @@
 """
-PRIMAL Seed Generator
-A tool to generate initial conditions for cosmological simulations of primordial magnetic fields.
+MAGNAS SSD Evolution
+A tool to analyse simulated cosmological magnetic field induction and the Small Scale Dynamo amplification.
 
-seed_generator module
-Provides a set of functions to generate a stochastic magnetic field following a given power spectrum
-in a cosmological context.
+induction_evo module
+Provides a set of functions to evolve the magnetic field in a cosmological context and studying the SSD
+amplification mechanism.
 
 Created by Marco Molina Pradillo
 """
@@ -14,14 +14,111 @@ import os
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
+import scripts.readers as reader
 from scripts.units import *
 from scipy.special import gamma
 from scipy import fft
 from matplotlib import pyplot as plt
-npatch = np.array([0]) # We only want the zero patch for the seed
-
 import pdb
 np.set_printoptions(linewidth=200)
+
+
+def most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=1, rad_kind=1, verbose=False):
+    '''
+    Finds the coordinates and radius of the most massive halo in each snapshot of the simulations. In case
+    we are looking for the most massive halo to center our analysis, we need to build the python halo catalogue
+    (by now we exclude subhalos)
+    
+    Args:
+        - sims: list of simulation names
+        - it: list of snapshots
+        - a0: scale factor of the simulation (typically 1.0 for the last snapshot)
+        - dir_halos: directory where the halo catalogues are stored
+        - dir_grids: directory where the grids are stored
+        - rawdir: directory where the raw data is stored
+        - vir_kind: kind of virial radius to use (1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch)
+        - rad_kind: kind of radius to use (1: Comoving, 2: Physical)
+        - verbose: boolean to print the coordinates and radius or not
+        
+    Returns:
+        - coords: list of coordinates of the most massive halo in each snapshot
+        - rad: list of radii of the most massive halo in each snapshot
+        
+    '''
+
+    # 
+
+    coords = []
+    rad = []
+
+    for i in range(len(sims)):
+        for j in reversed(range(len(it))):
+            
+            halos = read_asohf.read_families(it[j], path=dir_halos, output_format='dictionaries', output_redshift=False,
+                        min_mass=None, exclude_subhaloes=True, read_region=None, keep_boundary_contributions=False)
+            
+            _,_,_,_,zeta = reader.read_grids(it = it[j], path=dir_grids+sims[i], parameters_path=rawdir+sims[i]+'/', digits=5, read_general=True, read_patchnum=False, read_dmpartnum=False,
+            read_patchcellextension=False, read_patchcellposition=False, read_patchposition=False, read_patchparent=False, nparray=False)
+            
+            if j == len(it) - 1:
+                # Find the index of the most massive halo
+                max_mass_index = np.argmax([halo['M'] for halo in halos])
+                id_max_mass = halos[max_mass_index]['id']
+                if vir_kind == 1:
+                    R_max_mass = halos[max_mass_index]['R']
+            
+            index = next((i for i, halo in enumerate(halos) if halo['id'] == id_max_mass), None)
+            
+            if index != None:
+                
+                coords.append((halos[index]['x'], halos[index]['y'], halos[index]['z']))
+                
+                if vir_kind == 1 and rad_kind == 1:
+                    rad.append(R_max_mass) # Taking the Virial radius of the most massive halo at the last snap
+                elif vir_kind == 1 and rad_kind == 2:
+                    rad.append(R_max_mass * (a0/(1 + zeta)))
+                elif vir_kind == 2 and rad_kind == 1:
+                    rad.append(halos[index]['R']) # Changing the virial radius at each snap
+                elif vir_kind == 2 and rad_kind == 2:
+                    rad.append(halos[index]['R'] * (a0/(1 + zeta)))
+                            
+            elif index == None:
+                
+                coords.append(coords[-1])
+                rad.append(rad[-1])
+                
+            if verbose:
+                
+                # Print the coordinates
+                print("Coordinates of the most massive halo in snap " + str(it[j]) + ":")
+                print("x: " + str(coords[-1][0]))
+                print("y: " + str(coords[-1][1]))
+                print("z: " + str(coords[-1][2]))
+                print("Radius: " + str(rad[-1]))
+                
+    coords = coords[::-1]
+    rad = rad[::-1]
+    
+    return coords, rad
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def random_hermitian_vector(n):
     '''
