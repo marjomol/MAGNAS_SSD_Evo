@@ -22,6 +22,7 @@ PRIMAL_Seed_Gen/
 │   ├── diff.py
 │   ├── plot_fields.py
 │   ├── induction_evo.py
+│   ├── readers.py
 │   ├── spectral.py
 │   ├── units.py
 │   └── utils.py
@@ -71,6 +72,7 @@ The configuration parameters for the simulation are stored in `config.py`. By de
 - **diff.py**: Contains functions to compute the general differential calculus.
 - **plot_fields.py**: Contains functions to plot the magnetic field seeds and create animations.
 - **induction_evo.py**: Contains functions to calculate the magnetic field induction components and their evolution.
+- **readers.py**: Provides the necessary functions for reading MASCLET and ASOHF files and loading them in memory.
 - **spectral.py**: Contains functions to perform spectral analysis on the generated magnetic field seeds.
 - **units.py**: Provides unit conversion utilities for various physical quantities used in the simulations.
 - **utils.py**: Includes general utility functions that support the main operations of the repository.

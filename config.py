@@ -133,8 +133,10 @@ dx = size[0]/nmax # Size of the cells in Mpc
 a = a0 / (1 + zeta)
 E = (omega_lambda + omega_k/a**2 + omega_m/a**3)**(1/2)
 H = H0*E
+rho_b = 3 * (H0)**2 * omega_m * (1 + zeta)**3 # We compute the background density at this redshift
 
 volume = [] # (Mpc)^3
+dir_params = [] # Directories for each simulation parameter set
 
 for i in range(len(OUTPUT_PARAMS['sims'])):
     
@@ -142,13 +144,15 @@ for i in range(len(OUTPUT_PARAMS['sims'])):
     write_parameters(IND_PARAMS['nmax'], IND_PARAMS['nmay'], IND_PARAMS['nmaz'],
                     IND_PARAMS['npalev'], IND_PARAMS['nlevels'], IND_PARAMS['namrx'],
                     IND_PARAMS['namry'], IND_PARAMS['namrz'], size[i], path=data_folder + OUTPUT_PARAMS['sims'][i]+'/')
-
+    dir_params.append(data_folder + OUTPUT_PARAMS['sims'][i] + '/')
+    
+OUTPUT_PARAMS["dir_params"]
 IND_PARAMS["dx"] = dx
 IND_PARAMS["volume"] = volume
 IND_PARAMS["a"] = a
 IND_PARAMS["E"] = E
 IND_PARAMS["H"] = H
-
+IND_PARAMS["rho_b"] = rho_b
 
 ## Check if the arrays can fit in memory or if an alternative memory handeling method is needed
 

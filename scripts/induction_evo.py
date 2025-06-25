@@ -11,6 +11,10 @@ Created by Marco Molina Pradillo
 
 import gc
 import os
+import sys
+import time
+from time import strftime
+from time import gmtime
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
@@ -23,7 +27,7 @@ import pdb
 np.set_printoptions(linewidth=200)
 
 
-def most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=1, rad_kind=1, verbose=False):
+def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=1, rad_kind=1, verbose=False):
     '''
     Finds the coordinates and radius of the most massive halo in each snapshot of the simulations. In case
     we are looking for the most massive halo to center our analysis, we need to build the python halo catalogue
@@ -44,6 +48,7 @@ def most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=1, ra
         - coords: list of coordinates of the most massive halo in each snapshot
         - rad: list of radii of the most massive halo in each snapshot
         
+    Author: Marco Molina
     '''
 
     # 
@@ -54,7 +59,7 @@ def most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=1, ra
     for i in range(len(sims)):
         for j in reversed(range(len(it))):
             
-            halos = read_asohf.read_families(it[j], path=dir_halos, output_format='dictionaries', output_redshift=False,
+            halos = reader.read_families(it[j], path=dir_halos, output_format='dictionaries', output_redshift=False,
                         min_mass=None, exclude_subhaloes=True, read_region=None, keep_boundary_contributions=False)
             
             _,_,_,_,zeta = reader.read_grids(it = it[j], path=dir_grids+sims[i], parameters_path=rawdir+sims[i]+'/', digits=5, read_general=True, read_patchnum=False, read_dmpartnum=False,
@@ -102,10 +107,216 @@ def most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=1, ra
     return coords, rad
 
 
+def create_region(sims, it, coords, rad, a0, F=1.0, BOX=False, SPH=False, verbose=False):
+    '''
+    Creates the boxes or spheres centered at the coordinates of the most massive halo in each snapshot.
+    
+    Args:
+        - sims: list of simulation names
+        - it: list of snapshots
+        - coords: list of coordinates of the most massive halo in each snapshot
+        - rad: list of radii of the most massive halo in each snapshot
+        - a0: scale factor of the simulation (typically 1.0 for the last snapshot)
+        - F: factor to scale the radius (default is 1.0)
+        - BOX: boolean to create boxes or not (default is False)
+        - SPH: boolean to create spheres or not (default is False)
+        - verbose: boolean to print the coordinates and radius or not
+        
+    Returns:
+        - region: list of boxes or spheres centered at the coordinates
+        
+    Author: Marco Molina
+    '''
+
+    Rad = []
+    Box = []
+    Sph = []
+
+    for i in range(len(sims)):
+        for j in range(len(it)):
+
+            Rad.append(F*rad[i+j])
+            Box.append(["box", coords[i+j][0]-Rad[-1], coords[i+j][0]+Rad[-1], coords[i+j][1]-Rad[-1], coords[i+j][1]+Rad[-1], coords[i+j][2]-Rad[-1], coords[i+j][2]+Rad[-1]]) # Mpc
+            # Box.append(["box",-size[i]/2,size[i]/2,-size[i]/2,size[i]/2,-size[i]/2,size[i]/2]) # Mpc
+            Sph.append(["sphere", coords[i+j][0], coords[i+j][1], coords[i+j][2], Rad[-1]]) # Mpc
+            
+            if verbose:
+                        
+                # Print the coordinates
+                print("Coordinates of the most massive halo in snap " + str(it[j]) + ":")
+                print("x: " + str(coords[i+j][0]))
+                print("y: " + str(coords[i+j][1]))
+                print("z: " + str(coords[i+j][2]))
+                print("Radius: " + str(Rad[-1]))
+                print("Box: " + str(Box[-1]))
+                print("Sphere: " + str(Sph[-1]))
+                
+    if BOX == True:
+        region = Box
+    else:
+        region = Sph
+
+    if BOX == False and SPH == False:
+        region = [None for _ in range(len(sims)*len(it))]
+        
+    return region
 
 
+def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level=3, A2U=True, region=None, verbose=False):
+    '''
+    Loads the data from the simulations for the given snapshots and prepares it for further analysis.
+    This are the parameters we will need for each cell together with the magnetic field and the velocity,
+    we read the information for each snap and divide it in the different fields.
+    
+    Args:
+        - sims: list of simulation names
+        - it: list of snapshots
+        - rho_b: background density of the universe
+        - dir_grids: directory where the grids are stored
+        - rawdir: directory where the raw data is stored
+        - dir_gas: directory where the gas data is stored
+        - level: level of the AMR grid to be used (default is 3)
+        - A2U: boolean to transform the AMR grid to a uniform grid (default is True)
+        - region: region to be used (default is None)
+        - verbose: boolean to print the data type loaded or not (default is False)
+        
+    Returns:
+        
+    Author: Marco Molina
+    '''
 
+    # Read grid data using the reader
+    grid = reader.read_grids(
+        it=it,
+        path=dir_grids + sims,
+        parameters_path=dir_params,
+        digits=5,
+        read_general=True,
+        read_patchnum=True,
+        read_dmpartnum=False,
+        read_patchcellextension=True,
+        read_patchcellposition=False,
+        read_patchposition=True,
+        read_patchparent=False,
+        nparray=True
+    )
 
+    # Unpack grid data with explicit variable names for clarity
+    (
+        grid_irr,
+        grid_t,
+        _,  # grid_nl (unused)
+        _,  # grid_mass_dmpart (unused)
+        grid_zeta,
+        grid_npatch,
+        grid_patchnx,
+        grid_patchny,
+        grid_patchnz,
+        grid_patchrx,
+        grid_patchry,
+        grid_patchrz,
+        *_
+    ) = grid
+
+    # Only keep patches up to the desired AMR level
+    grid_npatch[level+1:] = 0
+
+    # Create vector_levels using the tools module
+    vector_levels = utils.create_vector_levels(grid_npatch)
+    
+    # Read cluster data
+    clus = reader.read_clus(
+        it=it,
+        path=dir_gas + sims,
+        parameters_path=dir_params,
+        digits=5,
+        max_refined_level=level,
+        output_delta=True,
+        output_v=True,
+        output_pres=False,
+        output_pot=False,
+        output_opot=False,
+        output_temp=False,
+        output_metalicity=False,
+        output_cr0amr=True,
+        output_solapst=True,
+        is_mascletB=True,
+        output_B=True,
+        is_cooling=False,
+        verbose=False,
+        read_region=region
+    )
+
+    # Unpack cluster data
+    (
+        clus_rho_rho_b,
+        clus_vx,
+        clus_vy,
+        clus_vz,
+        clus_cr0amr,
+        clus_solapst,
+        clus_bx,
+        clus_by,
+        clus_bz,
+        *rest
+    ) = clus
+
+    # Determine mask for valid patches
+    if region is not None and rest:
+        clus_kp = rest[0]
+    else:
+        clus_kp = np.ones((len(clus_bx[-1]),), dtype=bool)
+
+    # Normalize magnetic field components
+    clus_Bx = [clus_bx[p] / np.sqrt(rho_b) if clus_kp[p] != 0 else 0 for p in range(1 + np.sum(grid_npatch))]
+    clus_By = [clus_by[p] / np.sqrt(rho_b) if clus_kp[p] != 0 else 0 for p in range(1 + np.sum(grid_npatch))]
+    clus_Bz = [clus_bz[p] / np.sqrt(rho_b) if clus_kp[p] != 0 else 0 for p in range(1 + np.sum(grid_npatch))]
+    
+    if verbose == True:
+        print('Data type loaded for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype))
+
+    if A2U == False: 
+        clus_rho_rho_b = [(1+clus_rho_rho_b[p]).astype(np.float64) if clus_kp[p] != 0 else (1+clus_rho_rho_b[p]) for p in range(1+np.sum(grid_npatch))] # Delta is (rho/rho_b) - 1
+        clus_vx = [clus_vx[p].astype(np.float64) if clus_kp[p] != 0 else clus_vx[p] for p in range(1+np.sum(grid_npatch))]
+        clus_vy = [clus_vy[p].astype(np.float64) if clus_kp[p] != 0 else clus_vy[p] for p in range(1+np.sum(grid_npatch))]
+        clus_vz = [clus_vz[p].astype(np.float64) if clus_kp[p] != 0 else clus_vz[p] for p in range(1+np.sum(grid_npatch))]
+        clus_bx = [clus_bx[p].astype(np.float64) if clus_kp[p] != 0 else clus_bx[p] for p in range(1+np.sum(grid_npatch))]
+        clus_by = [clus_by[p].astype(np.float64) if clus_kp[p] != 0 else clus_by[p] for p in range(1+np.sum(grid_npatch))]
+        clus_bz = [clus_bz[p].astype(np.float64) if clus_kp[p] != 0 else clus_bz[p] for p in range(1+np.sum(grid_npatch))]
+        clus_Bx = [clus_Bx[p].astype(np.float64) if clus_kp[p] != 0 else clus_Bx[p] for p in range(1+np.sum(grid_npatch))]
+        clus_By = [clus_By[p].astype(np.float64) if clus_kp[p] != 0 else clus_By[p] for p in range(1+np.sum(grid_npatch))]
+        clus_Bz = [clus_Bz[p].astype(np.float64) if clus_kp[p] != 0 else clus_Bz[p] for p in range(1+np.sum(grid_npatch))]
+    
+    clus_b2 = [clus_bx[p]**2 + clus_by[p]**2 + clus_bz[p]**2 for p in range(1+np.sum(grid_npatch))]
+    clus_B2 = [clus_Bx[p]**2 + clus_By[p]**2 + clus_Bz[p]**2 for p in range(1+np.sum(grid_npatch))]
+    clus_v2 = [clus_vx[p]**2 + clus_vy[p]**2 + clus_vz[p]**2 for p in range(1+np.sum(grid_npatch))]
+    
+    return (
+        grid_irr,
+        grid_t,
+        grid_zeta,
+        grid_npatch,
+        grid_patchnx,
+        grid_patchny,
+        grid_patchnz,
+        grid_patchrx,
+        grid_patchry,
+        grid_patchrz,
+        vector_levels,
+        clus_rho_rho_b,
+        clus_vx,
+        clus_vy,
+        clus_vz,
+        clus_cr0amr,
+        clus_solapst,
+        clus_kp,
+        clus_Bx,
+        clus_By,
+        clus_Bz,
+        clus_b2,
+        clus_B2,
+        clus_v2
+    )
 
 
 

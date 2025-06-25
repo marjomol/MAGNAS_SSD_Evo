@@ -379,3 +379,125 @@ def create_vector_levels(npatch):
     vector = [[0]] + [[i + 1] * x for (i, x) in enumerate(npatch[1:])]
     vector = [item for sublist in vector for item in sublist]
     return np.array(vector)
+
+
+def patch_vertices(level, nx, ny, nz, rx, ry, rz, size, nmax):
+    """
+    Returns, for a given patch, the comoving coordinates of its 8 vertices.
+
+    Args:
+        level: refinement level of the given patch
+        nx, ny, nz: extension of the patch (in cells at level n)
+        rx, ry, rz: comoving coordinates of the center of the leftmost cell of the patch
+        size: comoving box side (preferred length units)
+        nmax: cells at base level
+
+    Returns:
+        List containing 8 tuples, each one containing the x, y, z coordinates of the vertex.
+
+    """
+
+    cellsize = size / nmax / 2 ** level
+
+    leftmost_x = rx - cellsize
+    leftmost_y = ry - cellsize
+    leftmost_z = rz - cellsize
+
+    vertices = []
+
+    for i in range(2):
+        for j in range(2):
+            for k in range(2):
+                x = leftmost_x + i * nx * cellsize
+                y = leftmost_y + j * ny * cellsize
+                z = leftmost_z + k * nz * cellsize
+
+                vertices.append((x, y, z))
+
+    return vertices
+
+
+def patch_is_inside_sphere(R, clusrx, clusry, clusrz, level, nx, ny, nz, rx, ry, rz, size, nmax):
+    """
+
+    Args:
+        R: radius of the considered sphere
+        clusrx, clusry, clusrz: comoving coordinates of the center of the sphere
+        level: refinement level of the given patch
+        nx, ny, nz: extension of the patch (in cells at level n)
+        rx, ry, rz: comoving coordinates of the center of the leftmost cell of the patch
+        size: comoving box side (preferred length units)
+        nmax: cells at base level
+
+    Returns:
+        Returns True if the patch should contain cells within a sphere of radius r of the (clusrx, clusry, clusrz)
+        point; False otherwise.
+
+    """
+    isinside = False
+
+    vertices = patch_vertices(level, nx, ny, nz, rx, ry, rz, size, nmax)
+    xmin = vertices[0][0]
+    ymin = vertices[0][1]
+    zmin = vertices[0][2]
+    xmax = vertices[-1][0]
+    ymax = vertices[-1][1]
+    zmax = vertices[-1][2]
+
+    if xmin < clusrx < xmax and ymin < clusry < ymax and zmin < clusrz < zmax:
+        return True
+
+    cell_l0_size = size / nmax
+    max_side = max([nx, ny, nz]) * cell_l0_size / 2 ** level
+    upper_bound_squared = R ** 2 + max_side ** 2 / 2 # half the face diagoonal, (max_side * sqrt2 / 2)^2
+    
+    def dista_periodic_1d(d, size):
+        return min(abs(d), size-abs(d))
+
+    for vertex in vertices:
+        distance_squared = dista_periodic_1d((vertex[0] - clusrx), size) ** 2 +\
+                           dista_periodic_1d((vertex[1] - clusry), size) ** 2 +\
+                           dista_periodic_1d((vertex[2] - clusrz), size) ** 2
+        if distance_squared <= upper_bound_squared:
+            isinside = True
+            break
+
+    return isinside
+
+
+def which_patches_inside_sphere(R, clusrx, clusry, clusrz, patchnx, patchny, patchnz, patchrx, patchry, patchrz, npatch,
+                                size, nmax, kept_patches=None):
+    """
+    Finds which of the patches will contain cells within a radius r of a certain point (clusrx, clusry, clusrz) being
+    its comoving coordinates.
+
+    Args:
+        R: radius of the considered sphere
+        clusrx, clusry, clusrz: comoving coordinates of the center of the sphere
+        patchnx, patchny, patchnz: x-extension of each patch (in level l cells) (and Y and Z)
+        patchrx, patchry, patchrz: physical position of the center of each patch first ¡l-1! cell
+        (and Y and Z)
+        npatch: number of patches in each level, starting in l=0
+        size: comoving size of the simulation box
+        nmax: cells at base level
+        kept_patches: 1d boolean array, True if the patch is kept, False if not.
+                    If None, all patches are kept.
+
+    Returns:
+        List containing the ipatch of the patches which should contain cells inside the considered radius.
+
+    """
+    levels = create_vector_levels(npatch)
+    which_ipatch = [0]
+
+    if kept_patches is None:
+        kept_patches = np.ones(patchnx.size, dtype=bool)
+
+    for ipatch in range(1, len(patchnx)):
+        if not kept_patches[ipatch]:
+            continue
+        if patch_is_inside_sphere(R, clusrx, clusry, clusrz, levels[ipatch], patchnx[ipatch], patchny[ipatch],
+                                patchnz[ipatch],
+                                patchrx[ipatch], patchry[ipatch], patchrz[ipatch], size, nmax):
+            which_ipatch.append(ipatch)
+    return which_ipatch
