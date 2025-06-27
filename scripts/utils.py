@@ -501,3 +501,148 @@ def which_patches_inside_sphere(R, clusrx, clusry, clusrz, patchnx, patchny, pat
                                 patchrx[ipatch], patchry[ipatch], patchrz[ipatch], size, nmax):
             which_ipatch.append(ipatch)
     return which_ipatch
+
+
+def magnitude(field_x, field_y, field_z, kept_patches=None):
+    '''
+    Calculates the magnitude of a vector field.
+
+    Args:
+        field_x: a list of numpy arrays, each one containing the x component of a vector field
+                defined on the corresponding grid of the AMR hierarchy
+
+        field_y: idem for the y component of the vector field.
+        
+        field_z: idem for the z component of the vector field.
+
+        kept_patches: 1d boolean array, True if the patch is kept, False if not.
+                    If None, all patches are kept.
+
+    Returns:
+        field: the resulting magnitude of the given vector field with the same structure as the input field
+
+    
+    Author: Marco José Molina Pradillo
+    '''
+
+    total_npatch = len(field_x)
+    assert total_npatch == len(field_y) == len(field_z), "Field dimensions do not match"
+
+    if kept_patches is None:
+        kept_patches = np.ones((total_npatch,), dtype=bool)
+
+    field = []
+    for ipatch in range(total_npatch):
+        if kept_patches[ipatch]:
+            mag = np.sqrt(field_x[ipatch]**2 + field_y[ipatch]**2 + field_z[ipatch]**2)
+            field.append(mag)
+        else:
+            field.append(0)
+
+    return field
+
+
+def magnitude2(field_x, field_y, field_z, kept_patches=None):
+    '''
+    Calculates the magnitude squared of a vector field.
+
+    Args:
+        field_x: a list of numpy arrays, each one containing the x component of a vector field
+                defined on the corresponding grid of the AMR hierarchy
+
+        field_y: idem for the y component of the vector field.
+        
+        field_z: idem for the z component of the vector field.
+
+        kept_patches: 1d boolean array, True if the patch is kept, False if not.
+                    If None, all patches are kept.
+
+    Returns:
+        field: the resulting magnitude squared of the given vector field with the same structure as the input field
+
+    
+    Author: Marco José Molina Pradillo
+    '''
+
+    total_npatch = len(field_x)
+    assert total_npatch == len(field_y) == len(field_z), "Field dimensions do not match"
+
+    if kept_patches is None:
+        kept_patches = np.ones((total_npatch,), dtype=bool)
+
+    field = []
+    for ipatch in range(total_npatch):
+        if kept_patches[ipatch]:
+            mag_squared = field_x[ipatch]**2 + field_y[ipatch]**2 + field_z[ipatch]**2
+            field.append(mag_squared)
+        else:
+            field.append(0)
+            
+    return field
+
+
+def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, kept_patches=None):
+    """
+    Given a scalar field and a sphere defined with a center (x,y,z) and a radious together with the patch structure, returns the volumetric integral of the field along the sphere.
+
+    Args:
+        - field: scalar field to be integrated
+        - units: change of units factor to be multiplied by the final integral if one wants physical units
+        - zeta: redshift of the simulation snap to calculate the scale factor
+        - cr0amr: AMR maximum refinement factor (only the maximally resolved cells are considered)
+        - solapst: AMR overlap factor (only the maximally resolved cells are considered)
+        - npatch: number of patches in each level, starting in l=0 (numpy vector of NLEVELS integers)
+        - patchrx, patchry, patchrz: physical position of the center of each patch first ¡l-1! cell
+        - patchnx, patchny, patchnz: x-extension of each patch (in level l cells) (and Y and Z)
+        - size: comoving size of the simulation box
+        - nmax: number of cells in the coarsest resolution level
+        - coords: center of the sphere in a numpy array [x,y,z]
+        - rad: radius of the sphere
+        - kept_patches: boolean array to select the patches to be considered in the integration. True if the patch is kept, False if not. If None, all patches are kept.
+
+    Returns:
+        - integral: volumetric integral of the field along the sphere
+    """
+    if kept_patches is None:
+        total_npatch = len(field)
+        kept_patches = np.ones((total_npatch,), dtype=bool)
+        
+    vector_levels = create_vector_levels(npatch)
+    
+    dx = size/nmax
+    
+    a = 1 / (1 + zeta) # We compute the scale factor
+    
+    integral = 0
+    
+    for p in range(len(kept_patches)): # We run across all the patches
+        
+        patch_res = dx/(2**vector_levels[p])
+        
+        x0 = patchrx[p] - patch_res/2 #Center of the left-bottom-front cell
+        y0 = patchry[p] - patch_res/2
+        z0 = patchrz[p] - patch_res/2
+        
+        x_grid = np.linspace(x0, x0 + patch_res*patchnx[p], patchnx[p])
+        y_grid = np.linspace(y0, y0 + patch_res*patchny[p], patchny[p])
+        z_grid = np.linspace(z0, z0 + patch_res*patchnz[p], patchnz[p])
+        
+        X_grid, Y_grid, Z_grid = np.meshgrid(x_grid, y_grid, z_grid, indexing='ij')
+        
+        # Create a boolean mask where the condition is True
+        mask = ((coords[0] - X_grid)**2 + (coords[1] - Y_grid)**2 + (coords[2] - Z_grid)**2) <= rad**2
+        
+        # Calculate the physical volume of the cell in this simulation patch
+        dr3 = (a*patch_res)**3
+        
+        # Calculate the integral of the scalar quantity over the volume
+        
+        masked = np.where(mask, field[p], 0)
+        
+        integral += np.sum(masked*cr0amr[p]*solapst[p])*dr3
+    
+    integral = units * integral
+    
+    print('Total integrated field: ' + str(integral))
+    
+    return integral

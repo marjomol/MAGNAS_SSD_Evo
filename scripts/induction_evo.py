@@ -291,6 +291,9 @@ def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level=3, A2U=True
     clus_B2 = [clus_Bx[p]**2 + clus_By[p]**2 + clus_Bz[p]**2 for p in range(1+np.sum(grid_npatch))]
     clus_v2 = [clus_vx[p]**2 + clus_vy[p]**2 + clus_vz[p]**2 for p in range(1+np.sum(grid_npatch))]
     
+    if verbose == True:
+        print('Working data type for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype)) 
+    
     return (
         grid_irr,
         grid_t,
@@ -319,14 +322,389 @@ def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level=3, A2U=True
     )
 
 
+def vectorial_quantities(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz,
+                        dx, grid_npatch, clus_kp, grid_irr, stencil=5, verbose=False):
+    '''
+    Computes the vectorial calculus quantities of interest for the magnetic field and velocity field.
+    
+    Args:
+        - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
+        - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
+        - dx: size of the cells in Mpc
+        - grid_npatch: number of patches in the grid
+        - stencil: stencil to be used for the calculations
+        - clus_kp: mask for valid patches
+        - verbose: boolean to print the data type loaded or not (default is False)
+        
+    Returns:
+        - diver_B: divergence of the magnetic field
+        - diver_v: divergence of the velocity field
+        - v_nabla_B_x, v_nabla_B_y, v_nabla_B_z: directional derivative of the magnetic field along the velocity field
+        - B_nabla_v_x, B_nabla_v_y, B_nabla_v_z: directional derivative of the velocity field along the magnetic field
+        - v_X_B_x, v_X_B_y, v_X_B_z: cross product of the velocity and magnetic field
+        - curl_v_X_B_x, curl_v_X_B_y, curl_v_X_B_z: total induction as the curl of the cross product of the velocity and magnetic field with drag term
+        
+    Author: Marco Molina
+    '''
+    
+    # Vectorial calculus
+
+    ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
+    
+    start_time_vector = time.time() # Record the start time
+    
+    ### We compute the divergence of the magnetic field
+    diver_B = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, stencil, clus_kp)
+
+    ### We compute the divergence of the velocity field
+    diver_v = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, stencil, clus_kp)
+    
+    ### We compute the directional derivative of the magnetic field along the velocity field
+    v_nabla_B_x, v_nabla_B_y, v_nabla_B_z = diff.directional_derivative_vector_field(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, dx, grid_npatch, stencil, clus_kp)
+    
+    ### We compute the directional derivative of the velocity field along the magnetic field
+    B_nabla_v_x, B_nabla_v_y, B_nabla_v_z = diff.directional_derivative_vector_field(clus_vx, clus_vy, clus_vz, clus_Bx, clus_By, clus_Bz, dx, grid_npatch, stencil, clus_kp)
+    
+    ### We compute the cross product of the velocity and magnetic field
+    v_X_B_x = [clus_vy[p] * clus_Bz[p] - clus_vz[p] * clus_By[p] if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))] # We run across all the patches with the levels we are interested in
+    v_X_B_y = [clus_vz[p] * clus_Bx[p] - clus_vx[p] * clus_Bz[p] if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))] # We only want the patches inside the region of interest
+    v_X_B_z = [clus_vx[p] * clus_By[p] - clus_vy[p] * clus_Bx[p] if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+            
+    ### The total induction as the curl of the cross product of the velocity and magnetic field with drag term.
+    curl_v_X_B_x, curl_v_X_B_y, curl_v_X_B_z = diff.curl(v_X_B_x, v_X_B_y, v_X_B_z, dx, grid_npatch, stencil, clus_kp)
+    
+    end_time_vector = time.time()
+
+    total_time_vector = end_time_vector - start_time_vector
+    
+    if verbose == True:
+        print('Time for vector calculations in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_vector))))
+    
+    return (
+        diver_B,
+        diver_v,
+        v_nabla_B_x,
+        v_nabla_B_y,
+        v_nabla_B_z,
+        B_nabla_v_x,
+        B_nabla_v_y,
+        B_nabla_v_z,
+        v_X_B_x,
+        v_X_B_y,
+        v_X_B_z,
+        curl_v_X_B_x,
+        curl_v_X_B_y,
+        curl_v_X_B_z
+    )
+    
+
+def induction_equation(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, diver_B, diver_v,
+                        B_nabla_v_x, B_nabla_v_y, B_nabla_v_z, v_nabla_B_x, v_nabla_B_y, v_nabla_B_z,
+                        curl_v_X_B_x, curl_v_X_B_y, curl_v_X_B_z, H, a, grid_npatch, clus_kp, grid_irr,
+                        mag=False, verbose=False):
+    '''
+    Computes the components of the cosmological magnetic induction equation and their magnitudes.
+    
+    Args:
+        - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
+        - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
+        - diver_B: divergence of the magnetic field
+        - diver_v: divergence of the velocity field
+        - B_nabla_v_x, B_nabla_v_y, B_nabla_v_z: directional derivative of the velocity field along the magnetic field
+        - v_nabla_B_x, v_nabla_B_y, v_nabla_B_z: directional derivative of the magnetic field along the velocity field
+        - curl_v_X_B_x, curl_v_X_B_y, curl_v_X_B_z: total induction as the curl of the cross product of the velocity and magnetic field with drag term
+        - H: Hubble parameter
+        - a: scale factor of the universe
+        - grid_npatch: number of patches in the grid
+        - clus_kp: mask for valid patches
+        - grid_irr: index of the snapshot
+        - mag: boolean to compute the magnitudes of the components (default is False)
+        - verbose: boolean to print the data type loaded or not (default is False)
+        
+    Returns:
+        - MIE_diver_B_x, MIE_diver_B_y, MIE_diver_B_z: null divergence of the magnetic field
+        - MIE_compres_x, MIE_compres_y, MIE_compres_z: compressive component of the magnetic field induction
+        - MIE_stretch_x, MIE_stretch_y, MIE_stretch_z: stretching component of the magnetic field induction
+        - MIE_advec_x, MIE_advec_y, MIE_advec_z: advection component of the magnetic field induction
+        - MIE_drag_x, MIE_drag_y, MIE_drag_z: cosmic drag component of the magnetic field induction
+        - MIE_total_x, MIE_total_y, MIE_total_z: total magnetic induction energy in the compact way
+        - MIE_diver_B_mag, MIE_drag_mag, MIE_compres_mag, MIE_stretch_mag, MIE_advec_mag, MIE_total_mag: magnitudes of the components if mag is True
+        
+    Author: Marco Molina
+    '''
+    # Magnetic Induction Equation
+    
+    ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
+    ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
+    
+    ### We compute here each contribution to the magnetic fiel induction.
+    
+    start_time_induction_terms = time.time() # Record the start time
+    
+    if mag == True:
+                
+        MIE_diver_B_mag = utils.magnitude(MIE_diver_B_x, MIE_diver_B_y, MIE_diver_B_z, clus_kp)
+        MIE_drag_mag = utils.magnitude(MIE_drag_x, MIE_drag_y, MIE_drag_z, clus_kp)
+        MIE_compres_mag = utils.magnitude(MIE_compres_x, MIE_compres_y, MIE_compres_z, clus_kp)
+        MIE_stretch_mag = utils.magnitude(MIE_stretch_x, MIE_stretch_y, MIE_stretch_z, clus_kp)
+        MIE_advec_mag = utils.magnitude(MIE_advec_x, MIE_advec_y, MIE_advec_z, clus_kp)
+        MIE_total_mag = utils.magnitude(MIE_total_x, MIE_total_y, MIE_total_z, clus_kp)
+            
+    ### First, the null divergence of the magnetic field for numerical error purposes.
+    
+    #### We have to run across all the patches.
+
+    MIE_diver_B_x = [((1/a) * clus_vx[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_diver_B_y = [((1/a) * clus_vy[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_diver_B_z = [((1/a) * clus_vz[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    ### Now the compressive component.
+    
+    MIE_compres_x = [(-(1/a) * clus_Bx[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_compres_y = [(-(1/a) * clus_By[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_compres_z = [(-(1/a) * clus_Bz[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]            
+    
+    ### The stretching component.
+
+    MIE_stretch_x = [((1/a) * B_nabla_v_x[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_stretch_y = [((1/a) * B_nabla_v_y[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_stretch_z = [((1/a) * B_nabla_v_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                
+    ### The advection component.
+
+    MIE_advec_x = [(-(1/a) * v_nabla_B_x[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_advec_y = [(-(1/a) * v_nabla_B_y[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_advec_z = [(-(1/a) * v_nabla_B_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                
+    ### The cosmic drag component.
+    
+    MIE_drag_x = [(-(1/2) * H * clus_Bx[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_drag_y = [(-(1/2) * H * clus_By[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_drag_z = [(-(1/2) * H * clus_Bz[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    ## The total magnetic induction energy in the compact way.
+        
+    MIE_total_x = [((1/a) * curl_v_X_B_x[p] + MIE_drag_x[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_total_y = [((1/a) * curl_v_X_B_y[p] + MIE_drag_y[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    MIE_total_z = [((1/a) * curl_v_X_B_z[p] + MIE_drag_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    end_time_induction_terms = time.time()
+
+    total_time_induction_terms = end_time_induction_terms - start_time_induction_terms
+    
+    if verbose == True:
+        print('Time for calculating the induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_terms))))
+
+    if mag == True:
+        return (
+            MIE_diver_B_x,
+            MIE_diver_B_y,
+            MIE_diver_B_z,
+            MIE_compres_x,
+            MIE_compres_y,
+            MIE_compres_z,
+            MIE_stretch_x,
+            MIE_stretch_y,
+            MIE_stretch_z,
+            MIE_advec_x,
+            MIE_advec_y,
+            MIE_advec_z,
+            MIE_drag_x,
+            MIE_drag_y,
+            MIE_drag_z,
+            MIE_total_x,
+            MIE_total_y,
+            MIE_total_z,
+            MIE_diver_B_mag,
+            MIE_drag_mag,
+            MIE_compres_mag,
+            MIE_stretch_mag,
+            MIE_advec_mag,
+            MIE_total_mag
+        )
+    else:
+        return (
+            MIE_diver_B_x,
+            MIE_diver_B_y,
+            MIE_diver_B_z,
+            MIE_compres_x,
+            MIE_compres_y,
+            MIE_compres_z,
+            MIE_stretch_x,
+            MIE_stretch_y,
+            MIE_stretch_z,
+            MIE_advec_x,
+            MIE_advec_y,
+            MIE_advec_z,
+            MIE_drag_x,
+            MIE_drag_y,
+            MIE_drag_z,
+            MIE_total_x,
+            MIE_total_y,
+            MIE_total_z
+        )
+
+
+def induction_equation_energy(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, clus_rho_rho_b,
+                                MIE_diver_B_x, MIE_diver_B_y, MIE_diver_B_z,
+                                MIE_compres_x, MIE_compres_y, MIE_compres_z,
+                                MIE_stretch_x, MIE_stretch_y, MIE_stretch_z,
+                                MIE_advec_x, MIE_advec_y, MIE_advec_z,
+                                MIE_drag_x, MIE_drag_y, MIE_drag_z,
+                                MIE_total_x, MIE_total_y, MIE_total_z,
+                                clus_v2, grid_npatch, clus_kp, grid_irr,
+                                A2U=False, verbose=False):
+    '''
+    Computes the components of the cosmological magnetic induction equation in terms of the magnetic energy and its components.
+    This will be useful to calculate volumetric integrals and energy budgets as the quantities involved are scalars.
+    
+    Args:
+        - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
+        - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
+        - clus_rho_rho_b: density contrast of the cluster
+        - MIE_diver_B_x, MIE_diver_B_y, MIE_diver_B_z: null divergence of the magnetic field
+        - MIE_compres_x, MIE_compres_y, MIE_compres_z: compressive component of the magnetic field induction
+        - MIE_stretch_x, MIE_stretch_y, MIE_stretch_z: stretching component of the magnetic field induction
+        - MIE_advec_x, MIE_advec_y, MIE_advec_z: advection component of the magnetic field induction
+        - MIE_drag_x, MIE_drag_y, MIE_drag_z: cosmic drag component of the magnetic field induction
+        - MIE_total_x, MIE_total_y, MIE_total_z: total magnetic induction energy in the compact way
+        - clus_v2: squared velocity field
+        - grid_npatch: number of patches in the grid
+        - clus_kp: mask for valid patches
+        - grid_irr: index of the snapshot
+        - A2U: boolean to transform the AMR grid to a uniform grid (default is False)
+        - verbose: boolean to print the data type loaded or not (default is False)
+        
+    Returns:
+        - MIE_diver_B2: null divergence of the magnetic field energy
+        - MIE_compres_B2: compressive component of the magnetic field induction energy
+        - MIE_stretch_B2: stretching component of the magnetic field induction energy
+        - MIE_advec_B2: advection component of the magnetic field induction energy
+        - MIE_drag_B2: cosmic drag component of the magnetic field induction energy
+        - MIE_total_B2: total magnetic induction energy in the compact way
+        - cinetic_energy_density: kinetic energy density of the cluster
+        
+    Author: Marco Molina
+    '''
+    # Magnetic Induction Equation in Terms of the Magnetic Energy
+    
+    ## In this section we are going to compute the cosmological induction equation in terms of the magnetic energy and its components, calculating them with the results obtained before.
+    ## This will be usefull to calculate volumetric integrals and energy budgets as the quantities involved are scalars.
+    
+    ### We compute here each contribution to the magnetic fiel induction.
+
+    start_time_induction_energy_terms = time.time() # Record the start time
+
+    ## First, the null divergence of the magnetic field energy for numerical error purposes.
+    
+    ### We have to run across all the patches.
+
+    MIE_diver_B2 = [(clus_Bx[p] * MIE_diver_B_x[p] + clus_By[p] * MIE_diver_B_y[p] + clus_Bz[p] * MIE_diver_B_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    ## Now the compressive component.
+    
+    MIE_compres_B2 = [(clus_Bx[p] * MIE_compres_x[p] + clus_By[p] * MIE_compres_y[p] + clus_Bz[p] * MIE_compres_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    ## The stretching component.
+    
+    MIE_stretch_B2 = [(clus_Bx[p] * MIE_stretch_x[p] + clus_By[p] * MIE_stretch_y[p] + clus_Bz[p] * MIE_stretch_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    ## The advection component.
+    
+    MIE_advec_B2 = [(clus_Bx[p] * MIE_advec_x[p] + clus_By[p] * MIE_advec_y[p] + clus_Bz[p] * MIE_advec_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    ## The cosmic drag component.
+    
+    MIE_drag_B2 = [(clus_Bx[p] * MIE_drag_x[p] + clus_By[p] * MIE_drag_y[p] + clus_Bz[p] * MIE_drag_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                    
+    ## The total magnetic induction energy in the compact way.
+    
+    MIE_total_B2 = [(clus_Bx[p] * MIE_total_x[p] + clus_By[p] * MIE_total_y[p] + clus_Bz[p] * MIE_total_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]        
+
+    ## The cinectic energy.
+
+    cinetic_energy_density = [((1/2) * clus_rho_rho_b[p] * clus_v2[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    
+    if A2U == False:
+        del MIE_diver_B_x, MIE_diver_B_y, MIE_diver_B_z, MIE_compres_x, MIE_compres_y, MIE_compres_z, MIE_stretch_x, MIE_stretch_y, MIE_stretch_z, MIE_advec_x, MIE_advec_y, MIE_advec_z, MIE_drag_x, MIE_drag_y, MIE_drag_z, MIE_total_x, MIE_total_y, MIE_total_z, clus_vx, clus_vy, clus_vz, clus_Bx, clus_By, clus_Bz, clus_v2
+        gc.collect()
+    
+    end_time_induction_energy_terms = time.time()
+
+    total_time_induction_energy_terms = end_time_induction_energy_terms - start_time_induction_energy_terms
+    
+    if verbose == True:
+        print('Time for calculating the energy induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_energy_terms))))
+    
+    return (
+        MIE_diver_B2,
+        MIE_compres_B2,
+        MIE_stretch_B2,
+        MIE_advec_B2,
+        MIE_drag_B2,
+        MIE_total_B2,
+        cinetic_energy_density
+    )
 
 
 
 
+    # Magnetic Energy Density: Volume Integral
+    # Magnetic Energy Induction
+    
+    ## We can calculate the volume integral of the magnetic energy density in the volume we have considered (usually the virial volume)
+    ## Now we are going to calculate the induced magnetic energy according to our derived equation and compared it to the actual magnetic energy integrated along the studied volume
+    
+    ### Here we compute the integrated contribution from all the members of the equation
+    
+start_time_induction = time.time() # Record the start time
 
+# int_B2 = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#             if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, clus_B2_clean, vector_levels, clus_kp)])
+# int_MIE_diver_B2 = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#                         if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, MIE_diver_B2_clean, vector_levels, clus_kp)])
+# int_MIE_compres_B2 = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#                         if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, MIE_compres_B2_clean, vector_levels, clus_kp)])
+# int_MIE_stretch_B2 = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#                         if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, MIE_stretch_B2_clean, vector_levels, clus_kp)])
+# int_MIE_advec_B2 = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#                         if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, MIE_advec_B2_clean, vector_levels, clus_kp)])
+# int_MIE_drag_B2 = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#                         if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, MIE_drag_B2_clean, vector_levels, clus_kp)])
+# int_MIE_total_B2 = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#                         if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, MIE_total_B2_clean, vector_levels, clus_kp)])
+# int_cinetic_energy = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#                         if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, cinetic_energy_clean, vector_levels, clus_kp)])
+# volume = sum([qi[(xi-coords[0])**2 + (yi-coords[1])**2 + (zi-coords[2])**2 <= rad**2].sum() * ((a0 / (1 + grid_zeta))*size[0]/nmax/2**li)**3
+#             if ki else 0 for xi,yi,zi,qi,li,ki in zip(X, Y, Z, ones_array_clean, vector_levels, clus_kp)])
 
+units = 1 # We choose the units of the integration
 
+int_b2 = tools_xyz.vol_integral(clus_b2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+int_MIE_diver_B2 = tools_xyz.vol_integral(MIE_diver_B2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+int_MIE_compres_B2 = tools_xyz.vol_integral(MIE_compres_B2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+int_MIE_stretch_B2 = tools_xyz.vol_integral(MIE_stretch_B2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+int_MIE_advec_B2 = tools_xyz.vol_integral(MIE_advec_B2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+int_MIE_drag_B2 = tools_xyz.vol_integral(MIE_drag_B2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+int_MIE_total_B2 = tools_xyz.vol_integral(MIE_total_B2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+int_cinetic_energy = tools_xyz.vol_integral(cinetic_energy_density, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+volume = tools_xyz.vol_integral(clus_B2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, grid_patchrx, grid_patchry, grid_patchrz,
+                        grid_patchnx, grid_patchny, grid_patchnz, size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp, vol=True)
 
+end_time_induction = time.time()
+
+total_time_induction = end_time_induction - start_time_induction
+
+if verbose == True:
+    print('Time for induction integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))))
 
 
 
