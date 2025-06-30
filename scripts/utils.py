@@ -14,6 +14,7 @@ import os
 from scipy.io import FortranFile
 import h5py
 import psutil
+from multiprocessing import Pool
 from config import SEED_PARAMS as seed_params
 from config import OUTPUT_PARAMS as out_params
 
@@ -381,6 +382,152 @@ def create_vector_levels(npatch):
     return np.array(vector)
 
 
+def clean_field(field, cr0amr, solapst, npatch, up_to_level=1000):
+    """
+    Receives a field (with its refinement patches) and, using the cr0amr and solapst variables, returns the field
+    having "cleaned" for refinements and overlaps. The user can specify the level of refinement required. This last
+    level will be cleaned of overlaps, but not of refinements!
+
+    Args:
+        field: field to be cleaned
+        cr0amr: field containing the refinements of the grid (1: not refined; 0: refined)
+        solapst: field containing the overlaps (1: keep; 0: not keep)
+        npatch: number of patches in each level, starting in l=0 (numpy vector of NLEVELS integers)
+        up_to_level: specify if only cleaning until certain level is desired
+
+    Returns:
+        "Clean" version of the field, with the same structure.
+
+    Author: David Vallés
+    """
+    levels = create_vector_levels(npatch)
+    up_to_level = min(up_to_level, levels.max())
+
+    cleanfield = []
+    if up_to_level == 0:
+        cleanfield.append(field[0])
+    else:
+        cleanfield.append(field[0] * cr0amr[0])  # not overlap in l=0
+
+    for level in range(1, up_to_level):
+        for ipatch in range(sum(npatch[0:level]) + 1, sum(npatch[0:level + 1]) + 1):
+            cleanfield.append(field[ipatch] * cr0amr[ipatch] * solapst[ipatch])
+
+    # last level: no refinements
+    for ipatch in range(sum(npatch[0:up_to_level]) + 1, sum(npatch[0:up_to_level + 1]) + 1):
+        cleanfield.append(field[ipatch] * solapst[ipatch])
+
+    return cleanfield
+
+
+def mask_sphere(R, clusrx, clusry, clusrz, cellsrx, cellsry, cellsrz, kept_patches=None):
+    """
+    Returns a "field", which contains all patches as usual. True means the cell must be considered, False otherwise.
+    If a patch has all "False", an array is not ouputted, but a False is, instead.
+
+    Args:
+        R: radius of the considered sphere
+        clusrx, clusry, clusrz: comoving coordinates of the center of the sphere
+        cellsrx, cellsry, cellsrz: position fields
+        kept_patches: 1d boolean array, True if the patch is kept, False if not. If None, all patches are kept.
+
+    Returns:
+        Field containing the mask as described.
+        
+    Author: David Vallés
+    """
+    if kept_patches is None:
+        kept_patches = np.ones(len(cellsrx), dtype=bool)
+
+    mask = [(cx - clusrx) ** 2 + (cy - clusry) ** 2 + (cz - clusrz) ** 2 < R ** 2 if ki else False
+            for cx, cy, cz, ki in zip(cellsrx, cellsry, cellsrz, kept_patches)]
+
+    return mask
+
+
+def radial_profile_vw(field, clusrx, clusry, clusrz, rmin, rmax, nbins, logbins, cellsrx, cellsry,
+                    cellsrz, cr0amr, solapst, npatch, size, nmax, up_to_level=1000, verbose=False,
+                    kept_patches=None):
+    """
+    Computes a (volume-weighted) radial profile of the quantity given in the "field" argument, taking center in
+    (clusrx, clusry, clusrz).
+
+    Args:
+        field: variable (already cleaned) whose profile wants to be got
+        clusrx, clusry, clusrz: comoving coordinates of the center for the profile
+        rmin: starting radius of the profile
+        rmax: final radius of the profile
+        nbins: number of points for the profile
+        logbins: if False, radial shells are spaced linearly. If True, they're spaced logarithmically. Not that, if
+                logbins = True, rmin cannot be 0.
+        cellsrx, cellsry, cellsrz: position fields
+        cr0amr: field containing the refinements of the grid (1: not refined; 0: refined)
+        solapst: field containing the overlaps (1: keep; 0: not keep)
+        npatch: number of patches in each level, starting in l=0
+        size: comoving size of the simulation box
+        nmax: cells at base level
+        up_to_level: maximum AMR level to be considered for the profile
+        verbose: if True, prints the patch being opened at a time
+        kept_patches: 1d boolean array, True if the patch is kept, False if not. If None, all patches are kept.
+
+    Returns:
+        Two lists. One of them contains the center of each radial cell. The other contains the value of the field
+        averaged across all the cells of the shell.
+        
+    Author: David Vallés
+    """
+    if kept_patches is None:
+        kept_patches = np.ones(len(cellsrx), dtype=bool)
+
+    # getting the bins
+    try:
+        assert (rmax > rmin)
+    except AssertionError:
+        print('You would like to input rmax > rmin...')
+        return
+
+    if logbins:
+        try:
+            assert (rmin > 0)
+        except AssertionError:
+            print('Cannot use rmin=0 with logarithmic binning...')
+            return
+        bin_bounds = np.logspace(np.log10(rmin), np.log10(rmax), nbins + 1)
+
+    else:
+        bin_bounds = np.linspace(rmin, rmax, nbins + 1)
+
+    bin_centers = (bin_bounds[1:] + bin_bounds[:-1]) / 2
+    # profile = np.zeros(bin_centers.shape)
+    profile = []
+
+    # finding the volume-weighted mean
+    levels = create_vector_levels(npatch)
+    cell_volume = (size / nmax / 2 ** levels) ** 3
+
+    field_vw = [f * cv for f, cv in zip(field, cell_volume)]
+
+    if rmin > 0:
+        cells_outer = mask_sphere(rmin, clusrx, clusry, clusrz, cellsrx, cellsry, cellsrz, kept_patches=kept_patches)
+    else:
+        cells_outer = [np.zeros(patch.shape, dtype='bool') for patch in field]
+
+    for r_out in bin_bounds[1:]:
+        if verbose:
+            print('Working at outer radius {} Mpc'.format(r_out))
+        cells_inner = cells_outer
+        cells_outer = mask_sphere(r_out, clusrx, clusry, clusrz, cellsrx, cellsry, cellsrz, kept_patches=kept_patches)
+        shell_mask = [inner ^ outer if ki else 0 for inner, outer, ki in zip(cells_inner, cells_outer, kept_patches)]
+        shell_mask = clean_field(shell_mask, cr0amr, solapst, npatch, up_to_level=up_to_level)
+
+        sum_field_vw = sum([(fvw * sm).sum() for fvw, sm in zip(field_vw, shell_mask)])
+        sum_vw = sum([(sm * cv).sum() for sm, cv in zip(shell_mask, cell_volume)])
+
+        profile.append(sum_field_vw / sum_vw)
+
+    return bin_centers, np.asarray(profile)
+
+
 def patch_vertices(level, nx, ny, nz, rx, ry, rz, size, nmax):
     """
     Returns, for a given patch, the comoving coordinates of its 8 vertices.
@@ -503,6 +650,82 @@ def which_patches_inside_sphere(R, clusrx, clusry, clusrz, patchnx, patchny, pat
     return which_ipatch
 
 
+def patch_is_inside_box(box_limits, level, nx, ny, nz, rx, ry, rz, size, nmax):
+    """
+    See "Returns:"
+
+    Args:
+        box_limits: a tuple in the form (xmin, xmax, ymin, ymax, zmin, zmax)
+        level: refinement level of the given patch
+        nx, ny, nz: extension of the patch (in cells at level n)
+        rx, ry, rz: comoving coordinates of the center of the leftmost cell of the patch
+        size: comoving box side (preferred length units)
+        nmax: cells at base level
+
+    Returns:
+        Returns True if the patch should contain cells within a sphere of radius r of the (clusrx, clusry, clusrz)
+        point; False otherwise.
+        
+    Author: David Vallés
+    """
+    vertices = patch_vertices(level, nx, ny, nz, rx, ry, rz, size, nmax)
+    pxmin = vertices[0][0]
+    pymin = vertices[0][1]
+    pzmin = vertices[0][2]
+    pxmax = vertices[-1][0]
+    pymax = vertices[-1][1]
+    pzmax = vertices[-1][2]
+
+    bxmin = box_limits[0]
+    bxmax = box_limits[1]
+    bymin = box_limits[2]
+    bymax = box_limits[3]
+    bzmin = box_limits[4]
+    bzmax = box_limits[5]
+
+    overlap_x = (pxmin <= bxmax) and (bxmin <= pxmax)
+    overlap_y = (pymin <= bymax) and (bymin <= pymax)
+    overlap_z = (pzmin <= bzmax) and (bzmin <= pzmax)
+
+    return overlap_x and overlap_y and overlap_z
+
+
+def which_patches_inside_box(box_limits, patchnx, patchny, patchnz, patchrx, patchry, patchrz, npatch, size, nmax,
+                            kept_patches=None):
+    """
+    Finds which of the patches will contain cells within a box of defined vertices.
+
+    Args:
+        box_limits: a tuple in the form (xmin, xmax, ymin, ymax, zmin, zmax)
+        patchnx, patchny, patchnz: x-extension of each patch (in level l cells) (and Y and Z)
+        patchrx, patchry, patchrz: physical position of the center of each patch first ¡l-1! cell
+        (and Y and Z)
+        npatch: number of patches in each level, starting in l=0
+        size: comoving size of the simulation box
+        nmax: cells at base level
+        kept_patches: 1d boolean array, True if the patch is kept, False if not.
+                    If None, all patches are kept.
+
+    Returns:
+        List containing the ipatch of the patches which should contain cells inside the considered radius.
+
+    Author: David Vallés
+    """
+    levels = create_vector_levels(npatch)
+    which_ipatch = [0]
+
+    if kept_patches is None:
+        kept_patches = np.ones(patchnx.size, dtype=bool)
+
+    for ipatch in range(1, len(patchnx)):
+        if not kept_patches[ipatch]:
+            continue
+        if patch_is_inside_box(box_limits, levels[ipatch], patchnx[ipatch], patchny[ipatch], patchnz[ipatch],
+                                patchrx[ipatch], patchry[ipatch], patchrz[ipatch], size, nmax):
+            which_ipatch.append(ipatch)
+    return which_ipatch
+
+
 def magnitude(field_x, field_y, field_z, kept_patches=None):
     '''
     Calculates the magnitude of a vector field.
@@ -602,6 +825,8 @@ def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, 
 
     Returns:
         - integral: volumetric integral of the field along the sphere
+        
+    Author: Marco Molina
     """
     if kept_patches is None:
         total_npatch = len(field)
@@ -646,3 +871,90 @@ def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, 
     print('Total integrated field: ' + str(integral))
     
     return integral
+
+
+def compute_position_field_onepatch(args):
+    """
+    Returns a 3 matrices with the dimensions of the patch, containing the position for every cell centre
+
+    Args: tuple containing, in this order:
+        nx, ny, nz: extension of the patch (in cells at level n)
+        rx, ry, rz: comoving coordinates of the center of the leftmost cell of the patch
+        level: refinement level of the given patch
+        size: comoving box side (preferred length units)
+        nmax: cells at base level
+
+    Returns:
+        Matrices as defined
+        
+    Author: David Vallés
+    """
+    nx, ny, nz, rx, ry, rz, level, size, nmax, keep = args
+
+    if not keep:
+        return 0,0,0
+
+    cellsize = size / nmax / 2 ** level
+    first_x = rx - cellsize / 2
+    first_y = ry - cellsize / 2
+    first_z = rz - cellsize / 2
+    patch_x = np.zeros((nx, ny, nz), dtype='f4')
+    patch_y = np.zeros((nx, ny, nz), dtype='f4')
+    patch_z = np.zeros((nx, ny, nz), dtype='f4')
+
+    for i in range(nx):
+        patch_x[i, :, :] = first_x + i * cellsize
+    for j in range(ny):
+        patch_y[:, j, :] = first_y + j * cellsize
+    for k in range(nz):
+        patch_z[:, :, k] = first_z + k * cellsize
+
+    return patch_x, patch_y, patch_z
+
+
+def compute_position_fields(patchnx, patchny, patchnz, patchrx, patchry, patchrz, npatch, size, nmax, ncores=1,
+                            kept_patches=None):
+    """
+    Returns 3 fields (as usually defined) containing the x, y and z position for each of our cells centres.
+    Args:
+        patchnx, patchny, patchnz: x-extension of each patch (in level l cells) (and Y and Z)
+        patchrx, patchry, patchrz: physical position of the center of each patch first ¡l-1! cell
+        (and Y and Z)
+        npatch: number of patches in each level, starting in l=0
+        size: comoving size of the simulation box
+        nmax: cells at base level
+        ncores: number of cores to be used in the computation
+        kept_patches: 1d boolean array, True if the patch is kept, False if not. If None, all patches are kept.
+
+    Returns:
+        3 fields as described above
+        
+    Author: David Vallés
+    """
+    levels = create_vector_levels(npatch)
+    if kept_patches is None:
+        kept_patches = np.ones(patchnx.size, dtype=bool)
+
+    if ncores == 1 or ncores == 0 or ncores is None:
+        cellsrx = []
+        cellsry = []
+        cellsrz = []
+        for ipatch in range(npatch.sum()+1):
+            patches = compute_position_field_onepatch((patchnx[ipatch], patchny[ipatch], patchnz[ipatch],
+                                                        patchrx[ipatch], patchry[ipatch], patchrz[ipatch],
+                                                        levels[ipatch], size, nmax, kept_patches[ipatch]))
+            cellsrx.append(patches[0])
+            cellsry.append(patches[1])
+            cellsrz.append(patches[2])
+    else:
+        with Pool(ncores) as p:
+            positions = p.map(compute_position_field_onepatch,
+                            [(patchnx[ipatch], patchny[ipatch], patchnz[ipatch], patchrx[ipatch], patchry[ipatch],
+                            patchrz[ipatch], levels[ipatch], size, nmax, kept_patches[ipatch]) 
+                            for ipatch in range(len(patchnx))])
+
+        cellsrx = [p[0] for p in positions]
+        cellsry = [p[1] for p in positions]
+        cellsrz = [p[2] for p in positions]
+
+    return cellsrx, cellsry, cellsrz

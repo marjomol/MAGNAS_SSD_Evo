@@ -25,6 +25,7 @@ IND_PARAMS = {
     "nmay": 512,
     "nmaz": 512,
     "size": [40], # Size of the box in Mpc
+    "units": 1, # Factor to convert the units of the resulting volume integrals
     "evolution": True, # Calculate the evolution of the energy budget
     "mag": False, # Calculate magnetic induction components magnitudes
     "profiles": False, # Calculate the profiles
@@ -35,7 +36,7 @@ IND_PARAMS = {
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "rmin": 0.01, # Minimum radius to calculate the profiles
     "A2U": True, # Transform the AMR grid to a uniform grid
-    "level": 1000, # Max. level of the AMR grid to be used
+    "level": 100, # Max. level of the AMR grid to be used
     "up_to_level": 3, # AMR level up to which calculate
     "BOX": False, # Use a box shaped subvolume for the amr2uniform transformation
     "SPH": False, # Use a sphere shaped subvolume for the amr2uniform transformation
