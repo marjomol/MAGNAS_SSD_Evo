@@ -399,7 +399,7 @@ def vectorial_quantities(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz,
     )
     
 
-def induction_equation(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, diver_B, diver_v,
+def induction_equation(components, clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, diver_B, diver_v,
                         B_nabla_v_x, B_nabla_v_y, B_nabla_v_z, v_nabla_B_x, v_nabla_B_y, v_nabla_B_z,
                         curl_v_X_B_x, curl_v_X_B_y, curl_v_X_B_z, H, a, grid_npatch, clus_kp, grid_irr,
                         mag=False, verbose=False):
@@ -407,6 +407,7 @@ def induction_equation(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, div
     Computes the components of the cosmological magnetic induction equation and their magnitudes.
     
     Args:
+        - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
         - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
         - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
         - diver_B: divergence of the magnetic field
@@ -438,112 +439,131 @@ def induction_equation(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, div
     ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
     ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
     
-    ### We compute here each contribution to the magnetic fiel induction.
+    ### We compute here each contribution to the magnetic field induction.
     
     start_time_induction_terms = time.time() # Record the start time
     
-    if mag == True:
-                
-        MIE_diver_B_mag = utils.magnitude(MIE_diver_B_x, MIE_diver_B_y, MIE_diver_B_z, clus_kp)
-        MIE_drag_mag = utils.magnitude(MIE_drag_x, MIE_drag_y, MIE_drag_z, clus_kp)
-        MIE_compres_mag = utils.magnitude(MIE_compres_x, MIE_compres_y, MIE_compres_z, clus_kp)
-        MIE_stretch_mag = utils.magnitude(MIE_stretch_x, MIE_stretch_y, MIE_stretch_z, clus_kp)
-        MIE_advec_mag = utils.magnitude(MIE_advec_x, MIE_advec_y, MIE_advec_z, clus_kp)
-        MIE_total_mag = utils.magnitude(MIE_total_x, MIE_total_y, MIE_total_z, clus_kp)
-            
-    ### First, the null divergence of the magnetic field for numerical error purposes.
+    ### Preallocate all possible outputs as zeros
     
-    #### We have to run across all the patches.
-
-    MIE_diver_B_x = [((1/a) * clus_vx[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_diver_B_y = [((1/a) * clus_vy[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_diver_B_z = [((1/a) * clus_vz[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+    n = 1 + np.sum(grid_npatch)
+    zero = [0] * n
     
-    ### Now the compressive component.
+    results = {}
     
-    MIE_compres_x = [(-(1/a) * clus_Bx[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_compres_y = [(-(1/a) * clus_By[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_compres_z = [(-(1/a) * clus_Bz[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]            
-    
-    ### The stretching component.
-
-    MIE_stretch_x = [((1/a) * B_nabla_v_x[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_stretch_y = [((1/a) * B_nabla_v_y[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_stretch_z = [((1/a) * B_nabla_v_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-                
-    ### The advection component.
-
-    MIE_advec_x = [(-(1/a) * v_nabla_B_x[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_advec_y = [(-(1/a) * v_nabla_B_y[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_advec_z = [(-(1/a) * v_nabla_B_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-                
-    ### The cosmic drag component.
-    
-    MIE_drag_x = [(-(1/2) * H * clus_Bx[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_drag_y = [(-(1/2) * H * clus_By[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_drag_z = [(-(1/2) * H * clus_Bz[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    
-    ## The total magnetic induction energy in the compact way.
+    if components.get('divergence', False):
+        ### The null divergence of the magnetic field for numerical error purposes.
         
-    MIE_total_x = [((1/a) * curl_v_X_B_x[p] + MIE_drag_x[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_total_y = [((1/a) * curl_v_X_B_y[p] + MIE_drag_y[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    MIE_total_z = [((1/a) * curl_v_X_B_z[p] + MIE_drag_z[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
-    
+        results['MIE_diver_B_x'] = [((1/a) * clus_vx[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(n)] # We have to run across all the patches.
+        results['MIE_diver_B_y'] = [((1/a) * clus_vy[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_diver_B_z'] = [((1/a) * clus_vz[p] * diver_B[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+    else:
+        results['MIE_diver_B_x'] = zero
+        results['MIE_diver_B_y'] = zero
+        results['MIE_diver_B_z'] = zero
+
+    if components.get('compression', False):
+        ### The compressive component.
+        
+        results['MIE_compres_x'] = [(-(1/a) * clus_Bx[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_compres_y'] = [(-(1/a) * clus_By[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_compres_z'] = [(-(1/a) * clus_Bz[p] * diver_v[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+    else:
+        results['MIE_compres_x'] = zero
+        results['MIE_compres_y'] = zero
+        results['MIE_compres_z'] = zero
+
+    if components.get('stretching', False):
+        ### The stretching component.
+        
+        results['MIE_stretch_x'] = [((1/a) * B_nabla_v_x[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_stretch_y'] = [((1/a) * B_nabla_v_y[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_stretch_z'] = [((1/a) * B_nabla_v_z[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+    else:
+        results['MIE_stretch_x'] = zero
+        results['MIE_stretch_y'] = zero
+        results['MIE_stretch_z'] = zero
+
+    if components.get('advection', False):
+        ### The advection component.
+        
+        results['MIE_advec_x'] = [(-(1/a) * v_nabla_B_x[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_advec_y'] = [(-(1/a) * v_nabla_B_y[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_advec_z'] = [(-(1/a) * v_nabla_B_z[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+    else:
+        results['MIE_advec_x'] = zero
+        results['MIE_advec_y'] = zero
+        results['MIE_advec_z'] = zero
+
+    if components.get('drag', False):
+        ### The cosmic drag component.
+        
+        results['MIE_drag_x'] = [(-(1/2) * H * clus_Bx[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_drag_y'] = [(-(1/2) * H * clus_By[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        results['MIE_drag_z'] = [(-(1/2) * H * clus_Bz[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+    else:
+        results['MIE_drag_x'] = zero
+        results['MIE_drag_y'] = zero
+        results['MIE_drag_z'] = zero
+
+    if components.get('total', False):
+        ### The total magnetic induction energy in the compact way.
+        
+        if components.get('drag', False):
+            results['MIE_total_x'] = [((1/a) * curl_v_X_B_x[p] + results['MIE_drag_x'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+            results['MIE_total_y'] = [((1/a) * curl_v_X_B_y[p] + results['MIE_drag_y'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+            results['MIE_total_z'] = [((1/a) * curl_v_X_B_z[p] + results['MIE_drag_z'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
+        else:
+            results['MIE_total_x'] = [((1/a) * curl_v_X_B_x[p] + (-(1/2) * H * clus_Bx[p])) if clus_kp[p] != 0 else 0 for p in range(n)]
+            results['MIE_total_y'] = [((1/a) * curl_v_X_B_y[p] + (-(1/2) * H * clus_By[p])) if clus_kp[p] != 0 else 0 for p in range(n)]
+            results['MIE_total_z'] = [((1/a) * curl_v_X_B_z[p] + (-(1/2) * H * clus_Bz[p])) if clus_kp[p] != 0 else 0 for p in range(n)]
+
+    else:
+        results['MIE_total_x'] = zero
+        results['MIE_total_y'] = zero
+        results['MIE_total_z'] = zero
+
+    # Compute magnitudes if requested
+    magnitudes = {}
+    if mag:
+        if components.get('divergence', False):
+            magnitudes['MIE_diver_B_mag'] = utils.magnitude(results['MIE_diver_B_x'], results['MIE_diver_B_y'], results['MIE_diver_B_z'], clus_kp)
+        if components.get('compression', False):
+            magnitudes['MIE_compres_mag'] = utils.magnitude(results['MIE_compres_x'], results['MIE_compres_y'], results['MIE_compres_z'], clus_kp)
+        if components.get('stretching', False):
+            magnitudes['MIE_stretch_mag'] = utils.magnitude(results['MIE_stretch_x'], results['MIE_stretch_y'], results['MIE_stretch_z'], clus_kp)
+        if components.get('advection', False):
+            magnitudes['MIE_advec_mag'] = utils.magnitude(results['MIE_advec_x'], results['MIE_advec_y'], results['MIE_advec_z'], clus_kp)
+        if components.get('drag', False):
+            magnitudes['MIE_drag_mag'] = utils.magnitude(results['MIE_drag_x'], results['MIE_drag_y'], results['MIE_drag_z'], clus_kp)
+        if components.get('total', False):
+            magnitudes['MIE_total_mag'] = utils.magnitude(results['MIE_total_x'], results['MIE_total_y'], results['MIE_total_z'], clus_kp)
+
     end_time_induction_terms = time.time()
 
     total_time_induction_terms = end_time_induction_terms - start_time_induction_terms
     
     if verbose == True:
         print('Time for calculating the induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_terms))))
+    
+    # Build the return tuple dynamically
+    output = []
+    mag_output = []
+    for key, prefix in [
+        ('divergence', 'MIE_diver_B'),
+        ('compression', 'MIE_compres'),
+        ('stretching', 'MIE_stretch'),
+        ('advection', 'MIE_advec'),
+        ('drag', 'MIE_drag'),
+        ('total', 'MIE_total')
+    ]:
+        if components.get(key, False):
+            output.extend([results[f'{prefix}_x'], results[f'{prefix}_y'], results[f'{prefix}_z']])
+            if mag:
+                mag_key = f'{prefix}_mag'
+                if mag_key in magnitudes:
+                    mag_output.append(magnitudes[mag_key])
 
-    if mag == True:
-        return (
-            MIE_diver_B_x,
-            MIE_diver_B_y,
-            MIE_diver_B_z,
-            MIE_compres_x,
-            MIE_compres_y,
-            MIE_compres_z,
-            MIE_stretch_x,
-            MIE_stretch_y,
-            MIE_stretch_z,
-            MIE_advec_x,
-            MIE_advec_y,
-            MIE_advec_z,
-            MIE_drag_x,
-            MIE_drag_y,
-            MIE_drag_z,
-            MIE_total_x,
-            MIE_total_y,
-            MIE_total_z,
-            MIE_diver_B_mag,
-            MIE_drag_mag,
-            MIE_compres_mag,
-            MIE_stretch_mag,
-            MIE_advec_mag,
-            MIE_total_mag
-        )
-    else:
-        return (
-            MIE_diver_B_x,
-            MIE_diver_B_y,
-            MIE_diver_B_z,
-            MIE_compres_x,
-            MIE_compres_y,
-            MIE_compres_z,
-            MIE_stretch_x,
-            MIE_stretch_y,
-            MIE_stretch_z,
-            MIE_advec_x,
-            MIE_advec_y,
-            MIE_advec_z,
-            MIE_drag_x,
-            MIE_drag_y,
-            MIE_drag_z,
-            MIE_total_x,
-            MIE_total_y,
-            MIE_total_z
-        )
+    return tuple(output + mag_output)
 
 
 def induction_equation_energy(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, clus_rho_rho_b,

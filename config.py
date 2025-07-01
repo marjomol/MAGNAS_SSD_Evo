@@ -26,8 +26,15 @@ IND_PARAMS = {
     "nmaz": 512,
     "size": [40], # Size of the box in Mpc
     "units": 1, # Factor to convert the units of the resulting volume integrals
-    "evolution": True, # Calculate the evolution of the energy budget
+    "divergence": True, # Process the divergence induction component
+    "compression": True, # Process the compression induction component
+    "stretching": True, # Process the stretching induction component
+    "advection": True, # Process the advection induction component
+    "drag": True, # Process the drag induction component
+    "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
+    "energy": True, # Calculate the energy from the given components
+    "evolution": True, # Calculate the evolution of the energy budget
     "profiles": False, # Calculate the profiles
     "nbins": 25, # Number of bins for the profiles histograms
     "logbins": True, # Use logarithmic bins
@@ -154,6 +161,17 @@ IND_PARAMS["a"] = a
 IND_PARAMS["E"] = E
 IND_PARAMS["H"] = H
 IND_PARAMS["rho_b"] = rho_b
+
+## Inducction components to be checked
+
+IND_PARAMS["components"] = {
+    "divergence": IND_PARAMS["divergence"],
+    "compression": IND_PARAMS["compression"],
+    "stretching": IND_PARAMS["stretching"],
+    "advection": IND_PARAMS["advection"],
+    "drag": IND_PARAMS["drag"],
+    "total": IND_PARAMS["total"]
+}
 
 ## Check if the arrays can fit in memory or if an alternative memory handeling method is needed
 
