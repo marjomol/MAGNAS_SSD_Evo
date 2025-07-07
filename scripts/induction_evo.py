@@ -19,7 +19,6 @@ import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
 import scripts.readers as reader
-import amr2uniform as a2u
 from scripts.units import *
 from scipy.special import gamma
 from scipy import fft
@@ -163,7 +162,7 @@ def create_region(sims, it, coords, rad, F=1.0, BOX=False, SPH=False, verbose=Fa
     return region
 
 
-def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level=3, A2U=True, region=None, verbose=False):
+def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level, A2U=False, region=None, verbose=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -176,8 +175,8 @@ def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level=3, A2U=True
         - dir_grids: directory where the grids are stored
         - rawdir: directory where the raw data is stored
         - dir_gas: directory where the gas data is stored
-        - level: level of the AMR grid to be used (default is 3)
-        - A2U: boolean to transform the AMR grid to a uniform grid (default is True)
+        - level: level of the AMR grid to be used
+        - A2U: boolean to transform the AMR grid to a uniform grid (default is False)
         - region: region to be used (default is None)
         - verbose: boolean to print the data type loaded or not (default is False)
         
@@ -185,6 +184,10 @@ def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level=3, A2U=True
         
     Author: Marco Molina
     '''
+    # Load Simulation Data
+    
+    ## This are the parameters we will need for each cell together with the magnetic field and the velocity
+    ## We read the information for each snap and divide it in the different fields
 
     # Read grid data using the reader
     grid = reader.read_grids(
@@ -293,34 +296,36 @@ def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level=3, A2U=True
     clus_v2 = [clus_vx[p]**2 + clus_vy[p]**2 + clus_vz[p]**2 for p in range(1+np.sum(grid_npatch))]
     
     if verbose == True:
-        print('Working data type for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype)) 
+        print('Working data type for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype))
+        
+    results = {
+        'grid_irr': grid_irr,
+        'grid_t': grid_t,
+        'grid_zeta': grid_zeta,
+        'grid_npatch': grid_npatch,
+        'grid_patchnx': grid_patchnx,
+        'grid_patchny': grid_patchny,
+        'grid_patchnz': grid_patchnz,
+        'grid_patchrx': grid_patchrx,
+        'grid_patchry': grid_patchry,
+        'grid_patchrz': grid_patchrz,
+        'vector_levels': vector_levels,
+        'clus_rho_rho_b': clus_rho_rho_b,
+        'clus_vx': clus_vx,
+        'clus_vy': clus_vy,
+        'clus_vz': clus_vz,
+        'clus_cr0amr': clus_cr0amr,
+        'clus_solapst': clus_solapst,
+        'clus_kp': clus_kp,
+        'clus_Bx': clus_Bx,
+        'clus_By': clus_By,
+        'clus_Bz': clus_Bz,
+        'clus_b2': clus_b2,
+        'clus_B2': clus_B2,
+        'clus_v2': clus_v2
+    }
     
-    return (
-        grid_irr,
-        grid_t,
-        grid_zeta,
-        grid_npatch,
-        grid_patchnx,
-        grid_patchny,
-        grid_patchnz,
-        grid_patchrx,
-        grid_patchry,
-        grid_patchrz,
-        vector_levels,
-        clus_rho_rho_b,
-        clus_vx,
-        clus_vy,
-        clus_vz,
-        clus_cr0amr,
-        clus_solapst,
-        clus_kp,
-        clus_Bx,
-        clus_By,
-        clus_Bz,
-        clus_b2,
-        clus_B2,
-        clus_v2
-    )
+    return results
 
 
 def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
@@ -950,46 +955,6 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         print('Time for profile calculation in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_profile))))
         
     return results
-    
-
-def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
-                grid_patchnx, grid_patchny, grid_patchnz, 
-                grid_patchrx, grid_patchry, grid_patchrz,
-                nmax, size, Box,
-                up_to_level=4, ncores=1, verbose=False):
-    '''
-    Cleans and computes the uniform version of the given field for the given AMR grid for its further projection.
-    
-    Args:
-        - field: field to be cleaned and set uniform
-        - clus_cr0amr: AMR grid data
-        - clus_solapst: overlap data
-        - grid_npatch: number of patches in the grid
-        - grid_patchnx, grid_patchny, grid_patchnz: number of patches in the x, y, and z directions
-        - grid_patchrx, grid_patchry, grid_patchrz: patch sizes in the x, y, and z directions
-        - nmax: maximum number of patches in the grid
-        - size: size of the grid
-        - Box: box coordinates
-        - up_to_level: level of refinement in the AMR grid (default is 4)
-        - ncores: number of cores to use for the computation (default is 1)
-        - verbose: boolean to print the progress of the computation (default is False)
-        
-    Returns:
-        - uniform_field: cleaned and projected field on a uniform grid
-        
-    Author: Marco Molina
-    '''
-    
-    if up_to_level > 4:
-        print("Warning: The resolution level is larger than 4. The code will take a long time to run.")
-        
-    clean_field = utils.clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
-    
-    uniform_field = a2u.main(box = Box[1:], up_to_level = up_to_level, nmax = nmax, size = size, npatch = grid_npatch, patchnx = grid_patchnx, patchny = grid_patchny,
-                            patchnz = grid_patchnz, patchrx = grid_patchrx, patchry = grid_patchry, patchrz = grid_patchrz,
-                            field = clean_field, ncores = ncores, verbose = verbose)
-        
-    return uniform_field
 
 
 def uniform_induction(components, induction_equation,
@@ -1046,13 +1011,13 @@ def uniform_induction(components, induction_equation,
         ('total', 'MIE_total')
     ]:
         if components.get(key, False):
-            results[f'uniform_{prefix}_x'] = uniform_field(induction_equation[f'{prefix}_x'], clus_cr0amr, clus_solapst, grid_npatch,
+            results[f'uniform_{prefix}_x'] = utils.uniform_field(induction_equation[f'{prefix}_x'], clus_cr0amr, clus_solapst, grid_npatch,
                                                             grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
                                                             nmax, size, Box, up_to_level=up_to_level, ncores=ncores, verbose=verbose)
-            results[f'uniform_{prefix}_y'] = uniform_field(induction_equation[f'{prefix}_y'], clus_cr0amr, clus_solapst, grid_npatch,
+            results[f'uniform_{prefix}_y'] = utils.uniform_field(induction_equation[f'{prefix}_y'], clus_cr0amr, clus_solapst, grid_npatch,
                                                             grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
                                                             nmax, size, Box, up_to_level=up_to_level, ncores=ncores, verbose=verbose)
-            results[f'uniform_{prefix}_z'] = uniform_field(induction_equation[f'{prefix}_z'], clus_cr0amr, clus_solapst, grid_npatch,
+            results[f'uniform_{prefix}_z'] = utils.uniform_field(induction_equation[f'{prefix}_z'], clus_cr0amr, clus_solapst, grid_npatch,
                                                             grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
                                                             nmax, size, Box, up_to_level=up_to_level, ncores=ncores, verbose=verbose)
             if verbose == True:
@@ -1065,7 +1030,53 @@ def uniform_induction(components, induction_equation,
     return results
 
 
+def process_iteration(components, sims, it, coords, region, rad, rmin, level, rho_b,
+                    dir_grids, dir_params, dir_gas, 
+                    nbins=25, logbins=True, stencil=3, A2U=False, mag=False,
+                    energy_evolution=True, profiles=True, projection=True,
+                    verbose=False):
+    '''
+    Processes a single iteration of the cosmological magnetic induction equation calculations.
+    
+    Args:
+        - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - sims: name of the simulation
+        - it: index of the snapshot in the simulation
+        - coords: coordinates of the grid
+        - region: region of interest in the grid
+        - rad: radii of the most massive halo in the snapshot
+        - rmin: minimum radius for the radial profile
+        - level: level of refinement in the AMR grid
+        - rho_b: density contrast of the simulation
+        - dir_grids: directory containing the grids
+        - dir_params: directory containing the parameters
+        - dir_gas: directory containing the gas data
+        - nbins: number of bins for the radial profile (default is 25)
+        - logbins: boolean to use logarithmic bins (default is True)
+        - stencil: stencil size for the magnetic induction equation (default is 3)
+        - A2U: boolean to convert from A to U units (default is False)
+        - mag: boolean to compute magnitudes (default is False)
+        - energy_evolution: boolean to compute energy evolution (default is True)
+        - profiles: boolean to compute radial profiles (default is True)
+        - projection: boolean to compute uniform projection (default is True)
+        - verbose: boolean to print progress information (default is False)
+        
+    Returns:
+        
+    Author: Marco Molina
+    '''
 
+    start_time_Total = time.time() # Record the start time
+    
+    if verbose == True:
+        print(f'Processing iteration {it} for simulation {sims}...')
+
+    # Load Simulation Data
+    
+    ## This are the parameters we will need for each cell together with the magnetic field and the velocity
+    ## We read the information for each snap and divide it in the different fields
+    
+    data = load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level, A2U=A2U, region=region, verbose=verbose)
 
 
 

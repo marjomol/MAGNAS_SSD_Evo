@@ -33,9 +33,9 @@ IND_PARAMS = {
     "drag": True, # Process the drag induction component
     "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
-    "energy": True, # Calculate the energy from the given components
-    "evolution": True, # Calculate the evolution of the energy budget
-    "profiles": False, # Calculate the profiles
+    "energy_evolution": True, # Calculate the evolution of the energy budget
+    "profiles": False, # Calculate the profiles of the induction components
+    "projection": False, # Calculate the projection of the induction components
     "nbins": 25, # Number of bins for the profiles histograms
     "logbins": True, # Use logarithmic bins
     "F": 1.0, # Factor to multiply the viral radius to define the box size
@@ -62,6 +62,8 @@ IND_PARAMS = {
 
 OUTPUT_PARAMS = {
     "save": False,
+    "verbose": True,
+    "debug": False,
     "chunk_factor": 2,
     "bitformat": np.float32,
     "format": "npy",
@@ -69,8 +71,6 @@ OUTPUT_PARAMS = {
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
     "dpi": 300,
-    "verbose": True,
-    "debug": False,
     "run": f'MAGNAS_SSD_Evo_test',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     "it": [1050], # For different redshift snap iterations analysis
@@ -154,13 +154,13 @@ for i in range(len(OUTPUT_PARAMS['sims'])):
                     IND_PARAMS['namry'], IND_PARAMS['namrz'], size[i], path=data_folder + OUTPUT_PARAMS['sims'][i]+'/')
     dir_params.append(data_folder + OUTPUT_PARAMS['sims'][i] + '/')
     
-OUTPUT_PARAMS["dir_params"]
 IND_PARAMS["dx"] = dx
-IND_PARAMS["volume"] = volume
 IND_PARAMS["a"] = a
 IND_PARAMS["E"] = E
 IND_PARAMS["H"] = H
 IND_PARAMS["rho_b"] = rho_b
+IND_PARAMS["volume"] = volume
+OUTPUT_PARAMS["dir_params"] = dir_params
 
 ## Inducction components to be checked
 
