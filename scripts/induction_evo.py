@@ -21,7 +21,7 @@ import scripts.diff as diff
 import scripts.readers as reader
 from scripts.units import *
 from scipy.special import gamma
-from scipy import fft
+# from scipy import fft
 from matplotlib import pyplot as plt
 import pdb
 import multiprocessing as mp
@@ -110,7 +110,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=
 
 def create_region(sims, it, coords, rad, F=1.0, BOX=False, SPH=False, verbose=False):
     '''
-    Creates the boxes or spheres centered at the coordinates of the most massive halo in each snapshot.
+    Creates the boxes or spheres centered at the coordinates of the most massive halo or any other point in each snapshot.
     
     Args:
         - sims: list of simulation names
@@ -708,7 +708,7 @@ def induction_vol_integral(componets, induction_energy, clus_b2,
                             grid_irr, grid_zeta, grid_npatch,
                             grid_patchrx, grid_patchry, grid_patchrz,
                             grid_patchnx, grid_patchny, grid_patchnz,
-                            it, sims, nmax, size, coords, rad, a0, level,
+                            it, sims, nmax, size, coords, rad,
                             units =1, verbose=False):
     '''
     Computes the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
@@ -741,8 +741,6 @@ def induction_vol_integral(componets, induction_energy, clus_b2,
         - size: size of the grid
         - coords: coordinates of the grid
         - rad: radius of the grid
-        - a0: scale factor of the universe
-        - level: level of refinement in the AMR grid
         - units: factor to convert the units multiplied by the final result (default is 1)
         - verbose: boolean to print the data type loaded or not (default is False)
         
@@ -780,35 +778,36 @@ def induction_vol_integral(componets, induction_energy, clus_b2,
         ('total', 'MIE_total_B2')
     ]:
         if componets.get(key, False):
-            results[f'int_{prefix}'] = utils.vol_integral(induction_energy[prefix], units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+            results[f'int_{prefix}'] = utils.vol_integral(induction_energy[prefix], units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                            size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+                                                            size[0], nmax, coords, rad, kept_patches=clus_kp)
+    
             if verbose == True:
                 print(f'Snap {it} in {sims}: {key} energy density volume integral computed.')
         else:
             results[f'int_{prefix}'] = zero
     
     if induction_energy['kinetic_energy_density']:
-        results['int_kinetic_energy'] = utils.vol_integral(induction_energy['kinetic_energy_density'], units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+        results['int_kinetic_energy'] = utils.vol_integral(induction_energy['kinetic_energy_density'], units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                            size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+                                                            size[0], nmax, coords, rad, kept_patches=clus_kp)
         if verbose == True:
             print(f'Snap {it} in {sims}: Kinetic energy density volume integral computed.')
     else:
         results['int_kinetic_energy'] = zero
         
     if clus_b2:
-        results['int_b2'] = utils.vol_integral(clus_b2, units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+        results['int_b2'] = utils.vol_integral(clus_b2, units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                                 grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp)
+                                                size[0], nmax, coords, rad, kept_patches=clus_kp)
         if verbose == True:
             print(f'Snap {it} in {sims}: Magnetic energy density volume integral computed.')
     else:
         results['int_b2'] = zero
     
-    results['volume'] = utils.vol_integral(locals()[f'{prefix}_B2'], units, a0, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+    results['volume'] = utils.vol_integral(locals()[f'{prefix}_B2'], units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                            size[0], nmax, coords, rad, max_refined_level=level, kept_patches=clus_kp, vol=True)
+                                            size[0], nmax, coords, rad, kept_patches=clus_kp, vol=True)
 
     end_time_induction = time.time()
 
@@ -995,6 +994,8 @@ def uniform_induction(components, induction_equation,
     Author: Marco Molina
     '''
     
+    start_time_uniform = time.time() # Record the start time
+    
     ### Preallocate all possible outputs as zeros
     
     n = 1 + np.sum(grid_npatch)
@@ -1026,13 +1027,21 @@ def uniform_induction(components, induction_equation,
             results[f'uniform_{prefix}_x'] = zero
             results[f'uniform_{prefix}_y'] = zero
             results[f'uniform_{prefix}_z'] = zero
+            
+    end_time_uniform = time.time()
+    
+    total_time_uniform = end_time_uniform - start_time_uniform
+    
+    if verbose == True:
+        print('Time for uniform field calculation in snap '+ str(grid_npatch) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_uniform))))
         
     return results
 
 
-def process_iteration(components, sims, it, coords, region, rad, rmin, level, rho_b,
-                    dir_grids, dir_params, dir_gas, 
-                    nbins=25, logbins=True, stencil=3, A2U=False, mag=False,
+def process_iteration(components, dir_grids, dir_params, dir_gas,
+                    sims, it, coords, region, Box, rad, rmin, level, rho_b,
+                    nmax, size, H, a, units =1, nbins=25, logbins=True,
+                    stencil=3, A2U=False, mag=False,
                     energy_evolution=True, profiles=True, projection=True,
                     verbose=False):
     '''
@@ -1040,17 +1049,23 @@ def process_iteration(components, sims, it, coords, region, rad, rmin, level, rh
     
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - dir_grids: directory containing the grids
+        - dir_params: directory containing the parameters
+        - dir_gas: directory containing the gas data
         - sims: name of the simulation
         - it: index of the snapshot in the simulation
         - coords: coordinates of the grid
         - region: region of interest in the grid
+        - Box: box coordinates
         - rad: radii of the most massive halo in the snapshot
         - rmin: minimum radius for the radial profile
         - level: level of refinement in the AMR grid
         - rho_b: density contrast of the simulation
-        - dir_grids: directory containing the grids
-        - dir_params: directory containing the parameters
-        - dir_gas: directory containing the gas data
+        - nmax: maximum number of patches in the grid
+        - size: size of the grid
+        - units: factor to convert the units multiplied by the final result (default is 1
+        - H: Hubble parameter at the redshift of the snapshot
+        - a: scale factor of the universe at the redshift of the snapshot
         - nbins: number of bins for the radial profile (default is 25)
         - logbins: boolean to use logarithmic bins (default is True)
         - stencil: stencil size for the magnetic induction equation (default is 3)
@@ -1077,15 +1092,95 @@ def process_iteration(components, sims, it, coords, region, rad, rmin, level, rh
     ## We read the information for each snap and divide it in the different fields
     
     data = load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level, A2U=A2U, region=region, verbose=verbose)
+    
+    # Vectorial calculus
 
-
-
-
-
-
-
-
-
-    # if A2U == False:
-    #     del MIE_diver_B_x, MIE_diver_B_y, MIE_diver_B_z, MIE_compres_x, MIE_compres_y, MIE_compres_z, MIE_stretch_x, MIE_stretch_y, MIE_stretch_z, MIE_advec_x, MIE_advec_y, MIE_advec_z, MIE_drag_x, MIE_drag_y, MIE_drag_z, MIE_total_x, MIE_total_y, MIE_total_z, clus_vx, clus_vy, clus_vz, clus_Bx, clus_By, clus_Bz, clus_v2
-    #     gc.collect()
+    ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
+    
+    vectorial = vectorial_quantities(components, data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                                data['clus_vx'], data['clus_vy'], data['clus_vz'],
+                                data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+                                data['dx'], stencil=stencil, verbose=verbose)
+    
+    # Magnetic Induction Equation
+    
+    ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
+    ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
+    
+    induction = induction_equation(components, vectorial,
+                        data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                        data['clus_vx'], data['clus_vy'], data['clus_vz'],
+                        data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+                        H, a, mag=mag, verbose=verbose)
+    
+    # Magnetic Induction Equation in Terms of the Magnetic Energy
+    
+    ## In this section we are going to compute the cosmological induction equation in terms of the magnetic energy and its components, calculating them with the results obtained before.
+    ## This will be usefull to calculate volumetric integrals and energy budgets as the quantities involved are scalars.
+    
+    induction_energy = induction_equation_energy(components, induction,
+                            data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                            data['clus_rho_rho_b'], data['clus_v2'],
+                            data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+                            verbose=verbose)
+    
+    if energy_evolution:
+        # Volume Integral of the Magnetic Induction Equation
+    
+        ## Here we compute the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
+        ## This is done according to the derived equation and compared to the actual magnetic energy integrated along the studied volume. The kinetic energy
+        ## density is also computed.
+        
+        induction_energy_integral = induction_vol_integral(components, induction_energy, data['clus_b2'],
+                                data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
+                                data['grid_irr'], data['grid_zeta'], data['grid_npatch'],
+                                data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
+                                data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                                it, sims, nmax, size, coords, rad, a,
+                                level=level, units=units, verbose=verbose)
+    elif not energy_evolution:
+        induction_energy_integral = None
+        if verbose == True:
+            print('Energy evolution is set to False, skipping volume integral of the magnetic induction equation.')
+            
+    if profiles:
+        # Radial Profiles of the Magnetic Induction Equation
+    
+        ## We can calculate the radial profiles of the magnetic energy density in the volume we have considered (usually the virial volume)
+        
+        induction_energy_profiles = induction_radial_profiles(components, induction_energy, data['clus_b2'], data['clus_rho_rho_b'],
+                                    data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
+                                    data['grid_irr'], data['grid_npatch'],
+                                    data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
+                                    data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                                    it, sims, nmax, size, coords, rmin, rad,
+                                    nbins=nbins, logbins=logbins, level=level, verbose=verbose)
+    elif not profiles:
+        induction_energy_profiles = None
+        if verbose == True:
+            print('Profiles are set to False, skipping radial profiles of the magnetic induction equation.')
+            
+    if projection:
+        # Uniform Projection of the Magnetic Induction Equation
+    
+        ## We clean and compute the uniform section of the magnetic induction energy and its components for the given AMR grid for its further projection.
+        
+        induction_uniform = uniform_induction(components, induction,
+                            data['clus_cr0amr'], data['clus_solapst'], data['grid_npatch'],
+                            data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                            data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
+                            it, sims, nmax, size, Box,
+                            up_to_level=level, ncores=1, verbose=verbose)
+    elif not projection:
+        induction_uniform = None
+        if verbose == True:
+            print('Projection is set to False, skipping uniform projection of the magnetic induction equation.')
+            
+    end_time_Total = time.time()
+    
+    total_time_Total = end_time_Total - start_time_Total
+    
+    if verbose == True:
+        print(f'Time for processing iteration {it} in simulation {sims}: {strftime("%H:%M:%S", gmtime(total_time_Total))}')
+    
+    return vectorial, induction, induction_energy, induction_energy_integral, induction_energy_profiles, induction_uniform

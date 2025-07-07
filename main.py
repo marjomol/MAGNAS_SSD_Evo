@@ -1,13 +1,11 @@
 import numpy as np
 import time
-import gc
 import scripts.utils as utils
-from config import SEED_PARAMS as seed_params
+from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
-from programs.MAGNAS_SSD_Evo.scripts.induction_evo import generate_seed, load_and_transform_seed, load_and_merge_nyquist
+from programs.MAGNAS_SSD_Evo.scripts.induction_evo import find_most_massive_halo, create_region, process_iteration
 from scripts.plot_fields import plot_seed_spectrum, scan_animation_3D, zoom_animation_3D
 from scripts.units import *
-npatch = np.array([0]) # We only want the zero patch for the seed
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
 
 start_time = time.time()
@@ -16,54 +14,71 @@ start_time = time.time()
 # Only edit the section below
 # ============================
 
-def plot(Bx, By, Bz):       
-            
-    out_params["run"] = f'{out_params["run"]}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
-    
-    plot_seed_spectrum(seed_params["alpha"], Bx, By, Bz, seed_params["dx"], mode=1, 
-                        epsilon=seed_params["epsilon"], ncores=out_params["ncores"], verbose=out_params["verbose"],
-                        Save=True, DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
-    
-    # BM = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
-    
-    # scan_animation_3D(BM, seed_params["dx"], study_box=1, arrow_scale=10, units='Mpc', 
-    #                 title=f'Gaussian Filtered Magnetic Field Scan, $\\alpha$ = {seed_params["alpha"]}', verbose=out_params["verbose"], 
-    #                 Save=True, DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
-    
-    # zoom_animation_3D(BM, seed_params["dx"], arrow_scale=1, units='Mpc', 
-    #                 title=f'Gaussian Filtered Magnetic Field Zoom, $\\alpha$ = {seed_params["alpha"]}', verbose=out_params["verbose"], 
-    #                 Save=True, DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
-
-def load_and_plot():
-    
-    # Load Bx, By, Bz from binary Fortran format files
-    rshape = (seed_params["nmax"], seed_params["nmay"], seed_params["nmaz"])
-    
-    Bx = [utils.load_magnetic_field('x', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
-    By = [utils.load_magnetic_field('y', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
-    Bz = [utils.load_magnetic_field('z', True, rshape, out_params["data_folder"], out_params["format"], out_params["run"])]
-    
-    # Call the plot function
-    plot(Bx, By, Bz)
-
 if __name__ == "__main__":
     
-    if out_params["transform"]:
-        if out_params["save"] == True:
-            generate_seed(out_params["chunk_factor"], seed_params, out_params)
-            load_and_plot()
-            # utils.compare_arrays('x', True, out_params["data_folder"], out_params["run"])
-            # utils.compare_arrays('y', True, out_params["data_folder"], out_params["run"])
-            # utils.compare_arrays('z', True, out_params["data_folder"], out_params["run"])
-        else:
-            Bx, By, Bz = generate_seed(out_params["chunk_factor"], seed_params, out_params)
-            plot(Bx, By, Bz)
+    if out_params["parallel"]:
+        print(f'***********************************************************')
+        print(f"Running in parallel mode with {out_params['ncores']} cores")
+        print(f'***********************************************************')
+        # Find the most massive halo in each snapshot
+        Coords, Rad = find_most_massive_halo(out_params["sims"], out_params["it"], 
+                                            out_params["a0"], 
+                                            out_params["dir_halos"], 
+                                            out_params["dir_grids"], 
+                                            out_params["rawdir"], 
+                                            vir_kind=out_params["vir_kind"], 
+                                            rad_kind=out_params["rad_kind"], 
+                                            verbose=out_params["verbose"])
+        # Create the regions of interest in the grid
+        Region = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
+                            F=out_params["F"], BOX=out_params["BOX"], SPH=out_params["SPH"], 
+                            verbose=out_params["verbose"])
+        
+        # Process each iteration in parallel
+
     else:
-        generate_seed(out_params["chunk_factor"], seed_params, out_params)
-        for axis in ['x', 'y', 'z']:
-            load_and_merge_nyquist(axis, seed_params, out_params)
-            load_and_transform_seed(axis, seed_params, out_params, delete=False)
-        load_and_plot()
+        print(f'***********************************************************')
+        print("Running in serial mode")
+        print(f'***********************************************************')
+        # Find the most massive halo in each snapshot
+        Coords, Rad = find_most_massive_halo(out_params["sims"], out_params["it"], 
+                                            out_params["a0"], 
+                                            out_params["dir_halos"], 
+                                            out_params["dir_grids"], 
+                                            out_params["rawdir"], 
+                                            vir_kind=out_params["vir_kind"], 
+                                            rad_kind=out_params["rad_kind"], 
+                                            verbose=out_params["verbose"])
+        # Create the regions of interest in the grid
+        Region = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
+                            F=out_params["F"], BOX=out_params["BOX"], SPH=out_params["SPH"], 
+                            verbose=out_params["verbose"])
+        
+        # Process each iteration in serial
+        for it, sims in zip(out_params["it"], out_params["sims"]):
+            print(f'***********************************************************')
+            print(f"Processing iteration {it} in simulation {sims}")
+            print(f'***********************************************************')
+            # Process the iteration
+            process_iteration(ind_params["components"], 
+                            out_params["dir_grids"], 
+                            out_params["dir_params"], 
+                            out_params["dir_gas"], 
+                            sims, it, Coords, Region, 
+                            Region, Rad, ind_params["rmin"], 
+                            ind_params["level"], ind_params["rho_b"], 
+                            ind_params["nmax"], ind_params["size"], 
+                            ind_params["H"], ind_params["a"],
+                            units=ind_params["units"],
+                            nbins=ind_params["nbins"],
+                            logbins=ind_params["logbins"],
+                            stencil=out_params["stencil"],
+                            A2U=ind_params["A2U"],
+                            mag=ind_params["mag"],
+                            energy_evolution=ind_params["energy_evolution"],
+                            profiles=ind_params["profiles"],
+                            projection=ind_params["projection"],
+                            verbose=out_params["verbose"])
         
 # ============================
 # Only edit the section above
@@ -83,6 +98,6 @@ minutes, seconds = divmod(rem, 60)
 
 print(f'***********************************************************')
 print(f"Execution time: {int(hours)}h {int(minutes)}m {seconds:.5f}s")
-print(f"Box Cell Side: {seed_params['nmax'], seed_params['nmay'], seed_params['nmaz']}")
-print(f"Nº Cells: {seed_params['nmax']*seed_params['nmay']*seed_params['nmaz']}")
+print(f"Box Cell Side: {ind_params['nmax'], ind_params['nmay'], ind_params['nmaz']}")
+print(f"Nº Cells: {ind_params['nmax']*ind_params['nmay']*ind_params['nmaz']}")
 print(f'***********************************************************')
