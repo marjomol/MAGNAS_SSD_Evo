@@ -11,12 +11,13 @@ Created by Marco Molina Pradillo
 import numpy as np
 import sys
 import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 from scipy.io import FortranFile
 import h5py
 import psutil
 import amr2uniform as a2u
 from multiprocessing import Pool
-from config import SEED_PARAMS as seed_params
+from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
 
 def check_memory():

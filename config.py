@@ -34,8 +34,8 @@ IND_PARAMS = {
     "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": True, # Calculate the evolution of the energy budget
-    "profiles": False, # Calculate the profiles of the induction components
-    "projection": False, # Calculate the projection of the induction components
+    "profiles": True, # Calculate the profiles of the induction components
+    "projection": True, # Calculate the projection of the induction components
     "nbins": 25, # Number of bins for the profiles histograms
     "logbins": True, # Use logarithmic bins
     "F": 1.0, # Factor to multiply the viral radius to define the box size
@@ -45,8 +45,7 @@ IND_PARAMS = {
     "A2U": True, # Transform the AMR grid to a uniform grid
     "level": 100, # Max. level of the AMR grid to be used
     "up_to_level": 3, # AMR level up to which calculate
-    "BOX": False, # Use a box shaped subvolume for the amr2uniform transformation
-    "SPH": False, # Use a sphere shaped subvolume for the amr2uniform transformation
+    "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "epsilon": 1e-30,
     "npalev": 13000,
     "nlevels": 7,
@@ -105,9 +104,13 @@ ID2 = OUTPUT_PARAMS["ID2"]
 # We create the folder for the plots and data
 image_folder = outdir + plotdir + ID1 + f'MAGNAS_SSD_{ID2}'
 data_folder = outdir + rawdir + ID1 + f'MAGNAS_SSD_{ID2}'
+parameters_folders = []
 
 # List of folders to check
 folders = [image_folder, data_folder]
+for i in range(len(OUTPUT_PARAMS['sims'])):
+    folders.append(data_folder + '/' + OUTPUT_PARAMS['sims'][i] + '/')
+    parameters_folders.append(data_folder + '/' + OUTPUT_PARAMS['sims'][i] + '/')
 
 for folder in folders:
     # Check if the directory already exists
@@ -120,6 +123,7 @@ for folder in folders:
 
 OUTPUT_PARAMS["image_folder"] = image_folder
 OUTPUT_PARAMS["data_folder"] = data_folder
+OUTPUT_PARAMS["parameters_folders"] = parameters_folders
 
 # Determine the format of the output files
 if OUTPUT_PARAMS["bitformat"] == np.float32:
@@ -148,10 +152,12 @@ dir_params = [] # Directories for each simulation parameter set
 
 for i in range(len(OUTPUT_PARAMS['sims'])):
     
+    parameters_folder = data_folder + '/' + OUTPUT_PARAMS['sims'][i]+'/'
+    
     volume.append(size[i]**3) # (Mpc/h)^3
     write_parameters(IND_PARAMS['nmax'], IND_PARAMS['nmay'], IND_PARAMS['nmaz'],
                     IND_PARAMS['npalev'], IND_PARAMS['nlevels'], IND_PARAMS['namrx'],
-                    IND_PARAMS['namry'], IND_PARAMS['namrz'], size[i], path=data_folder + OUTPUT_PARAMS['sims'][i]+'/')
+                    IND_PARAMS['namry'], IND_PARAMS['namrz'], size[i], path=parameters_folders[i])
     dir_params.append(data_folder + OUTPUT_PARAMS['sims'][i] + '/')
     
 IND_PARAMS["dx"] = dx

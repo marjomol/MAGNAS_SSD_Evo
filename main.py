@@ -31,7 +31,7 @@ if __name__ == "__main__":
                                             verbose=out_params["verbose"])
         # Create the regions of interest in the grid
         Region = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
-                            F=out_params["F"], BOX=out_params["BOX"], SPH=out_params["SPH"], 
+                            F=out_params["F"], reg=out_params["region"], 
                             verbose=out_params["verbose"])
         
         # Process each iteration in parallel

@@ -108,7 +108,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=
     return coords, rad
 
 
-def create_region(sims, it, coords, rad, F=1.0, BOX=False, SPH=False, verbose=False):
+def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
     '''
     Creates the boxes or spheres centered at the coordinates of the most massive halo or any other point in each snapshot.
     
@@ -118,8 +118,9 @@ def create_region(sims, it, coords, rad, F=1.0, BOX=False, SPH=False, verbose=Fa
         - coords: list of coordinates of the most massive halo in each snapshot
         - rad: list of radii of the most massive halo in each snapshot
         - F: factor to scale the radius (default is 1.0)
-        - BOX: boolean to create boxes or not (default is False)
-        - SPH: boolean to create spheres or not (default is False)
+        - red: region type to create ('BOX' or 'SPH', default is 'BOX')
+            - BOX: creates a box
+            - SPH: creates a sphere
         - verbose: boolean to print the coordinates and radius or not
         
     Returns:
@@ -127,7 +128,17 @@ def create_region(sims, it, coords, rad, F=1.0, BOX=False, SPH=False, verbose=Fa
         
     Author: Marco Molina
     '''
-
+    
+    if reg == 'BOX':
+        BOX = True
+        SPH = False
+    elif reg == 'SPH':
+        BOX = False
+        SPH = True
+    else:
+        BOX = False
+        SPH = False
+        
     Rad = []
     Box = []
     Sph = []
@@ -150,7 +161,7 @@ def create_region(sims, it, coords, rad, F=1.0, BOX=False, SPH=False, verbose=Fa
                 print("Radius: " + str(Rad[-1]))
                 print("Box: " + str(Box[-1]))
                 print("Sphere: " + str(Sph[-1]))
-                
+    
     if BOX == True:
         region = Box
     else:
