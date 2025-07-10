@@ -18,6 +18,7 @@ from time import gmtime
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
+from units import *
 import scripts.readers as reader
 from scripts.units import *
 from scipy.special import gamma
@@ -28,7 +29,7 @@ import multiprocessing as mp
 np.set_printoptions(linewidth=200)
 
 
-def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=1, rad_kind=1, verbose=False):
+def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_kind=1, rad_kind=1, verbose=False):
     '''
     Finds the coordinates and radius of the most massive halo in each snapshot of the simulations. In case
     we are looking for the most massive halo to center our analysis, we need to build the python halo catalogue
@@ -40,7 +41,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=
         - a0: scale factor of the simulation (typically 1.0 for the last snapshot)
         - dir_halos: directory where the halo catalogues are stored
         - dir_grids: directory where the grids are stored
-        - rawdir: directory where the raw data is stored
+        - data_folder: directory where the data is stored
         - vir_kind: kind of virial radius to use (1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch)
         - rad_kind: kind of radius to use (1: Comoving, 2: Physical)
         - verbose: boolean to print the coordinates and radius or not
@@ -63,7 +64,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=
             halos = reader.read_families(it[j], path=dir_halos, output_format='dictionaries', output_redshift=False,
                         min_mass=None, exclude_subhaloes=True, read_region=None, keep_boundary_contributions=False)
             
-            _,_,_,_,zeta = reader.read_grids(it = it[j], path=dir_grids+sims[i], parameters_path=rawdir+sims[i]+'/', digits=5, read_general=True, read_patchnum=False, read_dmpartnum=False,
+            _,_,_,_,zeta = reader.read_grids(it = it[j], path=dir_grids+sims[i], parameters_path=data_folder+'/'+sims[i]+'/', digits=5, read_general=True, read_patchnum=False, read_dmpartnum=False,
             read_patchcellextension=False, read_patchcellposition=False, read_patchposition=False, read_patchparent=False, nparray=False)
             
             if j == len(it) - 1:
@@ -101,6 +102,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, rawdir, vir_kind=
                 print("y: " + str(coords[-1][1]))
                 print("z: " + str(coords[-1][2]))
                 print("Radius: " + str(rad[-1]))
+                print("Mass: " + str(halos[max_mass_index]['M']*mass_to_sun) + " Msun")
                 
     coords = coords[::-1]
     rad = rad[::-1]
@@ -154,11 +156,6 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
             if verbose:
                         
                 # Print the coordinates
-                print("Coordinates of the most massive halo in snap " + str(it[j]) + ":")
-                print("x: " + str(coords[i+j][0]))
-                print("y: " + str(coords[i+j][1]))
-                print("z: " + str(coords[i+j][2]))
-                print("Radius: " + str(Rad[-1]))
                 print("Box: " + str(Box[-1]))
                 print("Sphere: " + str(Sph[-1]))
     
@@ -173,7 +170,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
     return region
 
 
-def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level, A2U=False, region=None, verbose=False):
+def load_data(sims, it, rho_b, dir_grids, dir_gas, dir_params, level, A2U=False, region=None, verbose=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -184,8 +181,8 @@ def load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level, A2U=False,
         - it: list of snapshots
         - rho_b: background density of the universe
         - dir_grids: directory where the grids are stored
-        - rawdir: directory where the raw data is stored
         - dir_gas: directory where the gas data is stored
+        - dir_params: directory where the parameters are stored
         - level: level of the AMR grid to be used
         - A2U: boolean to transform the AMR grid to a uniform grid (default is False)
         - region: region to be used (default is None)
@@ -386,21 +383,21 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     if components.get('divergence', False):
         ### We compute the divergence of the magnetic field
         
-        results['diver_B'] = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, stencil, clus_kp)
+        results['diver_B'] = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['diver_B'] = zero
         
     if components.get('compression', False):
         ### We compute the divergence of the velocity field
         
-        results['diver_v'] = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, stencil, clus_kp)
+        results['diver_v'] = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['diver_v'] = zero
         
     if components.get('stretching', False):
         ### We compute the directional derivative of the velocity field along the magnetic field
         
-        results['B_nabla_v_x'], results['B_nabla_v_y'], results['B_nabla_v_z'] = diff.directional_derivative_vector_field(clus_vx, clus_vy, clus_vz, clus_Bx, clus_By, clus_Bz, dx, grid_npatch, stencil, clus_kp)
+        results['B_nabla_v_x'], results['B_nabla_v_y'], results['B_nabla_v_z'] = diff.directional_derivative_vector_field(clus_vx, clus_vy, clus_vz, clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['B_nabla_v_x'] = zero
         results['B_nabla_v_y'] = zero
@@ -409,7 +406,7 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     if components.get('advection', False):
         ### We compute the directional derivative of the magnetic field along the velocity field
     
-        results['v_nabla_B_x'], results['v_nabla_B_y'], results['v_nabla_B_z'] = diff.directional_derivative_vector_field(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, dx, grid_npatch, stencil, clus_kp)
+        results['v_nabla_B_x'], results['v_nabla_B_y'], results['v_nabla_B_z'] = diff.directional_derivative_vector_field(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['v_nabla_B_x'] = zero
         results['v_nabla_B_y'] = zero
@@ -424,7 +421,7 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
             
         ### The total induction as the curl of the cross product of the velocity and magnetic field with drag term.
         
-        results['curl_v_X_B_x'], results['curl_v_X_B_y'], results['curl_v_X_B_z'] = diff.curl(v_X_B_x, v_X_B_y, v_X_B_z, dx, grid_npatch, stencil, clus_kp)
+        results['curl_v_X_B_x'], results['curl_v_X_B_y'], results['curl_v_X_B_z'] = diff.curl(v_X_B_x, v_X_B_y, v_X_B_z, dx, grid_npatch, clus_kp, stencil)
     else:
         results['curl_v_X_B_x'] = zero
         results['curl_v_X_B_y'] = zero
@@ -653,7 +650,7 @@ def induction_equation_energy(components, induction_equation,
         ## The null divergence of the magnetic field energy for numerical error purposes.
 
         results['MIE_diver_B2'] = [(clus_Bx[p] * induction_equation['MIE_diver_B_x'][p] + clus_By[p] * induction_equation['MIE_diver_B_y'][p]
-                                + clus_Bz[p] * induction_equation['MIE_diver_B_z'][p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                                + clus_Bz[p] * induction_equation['MIE_diver_B_z'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
     else:
         results['MIE_diver_B2'] = zero
         
@@ -661,7 +658,7 @@ def induction_equation_energy(components, induction_equation,
         ## The compressive component of the magnetic field induction energy.
         
         results['MIE_compres_B2'] = [(clus_Bx[p] * induction_equation['MIE_compres_x'][p] + clus_By[p] * induction_equation['MIE_compres_y'][p]
-                                + clus_Bz[p] * induction_equation['MIE_compres_z'][p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                                + clus_Bz[p] * induction_equation['MIE_compres_z'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
     else:
         results['MIE_compres_B2'] = zero
     
@@ -669,7 +666,7 @@ def induction_equation_energy(components, induction_equation,
         ## The stretching component.
         
         results['MIE_stretch_B2'] = [(clus_Bx[p] * induction_equation['MIE_stretch_x'][p] + clus_By[p] * induction_equation['MIE_stretch_y'][p]
-                                + clus_Bz[p] * induction_equation['MIE_stretch_z'][p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                                + clus_Bz[p] * induction_equation['MIE_stretch_z'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
     else:
         results['MIE_stretch_B2'] = zero
         
@@ -677,7 +674,7 @@ def induction_equation_energy(components, induction_equation,
         ## The advection component.
         
         results['MIE_advec_B2'] = [(clus_Bx[p] * induction_equation['MIE_advec_x'][p] + clus_By[p] * induction_equation['MIE_advec_y'][p]
-                                + clus_Bz[p] * induction_equation['MIE_advec_z'][p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                                + clus_Bz[p] * induction_equation['MIE_advec_z'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
     else:
         results['MIE_advec_B2'] = zero    
     
@@ -685,7 +682,7 @@ def induction_equation_energy(components, induction_equation,
         ## The cosmic drag component.
         
         results['MIE_drag_B2'] = [(clus_Bx[p] * induction_equation['MIE_drag_x'][p] + clus_By[p] * induction_equation['MIE_drag_y'][p]
-                                + clus_Bz[p] * induction_equation['MIE_drag_z'][p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                                + clus_Bz[p] * induction_equation['MIE_drag_z'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
     else:
         results['MIE_drag_B2'] = zero
     
@@ -693,14 +690,14 @@ def induction_equation_energy(components, induction_equation,
         ## The total magnetic induction energy in the compact way.
         
         results['MIE_total_B2'] = [(clus_Bx[p] * induction_equation['MIE_total_x'][p] + clus_By[p] * induction_equation['MIE_total_y'][p]
-                                + clus_Bz[p] * induction_equation['MIE_total_z'][p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+                                + clus_Bz[p] * induction_equation['MIE_total_z'][p]) if clus_kp[p] != 0 else 0 for p in range(n)]
     else:
         results['MIE_total_B2'] = zero
 
     ## The cinectic energy.
 
     if clus_rho_rho_b:
-        results['kinetic_energy_density'] = [((1/2) * clus_rho_rho_b[p] * clus_v2[p]) if clus_kp[p] != 0 else 0 for p in range(1+np.sum(grid_npatch))]
+        results['kinetic_energy_density'] = [((1/2) * clus_rho_rho_b[p] * clus_v2[p]) if clus_kp[p] != 0 else 0 for p in range(n)]
     else:
         results['kinetic_energy_density'] = zero
     
@@ -791,34 +788,34 @@ def induction_vol_integral(componets, induction_energy, clus_b2,
         if componets.get(key, False):
             results[f'int_{prefix}'] = utils.vol_integral(induction_energy[prefix], units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                            size[0], nmax, coords, rad, kept_patches=clus_kp)
+                                                            size, nmax, coords, rad, kept_patches=clus_kp)
     
             if verbose == True:
-                print(f'Snap {it} in {sims}: {key} energy density volume integral computed.')
+                print(f'Snap {it} in {sims}: {key} energy density volume integral done')
         else:
             results[f'int_{prefix}'] = zero
     
     if induction_energy['kinetic_energy_density']:
         results['int_kinetic_energy'] = utils.vol_integral(induction_energy['kinetic_energy_density'], units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                            size[0], nmax, coords, rad, kept_patches=clus_kp)
+                                                            size, nmax, coords, rad, kept_patches=clus_kp)
         if verbose == True:
-            print(f'Snap {it} in {sims}: Kinetic energy density volume integral computed.')
+            print(f'Snap {it} in {sims}: Kinetic energy density volume integral done')
     else:
         results['int_kinetic_energy'] = zero
         
     if clus_b2:
         results['int_b2'] = utils.vol_integral(clus_b2, units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                                 grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                size[0], nmax, coords, rad, kept_patches=clus_kp)
+                                                size, nmax, coords, rad, kept_patches=clus_kp)
         if verbose == True:
-            print(f'Snap {it} in {sims}: Magnetic energy density volume integral computed.')
+            print(f'Snap {it} in {sims}: Magnetic energy density volume integral done')
     else:
         results['int_b2'] = zero
     
-    results['volume'] = utils.vol_integral(locals()[f'{prefix}_B2'], units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+    results['volume'] = utils.vol_integral(induction_energy[prefix], units, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                            size[0], nmax, coords, rad, kept_patches=clus_kp, vol=True)
+                                            size, nmax, coords, rad, kept_patches=clus_kp, vol=True)
 
     end_time_induction = time.time()
 
@@ -866,9 +863,9 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         - sims: name of the simulation
         - nmax: maximum number of patches
         - size: size of the grid
-        - coords: coordinates of the grid
+        - coords: coordinates of the region
         - rmin: minimum radius for the radial profile
-        - rad: radius of the grid
+        - rad: radius of the region
         - nbins: number of bins for the radial profile (default is 50)
         - logbins: boolean to use logarithmic bins (default is False)
         - level: level of refinement in the AMR grid (default is 0)
@@ -895,7 +892,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     start_time_profile = time.time() # Record the start time
 
     X, Y, Z = utils.compute_position_fields(grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz, grid_npatch, 
-                                            size[0], nmax, ncores=1, kept_patches=clus_kp)
+                                            size, nmax, ncores=1, kept_patches=clus_kp)
     
     ### Preallocate all possible outputs as zeros
     
@@ -916,7 +913,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
             clean_field = utils.clean_field(induction_energy[prefix], clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
             _, results[f'{prefix}_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
                                             nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                            solapst=clus_solapst, npatch=grid_npatch, size=size[0], nmax=nmax, up_to_level=level)
+                                            solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
             if verbose:
                 print(f'Snap {it} in {sims}: {key} profile done')
         else:
@@ -926,7 +923,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         clean_field = utils.clean_field(induction_energy['kinetic_energy_density'], clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
         _, results['kinetic_energy_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
                                                 nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size[0], nmax=nmax, up_to_level=level)
+                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
         if verbose:
             print(f'Snap {it} in {sims}: Kinetic profile done')
     else:
@@ -936,7 +933,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         clean_field = utils.clean_field(clus_b2, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
         _, results['clus_B2_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
                                                 nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size[0], nmax=nmax, up_to_level=level)
+                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
         if verbose:
             print(f'Snap {it} in {sims}: B2 profile done')
     else:
@@ -946,14 +943,14 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         clean_field = utils.clean_field(clus_rho_rho_b, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
         profile_bin_centers, results['clus_rho_rho_b_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
                                                 nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size[0], nmax=nmax, up_to_level=level)
+                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
         if verbose:
             print(f'Snap {it} in {sims}: Density profile done')
     else:
         results['clus_rho_rho_b_profile'] = zero
         profile_bin_centers, _ = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
                                                 nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size[0], nmax=nmax, up_to_level=level)
+                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
     
     results['profile_bin_centers'] = profile_bin_centers
     
@@ -1049,8 +1046,8 @@ def uniform_induction(components, induction_equation,
     return results
 
 
-def process_iteration(components, dir_grids, dir_params, dir_gas,
-                    sims, it, coords, region, Box, rad, rmin, level, rho_b,
+def process_iteration(components, dir_grids, dir_gas, dir_params,
+                    sims, it, coords, region, Box, rad, rmin, level, up_to_level, rho_b,
                     nmax, size, H, a, units =1, nbins=25, logbins=True,
                     stencil=3, A2U=False, mag=False,
                     energy_evolution=True, profiles=True, projection=True,
@@ -1061,8 +1058,8 @@ def process_iteration(components, dir_grids, dir_params, dir_gas,
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
         - dir_grids: directory containing the grids
-        - dir_params: directory containing the parameters
         - dir_gas: directory containing the gas data
+        - dir_params: directory containing the parameters
         - sims: name of the simulation
         - it: index of the snapshot in the simulation
         - coords: coordinates of the grid
@@ -1071,6 +1068,7 @@ def process_iteration(components, dir_grids, dir_params, dir_gas,
         - rad: radii of the most massive halo in the snapshot
         - rmin: minimum radius for the radial profile
         - level: level of refinement in the AMR grid
+        - up_to_level: level up to which to clean and uniform the fields (default is 4)
         - rho_b: density contrast of the simulation
         - nmax: maximum number of patches in the grid
         - size: size of the grid
@@ -1095,30 +1093,34 @@ def process_iteration(components, dir_grids, dir_params, dir_gas,
     start_time_Total = time.time() # Record the start time
     
     if verbose == True:
-        print(f'Processing iteration {it} for simulation {sims}...')
+        print(f'********************************************************************************')
+        print(f"Processing iteration {it} in simulation {sims}")
+        print(f'********************************************************************************')
 
     # Load Simulation Data
     
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, rho_b, dir_grids, dir_params, dir_gas, level, A2U=A2U, region=region, verbose=verbose)
+    data = load_data(sims, it, rho_b, dir_grids, dir_gas, dir_params, level, A2U=A2U, region=region, verbose=verbose)
     
     # Vectorial calculus
 
     ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
     
+    dx = size/nmax
+    
     vectorial = vectorial_quantities(components, data['clus_Bx'], data['clus_By'], data['clus_Bz'],
                                 data['clus_vx'], data['clus_vy'], data['clus_vz'],
                                 data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                                data['dx'], stencil=stencil, verbose=verbose)
+                                dx, stencil=stencil, verbose=verbose)
     
     # Magnetic Induction Equation
     
     ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
     ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
     
-    induction = induction_equation(components, vectorial,
+    induction, magnitudes = induction_equation(components, vectorial,
                         data['clus_Bx'], data['clus_By'], data['clus_Bz'],
                         data['clus_vx'], data['clus_vy'], data['clus_vz'],
                         data['clus_kp'], data['grid_npatch'], data['grid_irr'],
@@ -1147,8 +1149,8 @@ def process_iteration(components, dir_grids, dir_params, dir_gas,
                                 data['grid_irr'], data['grid_zeta'], data['grid_npatch'],
                                 data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                                 data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
-                                it, sims, nmax, size, coords, rad, a,
-                                level=level, units=units, verbose=verbose)
+                                it, sims, nmax, size, coords, rad,
+                                units=units, verbose=verbose)
     elif not energy_evolution:
         induction_energy_integral = None
         if verbose == True:
@@ -1181,7 +1183,7 @@ def process_iteration(components, dir_grids, dir_params, dir_gas,
                             data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                             data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                             it, sims, nmax, size, Box,
-                            up_to_level=level, ncores=1, verbose=verbose)
+                            up_to_level=up_to_level, ncores=1, verbose=verbose)
     elif not projection:
         induction_uniform = None
         if verbose == True:
@@ -1194,4 +1196,4 @@ def process_iteration(components, dir_grids, dir_params, dir_gas,
     if verbose == True:
         print(f'Time for processing iteration {it} in simulation {sims}: {strftime("%H:%M:%S", gmtime(total_time_Total))}')
     
-    return vectorial, induction, induction_energy, induction_energy_integral, induction_energy_profiles, induction_uniform
+    return vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_energy_profiles, induction_uniform

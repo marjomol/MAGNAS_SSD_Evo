@@ -1,6 +1,6 @@
 """
-PRIMAL Seed Generator
-A tool to generate initial conditions for cosmological simulations of primordial magnetic fields.
+MAGNAS SSD Evolution
+A tool to analyse simulated cosmological magnetic field induction and the Small Scale Dynamo amplification.
 
 plot_fields module
 Contains functions to plot the magnetic field seed or any other interesting quantities.

@@ -570,7 +570,7 @@ def periodic_gradient(field, dx, npatch, kept_patches=None, stencil=3):
         
     return grad_x, grad_y, grad_z
 
-def periodic_divergence(field_x, field_y, field_z, dx, npatch, stencil=3, kept_patches=None):
+def periodic_divergence(field_x, field_y, field_z, dx, npatch, kept_patches=None, stencil=3,):
     '''
     Computes the divergence of a vector field defined on the AMR hierarchy of
     grids with periodic boundary conditions.
@@ -582,10 +582,10 @@ def periodic_divergence(field_x, field_y, field_z, dx, npatch, stencil=3, kept_p
         field_y: idem for the y-component
         field_z: idem for the z-component
         dx: the cell size of the coarsest grid
-        stencil: the stencil to use, either 3 (3-point) or 5 (5-point)
         npatch: the number of patches in each direction
         kept_patches: 1d boolean array, True if the patch is kept, False if not.
                     If None, all patches are kept.
+        stencil: the stencil to use, either 3 (3-point) or 5 (5-point)
 
     Returns:
         div: a list of numpy arrays, each one containing the divergence of the
@@ -609,7 +609,7 @@ def periodic_divergence(field_x, field_y, field_z, dx, npatch, stencil=3, kept_p
 
     return div
 
-def periodic_curl(field_x, field_y, field_z, dx, npatch, stencil=3, kept_patches=None):
+def periodic_curl(field_x, field_y, field_z, dx, npatch, kept_patches=None, stencil=3):
     '''
     Computes the curl of a vector field defined on the AMR hierarchy of
     grids with periodic boundary conditions.

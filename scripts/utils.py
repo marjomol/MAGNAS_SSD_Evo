@@ -1,9 +1,9 @@
 """
-PRIMAL Seed Generator
-A tool to generate initial conditions for cosmological simulations of primordial magnetic fields.
+MAGNAS SSD Evolution
+A tool to analyse simulated cosmological magnetic field induction and the Small Scale Dynamo amplification.
 
 utils module
-Contains utility tool functions used by the PRIMAL Seed Generator modules.
+Contains utility tool functions used by the MAGNAS SSD Evolution framework.
 
 Created by Marco Molina Pradillo
 """
@@ -39,7 +39,7 @@ def check_memory():
     print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
 
     # Calculate the size of the arrays in bytes
-    array_size = seed_params["nmax"] * seed_params["nmay"] * seed_params["nmaz"]
+    array_size = ind_params["nmax"] * ind_params["nmay"] * ind_params["nmaz"]
     array_size_bytes =  array_size * np.dtype(out_params["bitformat"]).itemsize
 
     print(f"Size of the arrays: {array_size_bytes / (1024 ** 3):.2f} GB")
@@ -110,9 +110,9 @@ def save_magnetic_field_seed(B, axis, real, dir, format, run):
             complex_flag = 1
     
     if complex_flag == 0:
-        name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
     else:
-        name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_fourier_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
     
     os.makedirs(dir, exist_ok=True)
     
@@ -166,9 +166,9 @@ def load_magnetic_field(axis, real, rshape, dir, format, run):
     assert real in [True, False], 'Invalid space value.'
     
     if real:
-        name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
     else:
-        name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_fourier_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
 
     print(f"Loading {name} from {dir}...")
     
@@ -253,9 +253,9 @@ def inspect_fortran_file(axis, real, dir, run):
     '''
     
     if real:
-        name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
     else:
-        name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_fourier_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
 
     filepath = os.path.join(dir, f'{name}.bin')
     
@@ -291,10 +291,10 @@ def get_fortran_file_size(axis, real, dir, run):
     assert real in [True, False], 'Invalid space value.'
     
     if real:
-        name = f'B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
         element_size = np.dtype(out_params["bitformat"]).itemsize
     else:
-        name = f'B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}'
+        name = f'B{axis}_fourier_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}'
         element_size = np.dtype(out_params["complex_bitformat"]).itemsize
     
     file_size = os.path.getsize(dir + f'/{name}.bin')
@@ -318,12 +318,12 @@ def compare_arrays(axis, real, dir, run):
     # Your original data
     if real:
         dtype = out_params["bitformat"]
-        Nx, Ny, Nz = seed_params["nmax"], seed_params["nmay"], seed_params["nmaz"]
-        original_data = np.load(f'{dir}/B{axis}_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}.npy')
+        Nx, Ny, Nz = ind_params["nmax"], ind_params["nmay"], ind_params["nmaz"]
+        original_data = np.load(f'{dir}/B{axis}_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}.npy')
     else:
         dtype = out_params["complex_bitformat"]
-        Nx, Ny, Nz = seed_params["nmax"]+1, seed_params["nmay"]+1, seed_params["nmaz"]+1
-        original_data = np.load(f'{dir}/B{axis}_fourier_{run}_{seed_params["nmax"]}_{seed_params["size"]}_{seed_params["alpha"]}.npy')
+        Nx, Ny, Nz = ind_params["nmax"]+1, ind_params["nmay"]+1, ind_params["nmaz"]+1
+        original_data = np.load(f'{dir}/B{axis}_fourier_{run}_{ind_params["nmax"]}_{ind_params["size"]}_{ind_params["alpha"]}.npy')
     
     # Fortran-loaded data
     fortran_data = np.fromfile(f'fortran_output_raw_{axis}.bin', dtype=dtype)
@@ -806,7 +806,7 @@ def magnitude2(field_x, field_y, field_z, kept_patches=None):
     return field
 
 
-def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, kept_patches=None):
+def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, kept_patches=None, vol=False):
     """
     Given a scalar field and a sphere defined with a center (x,y,z) and a radious together with the patch structure, returns the volumetric integral of the field along the sphere.
 
@@ -824,6 +824,7 @@ def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, 
         - coords: center of the sphere in a numpy array [x,y,z]
         - rad: radius of the sphere
         - kept_patches: boolean array to select the patches to be considered in the integration. True if the patch is kept, False if not. If None, all patches are kept.
+        - vol: if True, returns the volume of the region instead of the integral. Default is False.
 
     Returns:
         - integral: volumetric integral of the field along the sphere
@@ -841,6 +842,9 @@ def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, 
     a = 1 / (1 + zeta) # We compute the scale factor
     
     integral = 0
+    
+    if vol:
+        field = [np.ones_like(field[p]) for p in range(1 + np.sum(npatch))] # If vol is True, we just want the volume, so we set the field to 1
     
     for p in range(len(kept_patches)): # We run across all the patches
         
@@ -870,7 +874,7 @@ def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, 
     
     integral = units * integral
     
-    print('Total integrated field: ' + str(integral))
+    # print('Total integrated field: ' + str(integral))
     
     return integral
 
@@ -993,10 +997,10 @@ def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
     if up_to_level > 4:
         print("Warning: The resolution level is larger than 4. The code will take a long time to run.")
         
-    clean_field = clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
+    cleaned_field = clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
     
     uniform_field = a2u.main(box = Box[1:], up_to_level = up_to_level, nmax = nmax, size = size, npatch = grid_npatch, patchnx = grid_patchnx, patchny = grid_patchny,
                             patchnz = grid_patchnz, patchrx = grid_patchrx, patchry = grid_patchry, patchrz = grid_patchrz,
-                            field = clean_field, ncores = ncores, verbose = verbose)
+                            field = cleaned_field, ncores = ncores, verbose = verbose)
         
     return uniform_field

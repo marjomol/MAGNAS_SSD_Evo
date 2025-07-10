@@ -21,40 +21,40 @@ from scripts.readers import write_parameters
 # Induction Parameters #
 
 IND_PARAMS = {
-    "nmax": 512,
-    "nmay": 512,
-    "nmaz": 512,
+    "nmax": [128],
+    "nmay": [128],
+    "nmaz": [128],
     "size": [40], # Size of the box in Mpc
-    "units": 1, # Factor to convert the units of the resulting volume integrals
-    "divergence": True, # Process the divergence induction component
-    "compression": True, # Process the compression induction component
-    "stretching": True, # Process the stretching induction component
-    "advection": True, # Process the advection induction component
-    "drag": True, # Process the drag induction component
-    "total": True, # Process the total induction component
-    "mag": False, # Calculate magnetic induction components magnitudes
-    "energy_evolution": True, # Calculate the evolution of the energy budget
-    "profiles": True, # Calculate the profiles of the induction components
-    "projection": True, # Calculate the projection of the induction components
-    "nbins": 25, # Number of bins for the profiles histograms
+    "units": [1], # Factor to convert the units of the resulting volume integrals
+    "npalev": [13000],
+    "nlevels": [7],
+    "namrx": [32],
+    "namry": [32],
+    "namrz": [32],
+    "nbins": [25], # Number of bins for the profiles histograms
+    "rmin": [0.01], # Minimum radius to calculate the profiles
     "logbins": True, # Use logarithmic bins
     "F": 1.0, # Factor to multiply the viral radius to define the box size
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
-    "rmin": 0.01, # Minimum radius to calculate the profiles
-    "A2U": True, # Transform the AMR grid to a uniform grid
     "level": 100, # Max. level of the AMR grid to be used
     "up_to_level": 3, # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
-    "epsilon": 1e-30,
-    "npalev": 13000,
-    "nlevels": 7,
-    "namrx": 32,
-    "namry": 32,
-    "namrz": 32,
     "a0": a0_masclet,
     "H0": H0_masclet,
-    "zeta": 100
+    "zeta": 100,
+    "epsilon": 1e-30,
+    "divergence": True, # Process the divergence induction component
+    "compression": False, # Process the compression induction component
+    "stretching": False, # Process the stretching induction component
+    "advection": False, # Process the advection induction component
+    "drag": False, # Process the drag induction component
+    "total": False, # Process the total induction component
+    "mag": False, # Calculate magnetic induction components magnitudes
+    "energy_evolution": True, # Calculate the evolution of the energy budget
+    "profiles": True, # Calculate the profiles of the induction components
+    "projection": True, # Calculate the projection of the induction components
+    "A2U": True # Transform the AMR grid to a uniform grid
 }
 
 # Directories and Results Parameters #
@@ -140,7 +140,7 @@ a0 = IND_PARAMS["a0"]
 H0 = IND_PARAMS["H0"]
 zeta = IND_PARAMS["zeta"]
 
-dx = size[0]/nmax # Size of the cells in Mpc
+dx = [size[i]/nmax[i] for i in range(len(size))]  # Cell size in Mpc/h
 
 a = a0 / (1 + zeta)
 E = (omega_lambda + omega_k/a**2 + omega_m/a**3)**(1/2)
@@ -148,17 +148,13 @@ H = H0*E
 rho_b = 3 * (H0)**2 * omega_m * (1 + zeta)**3 # We compute the background density at this redshift
 
 volume = [] # (Mpc)^3
-dir_params = [] # Directories for each simulation parameter set
 
 for i in range(len(OUTPUT_PARAMS['sims'])):
     
-    parameters_folder = data_folder + '/' + OUTPUT_PARAMS['sims'][i]+'/'
-    
     volume.append(size[i]**3) # (Mpc/h)^3
-    write_parameters(IND_PARAMS['nmax'], IND_PARAMS['nmay'], IND_PARAMS['nmaz'],
-                    IND_PARAMS['npalev'], IND_PARAMS['nlevels'], IND_PARAMS['namrx'],
-                    IND_PARAMS['namry'], IND_PARAMS['namrz'], size[i], path=parameters_folders[i])
-    dir_params.append(data_folder + OUTPUT_PARAMS['sims'][i] + '/')
+    write_parameters(IND_PARAMS['nmax'][i], IND_PARAMS['nmay'][i], IND_PARAMS['nmaz'][i],
+                    IND_PARAMS['npalev'][i], IND_PARAMS['nlevels'][i], IND_PARAMS['namrx'][i],
+                    IND_PARAMS['namry'][i], IND_PARAMS['namrz'][i], size[i], path=parameters_folders[i])
     
 IND_PARAMS["dx"] = dx
 IND_PARAMS["a"] = a
@@ -166,7 +162,7 @@ IND_PARAMS["E"] = E
 IND_PARAMS["H"] = H
 IND_PARAMS["rho_b"] = rho_b
 IND_PARAMS["volume"] = volume
-OUTPUT_PARAMS["dir_params"] = dir_params
+OUTPUT_PARAMS["dir_params"] = parameters_folders
 
 ## Inducction components to be checked
 
@@ -189,8 +185,12 @@ ram_capacity_gb = ram_capacity / (1024 ** 3)
 
 print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
 
+max_nmax_index = int(np.argmax(IND_PARAMS["nmax"]))
+max_nmay_index = int(np.argmax(IND_PARAMS["nmay"]))
+max_nmaz_index = int(np.argmax(IND_PARAMS["nmaz"]))
+
 # Calculate the size of the arrays in bytes
-array_size = IND_PARAMS["nmax"] * IND_PARAMS["nmay"] * IND_PARAMS["nmaz"]
+array_size = IND_PARAMS["nmax"][max_nmax_index] * IND_PARAMS["nmay"][max_nmay_index] * IND_PARAMS["nmaz"][max_nmaz_index]
 array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
 
 print(f"Maximum size of the arrays involved: {array_size_bytes / (1024 ** 3):.2f} GB")
