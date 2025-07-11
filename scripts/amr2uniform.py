@@ -14,6 +14,9 @@ import numpy as np
 import sys
 import multiprocessing
 import utils
+from numba import njit, prange
+import warnings
+from numba.typed import List
 
 # DESCRIPTION
 # This function interpolates the AMR field to a uniform grid
@@ -371,6 +374,3 @@ def main(box, up_to_level, nmax, size,
     
 ############################################################################################################
 ############################################################################################################
-
-
-

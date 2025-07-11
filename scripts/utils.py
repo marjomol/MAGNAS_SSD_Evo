@@ -19,6 +19,9 @@ import amr2uniform as a2u
 from multiprocessing import Pool
 from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
+from numba import njit, prange
+import warnings
+from numba.typed import List
 
 def check_memory():
     '''
@@ -970,7 +973,7 @@ def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
                 grid_patchnx, grid_patchny, grid_patchnz, 
                 grid_patchrx, grid_patchry, grid_patchrz,
                 nmax, size, Box,
-                up_to_level=4, ncores=1, verbose=False):
+                up_to_level=4, ncores=1, clus_kp=None, verbose=False):
     '''
     Cleans and computes the uniform version of the given field for the given AMR grid for its further projection.
     
@@ -986,6 +989,7 @@ def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
         - Box: box coordinates
         - up_to_level: level of refinement in the AMR grid (default is 4)
         - ncores: number of cores to use for the computation (default is 1)
+        - clus_kp: boolean array to select the patches to be considered in the computation. True if the patch is kept, False if not.
         - verbose: boolean to print the progress of the computation (default is False)
         
     Returns:
@@ -997,10 +1001,262 @@ def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
     if up_to_level > 4:
         print("Warning: The resolution level is larger than 4. The code will take a long time to run.")
         
-    cleaned_field = clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
+    uniform_field = uniform_grid_zoom_interpolate(
+        field=field, box_limits=Box[1:], up_to_level=up_to_level,
+        npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
+        patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
+        patchrz=grid_patchrz, size=size, nmax=nmax,
+        interpolate=True, verbose=verbose, kept_patches=clus_kp, return_coords=False
+    )
+        
+    # cleaned_field = clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
     
-    uniform_field = a2u.main(box = Box[1:], up_to_level = up_to_level, nmax = nmax, size = size, npatch = grid_npatch, patchnx = grid_patchnx, patchny = grid_patchny,
-                            patchnz = grid_patchnz, patchrx = grid_patchrx, patchry = grid_patchry, patchrz = grid_patchrz,
-                            field = cleaned_field, ncores = ncores, verbose = verbose)
+    # uniform_field = a2u.main(box = Box[1:], up_to_level = up_to_level, nmax = nmax, size = size, npatch = grid_npatch, patchnx = grid_patchnx, patchny = grid_patchny,
+    #                         patchnz = grid_patchnz, patchrx = grid_patchrx, patchry = grid_patchry, patchrz = grid_patchrz,
+    #                         field = cleaned_field, ncores = ncores, verbose = verbose)
         
     return uniform_field
+
+################################### THIS IS OUR MAIN UNIGRID FUNCTION ###############################################
+def uniform_grid_zoom_interpolate(field, box_limits, up_to_level, npatch, patchnx, patchny, patchnz, patchrx, patchry,
+                                  patchrz, size, nmax, interpolate=True, verbose=False, kept_patches=None, return_coords=False):
+    """
+    Builds a uniform grid, zooming on a box specified by box_limits, at level up_to_level, containing the most refined
+    data at each region, and interpolating from coarser patches
+    Args:
+        field: field to be computed at the uniform grid. MUST BE UNCLEANED!!
+        box_limits: a tuple in the form (imin, imax, jmin, jmax, kmin, kmax). Limits should correspond to l=0 cell
+                    boundaries
+        up_to_level: level up to which the fine grid wants to be obtained
+        cr0amr: XXXXXXXXXXX
+        solapst: XXXXXXXXXXX
+        npatch: number of patches in each level, starting in l=0 (numpy vector of NLEVELS integers)
+        patchnx, patchny, patchnz: x-extension of each patch (in level l cells) (and Y and Z)
+        patchrx, patchry, patchrz: physical position of the center of each patch first ¡l-1! cell
+                                   (and Y and Z)
+        size: comoving side of the simulation box
+        nmax: cells at base level
+        interpolate (bool): if True (default) uses linear iterpolation for low-resolution regions. If False, uses NGP.
+        verbose: if True, prints the patch being opened at a time
+        kept_patches: list of patches that are read. If None, all patches are assumed to be present
+        return_coords: if True, returns the coordinates of the uniform grid
+
+    Returns:
+        Uniform grid as described, and optionally the coordinates of the grid
+
+    Author: David Vallés
+    
+    KNOWN ISSUES: if interpolate=True and box_limits reaches the edge of the simulation box, the interpolation will fail,
+                  crashing the interpreter. This is a known issue and will be fixed in future versions.              
+    """
+    
+    if up_to_level > 4:
+        print("Warning: The resolution level is larger than 4. The code will take a long time to run.")
+
+    def intt(x):
+        if x >= 0:
+            return int(x)
+        else:
+            return int(x) - 1
+
+    if kept_patches is None:
+        kept_patches = np.ones(patchnx.size, dtype='bool')
+
+    coarse_cellsize = size / nmax
+    uniform_cellsize = size / nmax / 2 ** up_to_level
+
+    if type(box_limits[0]) in [float, np.float32, np.float64, np.float128]:
+        box_limits = [intt((box_limits[0] + size / 2) * nmax / size),
+                      intt((box_limits[1] + size / 2) * nmax / size)+1,
+                      intt((box_limits[2] + size / 2) * nmax / size),
+                      intt((box_limits[3] + size / 2) * nmax / size)+1,
+                      intt((box_limits[4] + size / 2) * nmax / size),
+                      intt((box_limits[5] + size / 2) * nmax / size)+1]
+    bimin = box_limits[0]
+    bimax = box_limits[1]
+    bjmin = box_limits[2]
+    bjmax = box_limits[3]
+    bkmin = box_limits[4]
+    bkmax = box_limits[5]
+
+    # Warning for the issue mentioned above
+    if interpolate and (bimin == 0 or bimax == nmax-1 or bjmin == 0 or bjmax == nmax-1 or bkmin == 0 or bkmax == nmax-1):
+        warnings.warn('Interpolation may fail at the edges of the simulation box. Please, use NGP interpolation or '+\
+                        'avoid reaching the edges of the box. This issue will be fixed in future versions.')
+
+    bxmin = -size / 2 + bimin * coarse_cellsize
+    bxmax = -size / 2 + (bimax + 1) * coarse_cellsize
+    bymin = -size / 2 + bjmin * coarse_cellsize
+    bymax = -size / 2 + (bjmax + 1) * coarse_cellsize
+    bzmin = -size / 2 + bkmin * coarse_cellsize
+    bzmax = -size / 2 + (bkmax + 1) * coarse_cellsize
+
+    # BASE GRID
+    reduction = 2 ** up_to_level
+    uniform_size_x = (bimax - bimin + 1) * reduction
+    uniform_size_y = (bjmax - bjmin + 1) * reduction
+    uniform_size_z = (bkmax - bkmin + 1) * reduction
+
+    fine_coordinates = List([np.linspace(bxmin + uniform_cellsize / 2, bxmax - uniform_cellsize / 2, uniform_size_x),
+                        np.linspace(bymin + uniform_cellsize / 2, bymax - uniform_cellsize / 2, uniform_size_y),
+                        np.linspace(bzmin + uniform_cellsize / 2, bzmax - uniform_cellsize / 2, uniform_size_z)])
+
+    vertices_patches = np.zeros((npatch[0:up_to_level + 1].sum() + 1, 6))
+    vertices_patches[0, :] = [-size / 2, size / 2, -size / 2, size / 2, -size / 2, size / 2]
+    for l in range(1, up_to_level + 1):
+        dx = coarse_cellsize / 2 ** l
+        for ipatch in range(npatch[0:l].sum() + 1, npatch[0:l + 1].sum() + 1):
+            vertices_patches[ipatch, 0] = patchrx[ipatch] - dx
+            vertices_patches[ipatch, 2] = patchry[ipatch] - dx
+            vertices_patches[ipatch, 4] = patchrz[ipatch] - dx
+            vertices_patches[ipatch, 1] = vertices_patches[ipatch, 0] + patchnx[ipatch] * dx
+            vertices_patches[ipatch, 3] = vertices_patches[ipatch, 2] + patchny[ipatch] * dx
+            vertices_patches[ipatch, 5] = vertices_patches[ipatch, 4] + patchnz[ipatch] * dx
+
+    levels = create_vector_levels(npatch)
+
+    cell_patch = np.zeros((uniform_size_x,uniform_size_y,uniform_size_z),dtype='i4')
+    for l in range(1, up_to_level + 1, 1):
+        reduction = 2 ** (up_to_level - l)
+        dx = uniform_cellsize * reduction
+        for ipatch in range(npatch[0:l + 1].sum(), npatch[0:l].sum(), -1):
+            if not kept_patches[ipatch]:
+                continue
+
+            i1 = intt(((vertices_patches[ipatch, 0]+0.5*dx) - bxmin) / uniform_cellsize + 0.5)
+            j1 = intt(((vertices_patches[ipatch, 2]+0.5*dx) - bymin) / uniform_cellsize + 0.5)
+            k1 = intt(((vertices_patches[ipatch, 4]+0.5*dx) - bzmin) / uniform_cellsize + 0.5)
+            i2 = i1 + reduction * (patchnx[ipatch]-1) - 1
+            j2 = j1 + reduction * (patchny[ipatch]-1) - 1
+            k2 = k1 + reduction * (patchnz[ipatch]-1) - 1
+            if i2 > -1 and i1 < uniform_size_x and \
+                    j2 > -1 and j1 < uniform_size_y and \
+                    k2 > -1 and k1 < uniform_size_z:
+                i1 = max([i1, 0])
+                j1 = max([j1, 0])
+                k1 = max([k1, 0])
+                i2 = min([i2, uniform_size_x - 1])
+                j2 = min([j2, uniform_size_y - 1])
+                k2 = min([k2, uniform_size_z - 1])
+                cell_patch[i1:i2 + 1, j1:j2 + 1, k1:k2 + 1] = ipatch
+
+    # 2. try to increase level using boundaries
+    for l in range(1, up_to_level + 1, 1):
+        reduction = 2 ** (up_to_level - l)
+        dx = uniform_cellsize * reduction
+        for ipatch in range(npatch[0:l + 1].sum(), npatch[0:l].sum(), -1):
+            if not kept_patches[ipatch]:
+                continue
+
+            i1 = intt(((vertices_patches[ipatch, 0]) - bxmin) / uniform_cellsize + 0.5)
+            j1 = intt(((vertices_patches[ipatch, 2]) - bymin) / uniform_cellsize + 0.5)
+            k1 = intt(((vertices_patches[ipatch, 4]) - bzmin) / uniform_cellsize + 0.5)
+            i2 = i1 + reduction * (patchnx[ipatch]) - 1
+            j2 = j1 + reduction * (patchny[ipatch]) - 1
+            k2 = k1 + reduction * (patchnz[ipatch]) - 1
+            if i2 > -1 and i1 < uniform_size_x and \
+                    j2 > -1 and j1 < uniform_size_y and \
+                    k2 > -1 and k1 < uniform_size_z:
+                i1 = max([i1, 0])
+                j1 = max([j1, 0])
+                k1 = max([k1, 0])
+                i2 = min([i2, uniform_size_x - 1])
+                j2 = min([j2, uniform_size_y - 1])
+                k2 = min([k2, uniform_size_z - 1])
+                cell_patch[i1:i2 + 1, j1:j2 + 1, k1:k2 + 1] = np.where(l > levels[np.abs(cell_patch[i1:i2 + 1, j1:j2 + 1, k1:k2 + 1])], -ipatch, cell_patch[i1:i2 + 1, j1:j2 + 1, k1:k2 + 1])
+                # if we can map it to a higher level, even though we cannot interpolate, we do it.
+
+    @njit(parallel=True)
+    def parallelize(uniform_size_x, uniform_size_y, uniform_size_z, fine_coordinates, cell_patch, vertices_patches,
+                    field,interpolate,verbose):
+        uniform = np.zeros((uniform_size_x, uniform_size_y, uniform_size_z), dtype=np.float32)
+        for i in prange(uniform_size_x):
+            if verbose:
+                print('ix=',i,uniform_size_x)
+            for j in range(uniform_size_y):
+                for k in range(uniform_size_z):
+                    x, y, z = fine_coordinates[0][i], fine_coordinates[1][j], fine_coordinates[2][k]
+                    ipatch = cell_patch[i, j, k]
+                    
+                    # sign = 1 --> interpolate; sign = -1 --> copy
+                    sign = 1
+                    if ipatch < 0:
+                        ipatch = -ipatch
+                        sign = -1
+
+                    n1, n2, n3 = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
+                    l = levels[ipatch]
+                    dx = coarse_cellsize / 2 ** l
+
+                    if l == up_to_level:
+                        xx, yy, zz = vertices_patches[ipatch, 0], vertices_patches[ipatch, 2], vertices_patches[ipatch, 4]
+                        ii, jj, kk = int((x - xx) / dx), int((y - yy) / dx), int((z - zz) / dx)
+                        uniform[i, j, k] = field[ipatch][ii, jj, kk]
+                    else:
+                        xx, yy, zz = vertices_patches[ipatch, 0], vertices_patches[ipatch, 2], vertices_patches[ipatch, 4]
+                        ii, jj, kk = int((x - xx) / dx), int((y - yy) / dx), int((z - zz) / dx )
+                        xbas, ybas, zbas = xx + (ii + 0.5) * dx, yy + (jj + 0.5) * dx, zz + (kk + 0.5) * dx
+                        xbas, ybas, zbas = (x - xbas) / dx, (y - ybas) / dx, (z - zbas) / dx
+
+                        # ii, jj, kk are the indices of the cell containing xx, yy, zz 
+                        # if we want to interpolate and if the cell is not at the edge of the patch, 
+                        # we will need to displace or not by one cell --> ii2, jj2, kk2 indices
+                        # if we just copy (ngp), these are the correct indices (ii, jj, kk)
+                        if interpolate and sign == 1:
+                            ii2 = ii
+                            if xbas < 0.:
+                                xbas += 1.
+                                ii2 -= 1
+
+                            jj2 = jj
+                            if ybas < 0.:
+                                ybas += 1.
+                                jj2 -= 1
+
+                            kk2 = kk
+                            if zbas < 0.:
+                                zbas += 1.
+                                kk2 -= 1
+
+                            #if ii2 != 0 and ii2 != n1 - 1 and \
+                            #   jj2 != 0 and jj2 != n2 - 1 and \
+                            #   kk2 != 0 and kk2 != n3 - 1:   
+                            if ii2 >= 0 and ii2 != n1 - 1 and \
+                               jj2 >= 0 and jj2 != n2 - 1 and \
+                               kk2 >= 0 and kk2 != n3 - 1 and \
+                               abs(xbas) <= 1. and abs(ybas) <= 1. and abs(zbas) <= 1.:   
+                                ubas = field[ipatch][ii2:ii2 + 2, jj2:jj2 + 2, kk2:kk2 + 2]
+
+                                c00 = ubas[0, 0, 0] * (1 - xbas) + ubas[1, 0, 0] * xbas
+                                c01 = ubas[0, 0, 1] * (1 - xbas) + ubas[1, 0, 1] * xbas
+                                c10 = ubas[0, 1, 0] * (1 - xbas) + ubas[1, 1, 0] * xbas
+                                c11 = ubas[0, 1, 1] * (1 - xbas) + ubas[1, 1, 1] * xbas
+
+                                c0 = c00 * (1 - ybas) + c10 * ybas
+                                c1 = c01 * (1 - ybas) + c11 * ybas
+
+                                uniform[i, j, k] = c0 * (1 - zbas) + c1 * zbas
+                            else:
+                                raise ValueError('Interpolation failed, where it shouldnt. Please check or call your closest interpolator on-call...')
+                        else:
+                            uniform[i, j, k] = field[ipatch][ii, jj, kk]
+                        
+        return uniform
+
+    uniform=parallelize(uniform_size_x, uniform_size_y, uniform_size_z, fine_coordinates, cell_patch, vertices_patches,
+                        List([f if ki else np.zeros((2,2,2), dtype=field[0].dtype, order='F') for f,ki in zip(field, kept_patches)]),
+                        interpolate,verbose)
+    
+
+    
+
+
+
+    if return_coords:
+        return uniform, fine_coordinates
+    else:
+        return uniform
+    
+################################### THIS IS OUR MAIN UNIGRID FUNCTION ###############################################
+unigrid = uniform_grid_zoom_interpolate
+################################### THIS IS OUR MAIN UNIGRID FUNCTION ###############################################

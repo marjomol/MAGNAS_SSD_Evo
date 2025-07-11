@@ -969,7 +969,7 @@ def uniform_induction(components, induction_equation,
                     grid_patchnx, grid_patchny, grid_patchnz, 
                     grid_patchrx, grid_patchry, grid_patchrz,
                     it, sims, nmax, size, Box,
-                    up_to_level=4, ncores=1, verbose=False):
+                    up_to_level=4, ncores=1, clus_kp=None, verbose=False):
     '''
     Cleans and computes the uniform section of the magnetic induction energy and its components for the given AMR grid for its further projection.
     
@@ -994,6 +994,7 @@ def uniform_induction(components, induction_equation,
         - Box: box coordinates
         - up_to_level: level of refinement in the AMR grid (default is 4)
         - ncores: number of cores to use for the computation (default is 1)
+        - clus_kp: mask for valid patches
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
@@ -1020,15 +1021,36 @@ def uniform_induction(components, induction_equation,
         ('total', 'MIE_total')
     ]:
         if components.get(key, False):
-            results[f'uniform_{prefix}_x'] = utils.uniform_field(induction_equation[f'{prefix}_x'], clus_cr0amr, clus_solapst, grid_npatch,
-                                                            grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
-                                                            nmax, size, Box, up_to_level=up_to_level, ncores=ncores, verbose=verbose)
-            results[f'uniform_{prefix}_y'] = utils.uniform_field(induction_equation[f'{prefix}_y'], clus_cr0amr, clus_solapst, grid_npatch,
-                                                            grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
-                                                            nmax, size, Box, up_to_level=up_to_level, ncores=ncores, verbose=verbose)
-            results[f'uniform_{prefix}_z'] = utils.uniform_field(induction_equation[f'{prefix}_z'], clus_cr0amr, clus_solapst, grid_npatch,
-                                                            grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
-                                                            nmax, size, Box, up_to_level=up_to_level, ncores=ncores, verbose=verbose)
+            # results[f'uniform_{prefix}_x'] = utils.uniform_field(induction_equation[f'{prefix}_x'], clus_cr0amr, clus_solapst, grid_npatch,
+            #                                                 grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
+            #                                                 nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
+            # results[f'uniform_{prefix}_y'] = utils.uniform_field(induction_equation[f'{prefix}_y'], clus_cr0amr, clus_solapst, grid_npatch,
+            #                                                 grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
+            #                                                 nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
+            # results[f'uniform_{prefix}_z'] = utils.uniform_field(induction_equation[f'{prefix}_z'], clus_cr0amr, clus_solapst, grid_npatch,
+            #                                                 grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
+            #                                                 nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
+            results[f'uniform_{prefix}_x'] = utils.unigrid(
+                                                field=induction_equation[f'{prefix}_x'], box_limits=Box[1:], up_to_level=up_to_level,
+                                                npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
+                                                patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
+                                                patchrz=grid_patchrz, size=size, nmax=nmax,
+                                                interpolate=True, verbose=verbose, kept_patches=clus_kp, return_coords=False
+                                            )
+            results[f'uniform_{prefix}_y'] = utils.unigrid(
+                                                field=induction_equation[f'{prefix}_y'], box_limits=Box[1:], up_to_level=up_to_level,
+                                                npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
+                                                patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
+                                                patchrz=grid_patchrz, size=size, nmax=nmax,
+                                                interpolate=True, verbose=verbose, kept_patches=clus_kp, return_coords=False
+                                            )
+            results[f'uniform_{prefix}_z'] = utils.unigrid(
+                                                field=induction_equation[f'{prefix}_z'], box_limits=Box[1:], up_to_level=up_to_level,
+                                                npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
+                                                patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
+                                                patchrz=grid_patchrz, size=size, nmax=nmax,
+                                                interpolate=True, verbose=verbose, kept_patches=clus_kp, return_coords=False
+                                            )
             if verbose == True:
                 print(f'Snap {it} in {sims}: {key} uniform field done')
         else:
@@ -1047,7 +1069,7 @@ def uniform_induction(components, induction_equation,
 
 
 def process_iteration(components, dir_grids, dir_gas, dir_params,
-                    sims, it, coords, region, Box, rad, rmin, level, up_to_level, rho_b,
+                    sims, it, coords, Box, rad, rmin, level, up_to_level, rho_b,
                     nmax, size, H, a, units =1, nbins=25, logbins=True,
                     stencil=3, A2U=False, mag=False,
                     energy_evolution=True, profiles=True, projection=True,
@@ -1063,7 +1085,6 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - sims: name of the simulation
         - it: index of the snapshot in the simulation
         - coords: coordinates of the grid
-        - region: region of interest in the grid
         - Box: box coordinates
         - rad: radii of the most massive halo in the snapshot
         - rmin: minimum radius for the radial profile
@@ -1102,7 +1123,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, rho_b, dir_grids, dir_gas, dir_params, level, A2U=A2U, region=region, verbose=verbose)
+    data = load_data(sims, it, rho_b, dir_grids, dir_gas, dir_params, level, A2U=A2U, region=Box, verbose=verbose)
     
     # Vectorial calculus
 
@@ -1183,7 +1204,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                             data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                             data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                             it, sims, nmax, size, Box,
-                            up_to_level=up_to_level, ncores=1, verbose=verbose)
+                            up_to_level=up_to_level, ncores=1, clus_kp=data['clus_kp'],
+                            verbose=verbose)
     elif not projection:
         induction_uniform = None
         if verbose == True:

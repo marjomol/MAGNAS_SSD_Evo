@@ -50,7 +50,7 @@ if __name__ == "__main__":
                                             rad_kind=ind_params["rad_kind"], 
                                             verbose=out_params["verbose"])
         # Create the regions of interest in the grid
-        Region = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
+        Region_Coord = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
                             F=ind_params["F"], reg=ind_params["region"], 
                             verbose=out_params["verbose"])
         
@@ -61,8 +61,8 @@ if __name__ == "__main__":
                             out_params["dir_grids"], 
                             out_params["dir_gas"],
                             out_params["dir_params"][i], 
-                            sims, it, Coords[i], Region[i], 
-                            Region[i], Rad[i], ind_params["rmin"][i], 
+                            sims, it, Coords[i], Region_Coord[i],
+                            Rad[i], ind_params["rmin"][i], 
                             ind_params["level"], ind_params["up_to_level"],
                             ind_params["rho_b"], ind_params["nmax"][i],
                             ind_params["size"][i], ind_params["H"], ind_params["a"],
