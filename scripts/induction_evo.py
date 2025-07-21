@@ -101,7 +101,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
                 print("x: " + str(coords[-1][0]))
                 print("y: " + str(coords[-1][1]))
                 print("z: " + str(coords[-1][2]))
-                print("Radius: " + str(rad[-1]))
+                print("Radius: " + str(rad[-1]) + " Mpc")
                 print("Mass: " + str(halos[max_mass_index]['M']*mass_to_sun) + " Msun")
                 
     coords = coords[::-1]
@@ -127,6 +127,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
         
     Returns:
         - region: list of boxes or spheres centered at the coordinates
+        - region_size: list of sizes of the boxes or spheres in Mpc
         
     Author: Marco Molina
     '''
@@ -142,6 +143,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
         SPH = False
         
     Rad = []
+    region_size = []
     Box = []
     Sph = []
 
@@ -149,6 +151,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
         for j in range(len(it)):
 
             Rad.append(F*rad[i+j])
+            region_size.append(2 * Rad[-1])  # Size of the box in Mpc
             Box.append(["box", coords[i+j][0]-Rad[-1], coords[i+j][0]+Rad[-1], coords[i+j][1]-Rad[-1], coords[i+j][1]+Rad[-1], coords[i+j][2]-Rad[-1], coords[i+j][2]+Rad[-1]]) # Mpc
             # Box.append(["box",-size[i]/2,size[i]/2,-size[i]/2,size[i]/2,-size[i]/2,size[i]/2]) # Mpc
             Sph.append(["sphere", coords[i+j][0], coords[i+j][1], coords[i+j][2], Rad[-1]]) # Mpc
@@ -167,7 +170,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
     if BOX == False and SPH == False:
         region = [None for _ in range(len(sims)*len(it))]
         
-    return region
+    return region, region_size
 
 
 def load_data(sims, it, rho_b, dir_grids, dir_gas, dir_params, level, A2U=False, region=None, verbose=False):
@@ -1021,36 +1024,36 @@ def uniform_induction(components, induction_equation,
         ('total', 'MIE_total')
     ]:
         if components.get(key, False):
-            results[f'uniform_{prefix}_x'], _, _, _ = utils.uniform_field(induction_equation[f'{prefix}_x'], clus_cr0amr, clus_solapst, grid_npatch,
-                                                            grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
-                                                            nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
-            results[f'uniform_{prefix}_y'], _, _, _ = utils.uniform_field(induction_equation[f'{prefix}_y'], clus_cr0amr, clus_solapst, grid_npatch,
-                                                            grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
-                                                            nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
-            results[f'uniform_{prefix}_z'], _, _, _ = utils.uniform_field(induction_equation[f'{prefix}_z'], clus_cr0amr, clus_solapst, grid_npatch,
-                                                            grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
-                                                            nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
-            # results[f'uniform_{prefix}_x'] = utils.unigrid(
-            #                                     field=induction_equation[f'{prefix}_x'], box_limits=Box[1:], up_to_level=up_to_level,
-            #                                     npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
-            #                                     patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
-            #                                     patchrz=grid_patchrz, size=size, nmax=nmax,
-            #                                     interpolate=True, verbose=False, kept_patches=clus_kp, return_coords=False
-            #                                 )
-            # results[f'uniform_{prefix}_y'] = utils.unigrid(
-            #                                     field=induction_equation[f'{prefix}_y'], box_limits=Box[1:], up_to_level=up_to_level,
-            #                                     npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
-            #                                     patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
-            #                                     patchrz=grid_patchrz, size=size, nmax=nmax,
-            #                                     interpolate=True, verbose=False, kept_patches=clus_kp, return_coords=False
-            #                                 )
-            # results[f'uniform_{prefix}_z'] = utils.unigrid(
-            #                                     field=induction_equation[f'{prefix}_z'], box_limits=Box[1:], up_to_level=up_to_level,
-            #                                     npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
-            #                                     patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
-            #                                     patchrz=grid_patchrz, size=size, nmax=nmax,
-            #                                     interpolate=True, verbose=False, kept_patches=clus_kp, return_coords=False
-            #                                 )
+            # results[f'uniform_{prefix}_x'], _, _, _ = utils.uniform_field(induction_equation[f'{prefix}_x'], clus_cr0amr, clus_solapst, grid_npatch,
+            #                                                 grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
+            #                                                 nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
+            # results[f'uniform_{prefix}_y'], _, _, _ = utils.uniform_field(induction_equation[f'{prefix}_y'], clus_cr0amr, clus_solapst, grid_npatch,
+            #                                                 grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
+            #                                                 nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
+            # results[f'uniform_{prefix}_z'], _, _, _ = utils.uniform_field(induction_equation[f'{prefix}_z'], clus_cr0amr, clus_solapst, grid_npatch,
+            #                                                 grid_patchnx, grid_patchny, grid_patchnz, grid_patchrx, grid_patchry, grid_patchrz,
+            #                                                 nmax, size, Box, up_to_level=up_to_level, ncores=ncores, clus_kp=clus_kp, verbose=verbose)
+            results[f'uniform_{prefix}_x'] = utils.unigrid(
+                                                field=induction_equation[f'{prefix}_x'], box_limits=Box[1:], up_to_level=up_to_level,
+                                                npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
+                                                patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
+                                                patchrz=grid_patchrz, size=size, nmax=nmax,
+                                                interpolate=True, verbose=False, kept_patches=clus_kp, return_coords=False
+                                            )
+            results[f'uniform_{prefix}_y'] = utils.unigrid(
+                                                field=induction_equation[f'{prefix}_y'], box_limits=Box[1:], up_to_level=up_to_level,
+                                                npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
+                                                patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
+                                                patchrz=grid_patchrz, size=size, nmax=nmax,
+                                                interpolate=True, verbose=False, kept_patches=clus_kp, return_coords=False
+                                            )
+            results[f'uniform_{prefix}_z'] = utils.unigrid(
+                                                field=induction_equation[f'{prefix}_z'], box_limits=Box[1:], up_to_level=up_to_level,
+                                                npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
+                                                patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
+                                                patchrz=grid_patchrz, size=size, nmax=nmax,
+                                                interpolate=True, verbose=False, kept_patches=clus_kp, return_coords=False
+                                            )
             if verbose == True:
                 print(f'Snap {it} in {sims}: {key} uniform field done')
                 print(results[f'uniform_{prefix}_x'].shape)

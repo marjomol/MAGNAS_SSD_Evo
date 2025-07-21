@@ -301,13 +301,13 @@ def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, n
             
         fig.savefig(folder + f'/Mag_Field_Power_Spectrum_{run}.png')
         
-def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Zoom', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
+def zoom_animation_3D(arr, size, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Zoom', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Generates an animation of the magnetic field seed in 3D with a zoom effect. Can be used for any other 3D spacial field.
     
     Args:
         - arr: 3D array to animate
-        - dx: cell size in Mpc
+        - size: size of the array in Mpc in the x direction
         - arrow_scale: scale of the arrow in Mpc
         - units: units of the arrow scale
         - title: title of the animation
@@ -327,6 +327,8 @@ def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Magnetic
     assert arr.ndim == 3, "Input array must be 3D"
     
     nmax, nmay, nmaz = arr.shape
+    
+    dx = size / nmax  # Cell size in Mpc
     
     inter = 200
     depth = 10
@@ -348,7 +350,7 @@ def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Magnetic
         plt.imshow(section, cmap='viridis')
         plt.title(title)
         ctoMpc = arrow_scale/dx
-        plt.arrow(imdim, imdim, ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
+        plt.arrow(imdim, imdim, ctoMpc, 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
         plt.text(imdim, imdim-arrow_scale, f'{arrow_scale} {units}', color=col)
 
     ani = FuncAnimation(fig, animate, frames = range(1, max_frame), interval=inter)
@@ -369,13 +371,13 @@ def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Magnetic
         file_title = ' '.join(title.split()[:4])
         ani.save(folder + f'/{file_title}_{run}_zoom.gif', writer='pillow', dpi = DPI)
         
-def scan_animation_3D(arr, dx, study_box, depth = 2, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Scan', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
+def scan_animation_3D(arr, size, study_box, depth = 2, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Scan', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Generates an animation of the magnetic field seed in 3D with a scan effect. Can be used for any other 3D spacial field.
     
     Args:
         - arr: 3D array to animate
-        - dx: cell size in Mpc
+        - size: size of the array in Mpc in the x direction
         - study_box: percentage of the box to scan centered in the middle of the scanning plane. Must be a float in (0, 1]
         - depth: depth of the scanning plane, the larger the depth the less frames the animation will have
         - arrow_scale: scale of the arrow in Mpc
@@ -398,6 +400,8 @@ def scan_animation_3D(arr, dx, study_box, depth = 2, arrow_scale = 1, units = 'M
     assert 0 < study_box <= 1, "Study box must be a float in (0, 1]"
     
     nmax, nmay, nmaz = arr.shape
+    
+    dx = size / nmax  # Cell size in Mpc
     
     inter = 100
     x_lsize = round(nmax//2 - nmax*study_box//2)
@@ -426,12 +430,10 @@ def scan_animation_3D(arr, dx, study_box, depth = 2, arrow_scale = 1, units = 'M
     def animate(frame):
         plt.clf()
         section = np.sum(arr[x_lsize:x_dsize, y_lsize:y_dsize, (frame - depth//2):(frame + depth//2)], axis=2)
-        # section = arr[x_lsize:x_dsize, y_lsize:y_dsize, frame]
         plt.imshow(section, cmap='viridis', norm=norm)
-        # plt.imshow(section, cmap='viridis')
         plt.title(title)
         ctoMpc = arrow_scale/dx
-        plt.arrow((new_nmax - 4*new_nmax//5), (new_nmax - new_nmax//10), ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
+        plt.arrow((new_nmax - 4*new_nmax//5), (new_nmax - new_nmax//10), ctoMpc, 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
         plt.text((new_nmax - 4*new_nmax//5), (new_nmax - new_nmax//10) - 1.25 * arrow_scale, f'{arrow_scale} {units}', color=col)
 
     ani = FuncAnimation(fig, animate, frames = range(depth, nmaz), interval=inter)

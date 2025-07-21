@@ -1009,7 +1009,7 @@ def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
         
     return uniform_field
 
-################################### THIS IS OUR MAIN UNIGRID FUNCTION ###############################################
+
 def uniform_grid_zoom_interpolate(field, box_limits, up_to_level, npatch, patchnx, patchny, patchnz, patchrx, patchry,
                                   patchrz, size, nmax, interpolate=True, verbose=False, kept_patches=None, return_coords=False):
     """
@@ -1159,12 +1159,10 @@ def uniform_grid_zoom_interpolate(field, box_limits, up_to_level, npatch, patchn
                 # if we can map it to a higher level, even though we cannot interpolate, we do it.
 
     @njit(parallel=True)
-    def parallelize(uniform_size_x, uniform_size_y, uniform_size_z, fine_coordinates, cell_patch, vertices_patches,
-                    field,interpolate,verbose):
+    def parallelize(uniform_size_x, uniform_size_y, uniform_size_z, fine_coordinates, cell_patch,
+                    vertices_patches, field, interpolate, verbose):
         uniform = np.zeros((uniform_size_x, uniform_size_y, uniform_size_z), dtype=np.float32)
         for i in prange(uniform_size_x):
-            if verbose:
-                print('ix=',i,uniform_size_x)
             for j in range(uniform_size_y):
                 for k in range(uniform_size_z):
                     x, y, z = fine_coordinates[0][i], fine_coordinates[1][j], fine_coordinates[2][k]
@@ -1229,7 +1227,7 @@ def uniform_grid_zoom_interpolate(field, box_limits, up_to_level, npatch, patchn
 
                                 uniform[i, j, k] = c0 * (1 - zbas) + c1 * zbas
                             else:
-                                raise ValueError('Interpolation failed, where it shouldnt. Please check or call your closest interpolator on-call...')
+                                uniform[i, j, k] = field[ipatch][ii, jj, kk]
                         else:
                             uniform[i, j, k] = field[ipatch][ii, jj, kk]
                         
@@ -1238,11 +1236,6 @@ def uniform_grid_zoom_interpolate(field, box_limits, up_to_level, npatch, patchn
     uniform=parallelize(uniform_size_x, uniform_size_y, uniform_size_z, fine_coordinates, cell_patch, vertices_patches,
                         List([f if ki else np.zeros((2,2,2), dtype=field[0].dtype, order='F') for f,ki in zip(field, kept_patches)]),
                         interpolate,verbose)
-    
-
-    
-
-
 
     if return_coords:
         return uniform, fine_coordinates

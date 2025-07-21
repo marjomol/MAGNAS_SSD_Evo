@@ -50,20 +50,20 @@ if __name__ == "__main__":
                                             rad_kind=ind_params["rad_kind"], 
                                             verbose=out_params["verbose"])
         # Create the regions of interest in the grid
-        Region_Coord = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
+        Region_Coord, Region_Size = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
                             F=ind_params["F"], reg=ind_params["region"], 
                             verbose=out_params["verbose"])
         
         # Process each iteration in serial
-        for it, sims, i in zip(out_params["it"], out_params["sims"], range(len(out_params["sims"]))):
+        for it, sims, i, j in zip(out_params["it"], out_params["sims"], range(len(out_params["sims"])), range(len(out_params["it"]))):
             # Process the iteration
             vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_energy_profiles, induction_uniform = process_iteration(
                 ind_params["components"], 
                 out_params["dir_grids"], 
                 out_params["dir_gas"],
                 out_params["dir_params"][i], 
-                sims, it, Coords[i], Region_Coord[i],
-                Rad[i], ind_params["rmin"][i], 
+                sims, it, Coords[i+j], Region_Coord[i+j],
+                Rad[i+j], ind_params["rmin"][i], 
                 ind_params["level"], ind_params["up_to_level"],
                 ind_params["rho_b"], ind_params["nmax"][i],
                 ind_params["size"][i], ind_params["H"], ind_params["a"],
@@ -84,9 +84,9 @@ if __name__ == "__main__":
             
             print(field.shape)
             
-            scan_animation_3D(field, ind_params['dx'][i], study_box=1, depth=ind_params['up_to_level'], arrow_scale=10, units='Mpc', 
-                    title=f'Magnetic Field_Induction_Compression Scan', verbose=out_params["verbose"], 
-                    Save=True, DPI=out_params["dpi"], run=out_params["run"], folder=out_params["image_folder"])
+            scan_animation_3D(field, Region_Size[i+j], study_box=1, depth=ind_params["up_to_level"], arrow_scale=1, units='Mpc', 
+                    title=f'Magnetic Field Induction Compression Scan - Level {ind_params["up_to_level"]}', verbose=out_params["verbose"], 
+                    Save=True, DPI=out_params["dpi"], run=out_params["run"] + f'_Level_{ind_params["up_to_level"]}', folder=out_params["image_folder"])
             
         
 # ============================

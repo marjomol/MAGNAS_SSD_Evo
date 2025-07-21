@@ -123,21 +123,6 @@ def iterate_over_patches(which_patches, patch_level, up_to_level,
     
     field_uniform = np.zeros((nx, ny, nz), dtype = np.float64)
     
-    if kept_patches is not None:
-        safe_field = []
-        for ipatch in range(len(field)):
-            if ipatch < len(kept_patches) and kept_patches[ipatch]:
-                safe_field.append(field[ipatch])
-            else:
-                # Create a dummy array with the expected shape if we have patch dimensions
-                if ipatch < len(patchnx):
-                    dummy_shape = (patchnx[ipatch], patchny[ipatch], patchnz[ipatch])
-                    safe_field.append(np.zeros(dummy_shape, dtype=field[0].dtype))
-                else:
-                    safe_field.append(np.zeros((1, 1, 1), dtype=field[0].dtype))
-    else:
-        safe_field = field
-    
     for ipatch, patch in enumerate(which_patches):  
         l = patch_level[ipatch]
         if l <= up_to_level:
@@ -289,14 +274,7 @@ def main(box, up_to_level, nmax, size,
         else:
             which_patches = [i for i in which_patches if patch_level[i] <= up_to_level]
 
-        core_field = []
-        for i in which_patches:
-            if i < len(kept_patches) and kept_patches[i]:
-                core_field.append(field[i] if i < len(field) else np.zeros((patchnx[i], patchny[i], patchnz[i])))
-            else:
-                # Add dummy array for patches that aren't kept
-                core_field.append(np.zeros((patchnx[i], patchny[i], patchnz[i]), dtype=field[0].dtype if field else np.float32))
-        
+        core_field = [field[i] for i in which_patches]
         core_patch_level = [patch_level[i] for i in which_patches]
         core_patchnx = [patchnx[i] for i in which_patches]
         core_patchny = [patchny[i] for i in which_patches]
