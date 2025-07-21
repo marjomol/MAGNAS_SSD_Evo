@@ -1001,19 +1001,11 @@ def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
     if up_to_level > 4:
         print("Warning: The resolution level is larger than 4. The code will take a long time to run.")
         
-    uniform_field = uniform_grid_zoom_interpolate(
-        field=field, box_limits=Box[1:], up_to_level=up_to_level,
-        npatch=grid_npatch, patchnx=grid_patchnx, patchny=grid_patchny,
-        patchnz=grid_patchnz, patchrx=grid_patchrx, patchry=grid_patchry,
-        patchrz=grid_patchrz, size=size, nmax=nmax,
-        interpolate=True, verbose=verbose, kept_patches=clus_kp, return_coords=False
-    )
-        
-    # cleaned_field = clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
-    
-    # uniform_field = a2u.main(box = Box[1:], up_to_level = up_to_level, nmax = nmax, size = size, npatch = grid_npatch, patchnx = grid_patchnx, patchny = grid_patchny,
-    #                         patchnz = grid_patchnz, patchrx = grid_patchrx, patchry = grid_patchry, patchrz = grid_patchrz,
-    #                         field = cleaned_field, ncores = ncores, verbose = verbose)
+    cleaned_field = clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
+
+    uniform_field = a2u.main(box = Box[1:], up_to_level = up_to_level, nmax = nmax, size = size, npatch = grid_npatch, patchnx = grid_patchnx, patchny = grid_patchny,
+                            patchnz = grid_patchnz, patchrx = grid_patchrx, patchry = grid_patchry, patchrz = grid_patchrz,
+                            field = cleaned_field, ncores = ncores, verbose = verbose, kept_patches=clus_kp)
         
     return uniform_field
 

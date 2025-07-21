@@ -3,7 +3,7 @@ MAGNAS SSD Evolution
 A tool to analyse simulated cosmological magnetic field induction and the Small Scale Dynamo amplification.
 
 plot_fields module
-Contains functions to plot the magnetic field seed or any other interesting quantities.
+Contains functions to plot the magnetic field induction components or any other interesting quantities.
 
 Created by Marco Molina Pradillo
 """
@@ -369,7 +369,7 @@ def zoom_animation_3D(arr, dx, arrow_scale = 1, units = 'Mpc', title = 'Magnetic
         file_title = ' '.join(title.split()[:4])
         ani.save(folder + f'/{file_title}_{run}_zoom.gif', writer='pillow', dpi = DPI)
         
-def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Scan', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
+def scan_animation_3D(arr, dx, study_box, depth = 2, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Scan', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
     Generates an animation of the magnetic field seed in 3D with a scan effect. Can be used for any other 3D spacial field.
     
@@ -377,6 +377,7 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
         - arr: 3D array to animate
         - dx: cell size in Mpc
         - study_box: percentage of the box to scan centered in the middle of the scanning plane. Must be a float in (0, 1]
+        - depth: depth of the scanning plane, the larger the depth the less frames the animation will have
         - arrow_scale: scale of the arrow in Mpc
         - units: units of the arrow scale
         - title: title of the animation
@@ -399,25 +400,25 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
     nmax, nmay, nmaz = arr.shape
     
     inter = 100
-    depth = 2
     x_lsize = round(nmax//2 - nmax*study_box//2)
     x_dsize = round(nmax//2 + nmax*study_box//2)
     y_lsize = round(nmay//2 - nmay*study_box//2)
     y_dsize = round(nmay//2 + nmay*study_box//2)
-    new_nmax = x_dsize - x_lsize
+    new_nmax = x_dsize - x_lsize # Para definir el tamaño de la flecha de referencia
     col = 'red'
     
     fig = plt.figure(figsize=(5, 5))
     
     # Find the minimum and maximum values of the magnetic field among all the studied volume
-    min_value = np.min([np.min(arr[x_lsize:x_dsize, y_lsize:y_dsize, i]) for i in range(len(arr[0]))])
-    max_value = np.max([np.max(arr[x_lsize:x_dsize, y_lsize:y_dsize, i]) for i in range(len(arr[0]))])
-    
-    # # Check if the minimum and maximum values are valid
-    # if min_value <= 0:
-    #     min_value = 1e-8
-    # if max_value <= 0:
-    #     max_value = 1e-3
+    all_values = []
+    for i in range(nmaz):
+        frame_data = arr[x_lsize:x_dsize, y_lsize:y_dsize, i]
+        all_values.extend(frame_data[frame_data > 0].flatten())
+
+    all_values = np.array(all_values)
+    min_value = np.percentile(all_values, 1)  # 1st percentile
+    max_value = np.percentile(all_values, 99.9)  # 99.9th percentile
+    print(min_value, max_value)
         
     # Create a logarithmic normalization for the color intensity and regulate the intensity of the color bar
     norm = LogNorm(vmin=min_value, vmax=max_value)
@@ -425,6 +426,7 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
     def animate(frame):
         plt.clf()
         section = np.sum(arr[x_lsize:x_dsize, y_lsize:y_dsize, (frame - depth//2):(frame + depth//2)], axis=2)
+        # section = arr[x_lsize:x_dsize, y_lsize:y_dsize, frame]
         plt.imshow(section, cmap='viridis', norm=norm)
         # plt.imshow(section, cmap='viridis')
         plt.title(title)
@@ -432,7 +434,8 @@ def scan_animation_3D(arr, dx, study_box, arrow_scale = 1, units = 'Mpc', title 
         plt.arrow((new_nmax - 4*new_nmax//5), (new_nmax - new_nmax//10), ctoMpc-(ctoMpc/7), 0, head_width=(ctoMpc/14), head_length=(ctoMpc/7), fc=col, ec=col)
         plt.text((new_nmax - 4*new_nmax//5), (new_nmax - new_nmax//10) - 1.25 * arrow_scale, f'{arrow_scale} {units}', color=col)
 
-    ani = FuncAnimation(fig, animate, frames = range(depth, nmax), interval=inter)
+    ani = FuncAnimation(fig, animate, frames = range(depth, nmaz), interval=inter)
+    ani = FuncAnimation(fig, animate, frames = range(nmaz), interval=inter)
     
     
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

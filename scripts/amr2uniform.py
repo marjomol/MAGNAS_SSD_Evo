@@ -119,12 +119,30 @@ def patch_interpolation(field_uniform, level, l, nx, ny, nz,
 def iterate_over_patches(which_patches, patch_level, up_to_level, 
                          size, nmax, patchrx, patchry, patchrz, patchnx, patchny, patchnz, 
                          field, nx, ny, nz, grid_faces_x, grid_faces_y, grid_faces_z,
-                         grid_centers_x, grid_centers_y, grid_centers_z):
+                         grid_centers_x, grid_centers_y, grid_centers_z, kept_patches, verbose):
     
     field_uniform = np.zeros((nx, ny, nz), dtype = np.float64)
+    
+    if kept_patches is not None:
+        safe_field = []
+        for ipatch in range(len(field)):
+            if ipatch < len(kept_patches) and kept_patches[ipatch]:
+                safe_field.append(field[ipatch])
+            else:
+                # Create a dummy array with the expected shape if we have patch dimensions
+                if ipatch < len(patchnx):
+                    dummy_shape = (patchnx[ipatch], patchny[ipatch], patchnz[ipatch])
+                    safe_field.append(np.zeros(dummy_shape, dtype=field[0].dtype))
+                else:
+                    safe_field.append(np.zeros((1, 1, 1), dtype=field[0].dtype))
+    else:
+        safe_field = field
+    
     for ipatch, patch in enumerate(which_patches):  
         l = patch_level[ipatch]
         if l <= up_to_level:
+            if kept_patches is not None and ipatch < len(kept_patches) and not kept_patches[ipatch]:
+                continue
             patch_res = (size / nmax) / 2**l
             patch_rx = patchrx[ipatch]
             patch_ry = patchry[ipatch]
@@ -133,6 +151,14 @@ def iterate_over_patches(which_patches, patch_level, up_to_level,
             patch_ny = patchny[ipatch]
             patch_nz = patchnz[ipatch]
             patch_field = np.ascontiguousarray( field[ipatch] )
+            # Validate shape before processing
+            expected_shape = (patch_nx, patch_ny, patch_nz)
+            if verbose and patch_field.shape != expected_shape:
+                print(f"Warning: Patch {ipatch} has shape {patch_field.shape}, expected {expected_shape}. Skipping.")
+                continue
+            if verbose:
+                print(f'Processing patch {ipatch} with shape {patch_field.shape} at level {l}, res {patch_res}')
+
             patch_interpolation(field_uniform, up_to_level, l, nx, ny, nz, 
                                 grid_faces_x, grid_faces_y, grid_faces_z, 
                                 grid_centers_x, grid_centers_y, grid_centers_z, 
@@ -146,7 +172,7 @@ def main(box, up_to_level, nmax, size,
          npatch, patchnx, patchny, patchnz, 
          patchrx, patchry, patchrz, field,
          ncores = 1, just_that_level = False,
-         split_to_box = False, verbose = False):
+         split_to_box = False, verbose = False, kept_patches=None):
     """
     box: [xmin, xmax, ymin, ymax, zmin, zmax]
     up_to_level: maximum level to take into account AMR
@@ -164,6 +190,7 @@ def main(box, up_to_level, nmax, size,
     just_that_level: if True, it returns the field at that level
     split_to_box: if True, it returns the field sliced to the original box
     verbose: verbosity
+    kept_patches: boolean array indicating which patches to keep
     """
     
     # if just_grid = True, it returns only the uniform grid
@@ -171,6 +198,9 @@ def main(box, up_to_level, nmax, size,
         ValueError('Field must be a list of fields')
     elif len(field) != 1 and len(field) != 3:
         ValueError('Field must be a scalar or a vector')
+        
+    if kept_patches is None:
+        kept_patches = np.ones(patchnx.size, dtype='bool')
 
     #Define uniform grid
     res_coarse = size / nmax
@@ -259,7 +289,14 @@ def main(box, up_to_level, nmax, size,
         else:
             which_patches = [i for i in which_patches if patch_level[i] <= up_to_level]
 
-        core_field = [field[i] for i in which_patches]
+        core_field = []
+        for i in which_patches:
+            if i < len(kept_patches) and kept_patches[i]:
+                core_field.append(field[i] if i < len(field) else np.zeros((patchnx[i], patchny[i], patchnz[i])))
+            else:
+                # Add dummy array for patches that aren't kept
+                core_field.append(np.zeros((patchnx[i], patchny[i], patchnz[i]), dtype=field[0].dtype if field else np.float32))
+        
         core_patch_level = [patch_level[i] for i in which_patches]
         core_patchnx = [patchnx[i] for i in which_patches]
         core_patchny = [patchny[i] for i in which_patches]
@@ -267,11 +304,12 @@ def main(box, up_to_level, nmax, size,
         core_patchrx = [patchrx[i] for i in which_patches]
         core_patchry = [patchry[i] for i in which_patches]
         core_patchrz = [patchrz[i] for i in which_patches]
+        core_kept_patches = [kept_patches[i] if i < len(kept_patches) else False for i in which_patches]
         
         args = (which_patches, core_patch_level, up_to_level,
                 size, nmax, core_patchrx, core_patchry, core_patchrz, core_patchnx, core_patchny, core_patchnz,
                 core_field, nx, ny, nz, grid_faces_x, grid_faces_y, grid_faces_z,
-                grid_centers_x, grid_centers_y, grid_centers_z)
+                grid_centers_x, grid_centers_y, grid_centers_z, core_kept_patches, verbose)
         
         field_uniform = np.zeros((nx, ny, nz), dtype = np.float32)
         t0 = time.time()
@@ -305,7 +343,7 @@ def main(box, up_to_level, nmax, size,
             this_core_args = (which_patches, core_patch_level, up_to_level,
                             size, nmax, core_patchrx, core_patchry, core_patchrz, core_patchnx, core_patchny, core_patchnz,
                             core_field, sub_nx[ic], ny, nz, sub_grid_faces_x[ic], grid_faces_y, grid_faces_z,
-                            sub_grid_centers_x[ic], grid_centers_y, grid_centers_z)
+                            sub_grid_centers_x[ic], grid_centers_y, grid_centers_z, kept_patches, verbose)
                             
             data_sub.append(this_core_args)
         t1 = time.time()

@@ -38,14 +38,14 @@ IND_PARAMS = {
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "level": 100, # Max. level of the AMR grid to be used
-    "up_to_level": 3, # AMR level up to which calculate
+    "up_to_level": 5, # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     "H0": H0_masclet,
     "zeta": 100,
     "epsilon": 1e-30,
-    "divergence": True, # Process the divergence induction component
-    "compression": False, # Process the compression induction component
+    "divergence": False, # Process the divergence induction component
+    "compression": True, # Process the compression induction component
     "stretching": False, # Process the stretching induction component
     "advection": False, # Process the advection induction component
     "drag": False, # Process the drag induction component
