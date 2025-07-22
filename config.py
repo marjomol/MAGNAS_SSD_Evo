@@ -38,7 +38,7 @@ IND_PARAMS = {
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "level": 100, # Max. level of the AMR grid to be used
-    "up_to_level": 6, # AMR level up to which calculate
+    "up_to_level": 3, # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     "H0": H0_masclet,
@@ -52,8 +52,10 @@ IND_PARAMS = {
     "total": False, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": True, # Calculate the evolution of the energy budget
-    "profiles": True, # Calculate the profiles of the induction components
-    "projection": True, # Calculate the projection of the induction components
+    "evolution_type": 'total', # Type of evolution to calculate (total or differential)
+    "derivative": 'central', # Derivative to use for the evolution (implicit or central)
+    "profiles": False, # Calculate the profiles of the induction components
+    "projection": False, # Calculate the projection of the induction components
     "A2U": True # Transform the AMR grid to a uniform grid
 }
 

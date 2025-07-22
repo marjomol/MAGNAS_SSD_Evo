@@ -830,6 +830,586 @@ def induction_vol_integral(componets, induction_energy, clus_b2,
     return results
 
 
+def induction_energy_integral_evolution(components, induction_energy_integral,
+                                        evolution_type, derivative, rho_b,
+                                        grid_t, grid_zeta, verbose=False):
+    '''
+    Given the volume integrals of the magnetic energy density and its components at different redshifts,
+    computes the evolution of the magnetic integrated energy and that of its components for their further representation.
+    
+    Args:
+        - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - induction_energy_integral: dictionary containing the volume integrals of the magnetic induction equation in terms of the magnetic energy computed in the previous step
+            - int_MIE_diver_B2: volume integral of the null divergence of the magnetic field energy
+            - int_MIE_compres_B2: volume integral of the compressive component
+            - int_MIE_stretch_B2: volume integral of the stretching component
+            - int_MIE_advec_B2: volume integral of the advection component
+            - int_MIE_drag_B2: volume integral of the cosmic drag component
+            - int_MIE_total_B2: volume integral of the total magnetic induction energy
+            - int_kinetic_energy: volume integral of the kinetic energy density
+            - int_b2: volume integral of the magnetic energy density
+            - volume: volume of the studied region
+        - evolution_type: type of evolution to compute ('total' or 'differential')
+        - derivative: type of derivative to compute ('implicit' or 'central')
+        - rho_b: density contrast of the simulation
+        - grid_t: time grid for the simulation
+        - grid_zeta: redshift grid for the simulation
+        - verbose: boolean to print the data type loaded or not (default is False)
+        
+    Returns:
+        - results: dictionary containing the evolution of the magnetic energy density and its components:
+            - evo_MIE_diver_B2: evolution of the null divergence of the magnetic field energy
+            - evo_MIE_compres_B2: evolution of the compressive component
+            - evo_MIE_stretch_B2: evolution of the stretching component
+            - evo_MIE_advec_B2: evolution of the advection component
+            - evo_MIE_drag_B2: evolution of the cosmic drag component
+            - evo_MIE_total_B2: evolution of the total magnetic induction energy
+            - evo_kinetic_energy: evolution of the kinetic energy density
+            - evo_b2: evolution of the magnetic energy density
+            - evo_ind_b2: evolution of the integrated magnetic energy from the induction equation
+            - evo_volume: evolution of the volume of the studied region
+            
+    Author: Marco Molina
+    '''
+    
+    assert evolution_type in ['total', 'differential'], "evolution_type must be 'total' or 'differential'"
+    assert derivative in ['implicit', 'central'], "derivative must be 'implicit' or 'central'"
+    
+    ## Here we compute the evolution of the magnetic energy density and its components
+    
+    start_time_evolution = time.time() # Record the start time
+    
+    n = len(grid_t)-1
+    zero = [0] * n
+    
+    results = {}
+    
+    main_keys = ["divergence", "compression", "stretching", "advection", "drag"]
+    if all(components.get(k, False) for k in main_keys):
+        components["induction"] = True
+        induction_energy_integral['int_ind_b2'] = [(induction_energy_integral['int_MIE_diver_B2'][i] +
+                                                    induction_energy_integral['int_MIE_compres_B2'][i] +
+                                                    induction_energy_integral['int_MIE_stretch_B2'][i] +
+                                                    induction_energy_integral['int_MIE_advec_B2'][i] +
+                                                    induction_energy_integral['int_MIE_drag_B2'][i])
+                                                    for i in range(n+1)]
+    else:
+        components["induction"] = False
+    
+    for key, prefix in [
+        ('divergence', 'MIE_diver_B2'),
+        ('compression', 'MIE_compres_B2'),
+        ('stretching', 'MIE_stretch_B2'),
+        ('advection', 'MIE_advec_B2'),
+        ('drag', 'MIE_drag_B2'),
+        ('total', 'MIE_total_B2'),
+        ('induction', 'ind_b2')
+    ]:
+        if evolution_type == 'total':
+            if components.get(key, False):
+                if derivative == 'central':
+                    results[f'evo_{prefix}'] = [(rho_b[i+1] * ((1/rho_b[i]) * (induction_energy_integral[f'int_b2'][i]) +
+                    2 * (grid_t[i+1] - grid_t[i]) * (induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
+                elif derivative == 'implicit':
+                    results[f'evo_{prefix}'] = [((rho_b[i+2]/rho_b[i+1]) * induction_energy_integral[f'int_b2'][i+1] +
+                    2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (induction_energy_integral[f'int_{prefix}'][i+1] +
+                    ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
+                    induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n-1)]
+            else:
+                results[f'evo_{prefix}'] = zero
+            
+            results['evo_b2'] = [induction_energy_integral['int_b2'][i] for i in range(n+1)]
+            results['evo_kinetic_energy'] = [rho_b[i] * induction_energy_integral['int_kinetic_energy'][i] for i in range(n+1)]
+    
+    
+    
+# save = True
+save = False
+
+## Choose the derivation kind for the induction equation terms
+
+evolution_type = 'total'
+# evolution_type = 'derivative'
+
+# derivative = 'forward'
+derivative = 'central'
+
+## Choose the axis units for the plot
+
+XAxis = 'zeta'
+# XAxis = 'years'
+
+# SXAxis = 'log'
+# xlimo = 100
+# xlimf = 0.1
+# xlimf = abs(grid_zeta[-1])
+
+SXAxis = 'lin'
+xlimo = 2.5
+xlimf = 0
+
+SYAxis = 'log'
+ylimo = 1e58
+ylimf = 1e63
+
+# SYAxis = 'lin'
+# ylimo = -0.25*1e49
+# ylimf = 1.55*1e49
+
+# Cancel_Limits = True
+Cancel_Limits = False
+
+## Choose fine parameters of the plots
+
+XX = 10 # Adjust the size of the figure here
+YY = 8
+
+DPI = 100 # Adjust the resolution of the figure here
+
+# line1 = 2
+# line2 = 0.75
+
+line1 = 5
+line2 = 3
+
+# plt.rcParams.update({'font.size': 24, # Adjust font size here
+#                     'axes.labelsize': 24, # Adjust axis label size here
+#                     'axes.titlesize': 30, # Adjust title size here
+#                     'xtick.labelsize': 26, # Adjust x-axis tick label size here
+#                     'ytick.labelsize': 26, # Adjust y-axis tick label size here
+#                     'legend.fontsize': 26, # Adjust legend font size here
+#                     'figure.titlesize': 32, # Adjust figure title size here
+#                     'xtick.major.width': 1.5, # Set tick width
+#                     'ytick.major.width': 1.5,
+#                     'xtick.minor.width': 1.5,
+#                     'ytick.minor.width': 1.5,
+#                     'axes.linewidth': 1.5}) # Set frame (axes spine) width
+
+plt.rcParams.update({'font.size': 16, # Adjust font size here
+                    'axes.labelsize': 16, # Adjust axis label size here
+                    'axes.titlesize': 18, # Adjust title size here
+                    'xtick.labelsize': 14, # Adjust x-axis tick label size here
+                    'ytick.labelsize': 14, # Adjust y-axis tick label size here
+                    'legend.fontsize': 14, # Adjust legend font size here
+                    'figure.titlesize': 20}) # Adjust figure title size here
+
+# Define your font properties
+# font = FontProperties()
+# font.set_style('normal')  # 'normal', 'italic' or 'oblique'
+# font.set_weight('normal')  # 'normal', 'bold', etc.
+# font.set_size(35)  # Specify the font size
+
+# font_title = FontProperties()
+# font_title.set_style('normal')  # 'normal', 'italic' or 'oblique'
+# font_title.set_weight('bold')  # 'normal', 'bold', etc.
+# font_title.set_size(48)  # Specify the font size
+
+# font_legend = FontProperties()
+# font_legend.set_style('normal')  # 'normal', 'italic' or 'oblique'
+# font_legend.set_weight('normal')  # 'normal', 'bold', etc.
+# font_legend.set_size(32)  # Specify the font size
+
+font = FontProperties()
+font.set_style('normal')  # 'normal', 'italic' or 'oblique'
+font.set_weight('normal')  # 'normal', 'bold', etc.
+font.set_size(12)  # Specify the font size
+
+font_title = FontProperties()
+font_title.set_style('normal')  # 'normal', 'italic' or 'oblique'
+font_title.set_weight('bold')  # 'normal', 'bold', etc.
+font_title.set_size(24)  # Specify the font size
+
+font_legend = FontProperties()
+font_legend.set_style('normal')  # 'normal', 'italic' or 'oblique'
+font_legend.set_weight('normal')  # 'normal', 'bold', etc.
+font_legend.set_size(12)  # Specify the font size
+
+# y_title = 1
+y_title = 1.005
+
+# Units for the integral plots
+
+units_1 = factor_erg
+units_2 = factor_erg / time_to_s
+
+# We create the folder for the plots
+
+ims = []
+
+for s in sims:
+    # Directories for the images
+    
+    image_folder = plotdir + ID1 + f'_mag_field_evo_{s}'
+
+    # List of folders to check
+    folders = [image_folder]
+
+    for folder in folders:
+        # Check if the directory already exists
+        if os.path.exists(folder):
+            # If it exists, exit the loop
+            pass
+        else:
+            # If it doesn't exist, create the directory
+            os.makedirs(folder) 
+
+# Prepare the data
+f = [(int_MIE_advec_B2[i] + int_MIE_compres_B2[i] + int_MIE_diver_B2[i] + int_MIE_stretch_B2[i] + int_MIE_drag_B2[i]) for i in range(len(grid_t))]
+
+if evolution_type == 'total':
+    
+    units = units_1
+    
+    index_O = 0
+    index_F = len(grid_t)
+    
+    n1 = [(units) * (int_b2[i]) for i in range(len(grid_t))]
+
+    if derivative == 'central':
+        n0 = [(units) * (rho_b[i+1]) * ((1/rho_b[i]) * (int_b2[i]) + 2 * (grid_t[i+1] - grid_t[i]) * (f[i])) for i in range(len(grid_t)-1)]
+        diver_work = [(units) * (rho_b[i+1]) * ((1/rho_b[i]) * (int_b2[i]) + 2 * (grid_t[i+1] - grid_t[i]) * int_MIE_diver_B2[i]) for i in range(len(grid_t)-1)]
+        compres_work = [(units) * (rho_b[i+1]) * ((1/rho_b[i]) * (int_b2[i]) + 2 * (grid_t[i+1] - grid_t[i]) * int_MIE_compres_B2[i]) for i in range(len(grid_t)-1)]
+        stretch_work = [(units) * (rho_b[i+1]) * ((1/rho_b[i]) * (int_b2[i]) + 2 * (grid_t[i+1] - grid_t[i]) * int_MIE_stretch_B2[i]) for i in range(len(grid_t)-1)]
+        advec_work = [(units) * (rho_b[i+1]) * ((1/rho_b[i]) * (int_b2[i]) + 2 * (grid_t[i+1] - grid_t[i]) * int_MIE_advec_B2[i]) for i in range(len(grid_t)-1)]
+        drag_work = [(units) * (rho_b[i+1]) * ((1/rho_b[i]) * (int_b2[i]) + 2 * (grid_t[i+1] - grid_t[i]) * int_MIE_drag_B2[i]) for i in range(len(grid_t)-1)]
+        total_work = [(units) * (rho_b[i+1]) * ((1/rho_b[i]) * (int_b2[i]) + 2 * (grid_t[i+1] - grid_t[i]) * int_MIE_total_B2[i]) for i in range(len(grid_t)-1)]
+        cinetic_work = [(units) * (rho_b[i]) * (int_cinetic_energy[i]) for i in range(len(grid_t))]
+        
+        index_o = 1
+        index_f = len(grid_t)
+        plotid = 'central'
+            
+    if derivative == 'forward':
+        
+        n0 = [(units) * ((rho_b[i+2]/rho_b[i+1]) * int_b2[i+1] + 2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (f[i+1]
+                + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (f[i+2] - f[i]))) for i in range(len(grid_t)-2)]
+        diver_work = [(units) * ((rho_b[i+2]/rho_b[i+1]) * int_b2[i+1] + 2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (int_MIE_diver_B2[i+1]
+                    + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_diver_B2[i+2] - int_MIE_diver_B2[i]))) for i in range(len(grid_t)-2)]
+        compres_work = [(units) * ((rho_b[i+2]/rho_b[i+1]) * int_b2[i+1] + 2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (int_MIE_compres_B2[i+1]
+                    + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_compres_B2[i+2] - int_MIE_compres_B2[i]))) for i in range(len(grid_t)-2)]
+        stretch_work = [(units) * ((rho_b[i+2]/rho_b[i+1]) * int_b2[i+1] + 2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (int_MIE_stretch_B2[i+1]
+                    + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_stretch_B2[i+2] - int_MIE_stretch_B2[i]))) for i in range(len(grid_t)-2)]
+        advec_work = [(units) * ((rho_b[i+2]/rho_b[i+1]) * int_b2[i+1] + 2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (int_MIE_advec_B2[i+1]
+                    + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_advec_B2[i+2] - int_MIE_advec_B2[i]))) for i in range(len(grid_t)-2)]
+        drag_work = [(units) * ((rho_b[i+2]/rho_b[i+1]) * int_b2[i+1] + 2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (int_MIE_drag_B2[i+1]
+                    + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_drag_B2[i+2] - int_MIE_drag_B2[i]))) for i in range(len(grid_t)-2)]
+        total_work = [(units) * ((rho_b[i+2]/rho_b[i+1]) * int_b2[i+1] + 2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (int_MIE_total_B2[i+1]
+                    + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_total_B2[i+2] - int_MIE_total_B2[i]))) for i in range(len(grid_t)-2)]
+        cinetic_work = [(units) * (rho_b[i]) * (int_cinetic_energy[i]) for i in range(len(grid_t))]
+        
+        index_o = 2
+        index_f = len(grid_t)
+        plotid = 'implicit'
+        
+    plotid = plotid + '_total'
+    
+if evolution_type == 'derivative':
+
+    units = units_2
+    
+    index_O = 1
+    index_F = len(grid_t)
+    
+    n1 = [(units) * (1/((grid_t[i+1] - grid_t[i]))) * ((int_b2[i+1]/rho_b[i+1]) - (int_b2[i]/rho_b[i])) for i in range(len(grid_t)-1)]
+
+    if derivative == 'central':
+        n0 = [(units) * 2 * (f[i]) for i in range(len(grid_t)-1)]
+        diver_work = [(units) * 2 * (int_MIE_diver_B2[i]) for i in range(len(grid_t)-1)]
+        compres_work = [(units) * 2 * (int_MIE_compres_B2[i]) for i in range(len(grid_t)-1)]
+        stretch_work = [(units) * 2 * (int_MIE_stretch_B2[i]) for i in range(len(grid_t)-1)]
+        advec_work = [(units) * 2 * (int_MIE_advec_B2[i]) for i in range(len(grid_t)-1)]
+        drag_work = [(units) * 2 * (int_MIE_drag_B2[i]) for i in range(len(grid_t)-1)]
+        total_work = [(units) * 2 * (int_MIE_total_B2[i]) for i in range(len(grid_t)-1)]
+        cinetic_work = [(units) * (1/(grid_t[i+1] - grid_t[i])) * ((rho_b[i+1] * int_cinetic_energy[i+1])-(rho_b[i] * int_cinetic_energy[i])) for i in range(len(grid_t)-1)]
+        
+        index_o = 1
+        index_f = len(grid_t)
+        plotid = 'central'
+            
+    if derivative == 'forward':
+        n0 = [(units) * 2 * ((f[i+1] + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (f[i+2] - f[i]))) for i in range(len(grid_t)-2)]
+        diver_work = [(units) * 2 * ((int_MIE_diver_B2[i+1] + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_diver_B2[i+2] - int_MIE_diver_B2[i]))) for i in range(len(grid_t)-2)]
+        compres_work = [(units) * 2 * ((int_MIE_compres_B2[i+1] + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_compres_B2[i+2] - int_MIE_compres_B2[i]))) for i in range(len(grid_t)-2)]
+        stretch_work = [(units) * 2 * ((int_MIE_stretch_B2[i+1] + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_stretch_B2[i+2] - int_MIE_stretch_B2[i]))) for i in range(len(grid_t)-2)]
+        advec_work = [(units) * 2 * ((int_MIE_advec_B2[i+1] + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_advec_B2[i+2] - int_MIE_advec_B2[i]))) for i in range(len(grid_t)-2)]
+        drag_work = [(units) * 2 * ((int_MIE_drag_B2[i+1] + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_drag_B2[i+2] - int_MIE_drag_B2[i]))) for i in range(len(grid_t)-2)]
+        total_work = [(units) * 2 * ((int_MIE_total_B2[i+1] + ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (int_MIE_total_B2[i+2] - int_MIE_total_B2[i]))) for i in range(len(grid_t)-2)]
+        cinetic_work = [(units) * (1/(grid_t[i+1] - grid_t[i])) * ((rho_b[i+1] * int_cinetic_energy[i+1]) - (rho_b[i] * int_cinetic_energy[i])) for i in range(len(grid_t)-1)]
+        
+        index_o = 2
+        index_f = len(grid_t)
+        plotid = 'implicit'
+        
+    plotid = plotid + '_deriative'
+
+volume_fi = [(length_to_mpc**3 * int_volume[i][1]) for i in range(len(grid_t))]
+volume_co = [(int_volume[i][2]) for i in range(len(grid_t))]
+t = [grid_t[i] * time_to_yr for i in range(len(grid_t))]
+z = np.array([grid_zeta[i] for i in range(len(grid_zeta))])
+if z[-1] < 0:
+    z[-1] = abs(z[-1])
+
+# Apply Gaussian smoothing
+sigma = 1.10
+
+n1_smooth = gaussian_filter1d(n1, sigma=sigma)
+n0_smooth = gaussian_filter1d(n0, sigma=sigma)
+diver_work_smooth = gaussian_filter1d(diver_work, sigma=sigma)
+compres_work_smooth = gaussian_filter1d(compres_work, sigma=sigma)
+stretch_work_smooth = gaussian_filter1d(stretch_work, sigma=sigma)
+advec_work_smooth = gaussian_filter1d(advec_work, sigma=sigma)
+drag_work_smooth = gaussian_filter1d(drag_work, sigma=sigma)
+total_work_smooth = gaussian_filter1d(total_work, sigma=sigma)
+cinetic_work_smooth = gaussian_filter1d(cinetic_work, sigma=sigma)
+
+# Interpolate the smoothed data
+
+if XAxis == 'years':
+    n1_interp = interp1d(t[index_O:index_F], n1, kind='cubic')
+    n0_interp = interp1d(t[index_o:index_f], n0, kind='cubic')
+    diver_work_interp = interp1d(t[index_o:index_f], diver_work, kind='cubic')
+    compres_work_interp = interp1d(t[index_o:index_f], compres_work, kind='cubic')
+    stretch_work_interp = interp1d(t[index_o:index_f], stretch_work, kind='cubic')
+    advec_work_interp = interp1d(t[index_o:index_f], advec_work, kind='cubic')
+    drag_work_interp = interp1d(t[index_o:index_f], drag_work, kind='cubic')
+    total_work_interp = interp1d(t[index_o:index_f], total_work, kind='cubic')
+    cinetic_work_interp = interp1d(t[index_O:index_F], cinetic_work, kind='cubic')
+    
+    # Create a new time array with more points for a smoother plot
+    t_new = np.linspace(min(t[index_o:index_f]), max(t[index_o:index_f]), num=500, endpoint=True)
+
+elif XAxis == 'zeta':
+    n1_interp_z = interp1d(z[index_O:index_F], n1, kind='cubic')
+    n0_interp_z = interp1d(z[index_o:index_f], n0, kind='cubic')
+    diver_work_interp_z = interp1d(z[index_o:index_f], diver_work, kind='cubic')
+    compres_work_interp_z = interp1d(z[index_o:index_f], compres_work, kind='cubic')
+    stretch_work_interp_z= interp1d(z[index_o:index_f], stretch_work, kind='cubic')
+    advec_work_interp_z = interp1d(z[index_o:index_f], advec_work, kind='cubic')
+    drag_work_interp_z = interp1d(z[index_o:index_f], drag_work, kind='cubic')
+    total_work_interp_z = interp1d(z[index_o:index_f], total_work, kind='cubic')
+    cinetic_work_interp_z = interp1d(z[index_O:index_F], cinetic_work, kind='cubic')
+
+    z_new = np.linspace(max(z[index_o:index_f]), min(z[index_o:index_f]), num=5000, endpoint=True)
+
+# Create a figure and axes
+fig1, ax1 = plt.subplots(figsize=(XX, YY), dpi=DPI)
+
+# Plot the integrated quantity and predicted quantity
+if XAxis == 'years':
+    ax1.set_xlabel('Time (yr)', fontproperties=font)
+    ax1.set_ylabel('Magnetic Energy (erg)', fontproperties=font) if evolution_type == 'total' else ax1.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
+    ax1.plot(t[index_O:index_F], n1, linewidth=line1, label='Magnetic Energy') if evolution_type == 'total' else ax1.plot(t[index_O:index_F], n1, linewidth=line1, label='Magnetic Energy Induction')
+    ax1.plot(t[index_o:index_f], n0, linewidth=line1, label='Magnetic Energy \nfrom Induction') if evolution_type == 'total' else ax1.plot(t[index_o:index_f], n0, linewidth=line1, label='Predicted Induction')
+    ax1.plot(t[index_o:index_f], total_work, '--', linewidth=line1, label='Magnetic Energy \nfrom Induction (Compacted)')
+    ax1.plot(t[index_o:index_f], diver_work, '--', linewidth=line2, label='Divergence', color='pink')
+    ax1.plot(t[index_o:index_f], compres_work, '--', linewidth=line2, label='Compression', color='purple')
+    ax1.plot(t[index_o:index_f], stretch_work, '--', linewidth=line2, label='Stretching', color='orange')
+    ax1.plot(t[index_o:index_f], advec_work, '--', linewidth=line2, label='Advection', color='red')
+    ax1.plot(t[index_o:index_f], drag_work, '--', linewidth=line2, label='Cosmic Drag', color='gray')
+    ax1.plot(t[index_O:index_F], cinetic_work, linewidth=line1, label='Cinetic Energy', color='#8FBC8F')
+    ax1.legend(prop=font_legend)
+    if Cancel_Limits == False:
+        ax1.set_xlim(xlimo, xlimf)
+        ax1.set_ylim(ylimo, ylimf)
+    if SXAxis == 'log':
+        ax1.set_xscale('log')
+        ax1.set_xlabel('Time log[yr]', fontproperties=font)
+    if SYAxis == 'log':
+        ax1.set_yscale('log')
+        ax1.set_ylabel('Magnetic Energy log[erg]', fontproperties=font) if evolution_type == 'total' else ax1.set_ylabel('Magnetic Energy Induction log[erg/s]', fontproperties=font)
+elif XAxis == 'zeta':
+    ax1.set_xlabel('Redshift (z)', fontproperties=font)
+    ax1.set_ylabel('Magnetic Energy (erg)', fontproperties=font) if evolution_type == 'total' else ax1.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
+    ax1.plot(z[index_O:index_F], n1, linewidth=line1, label='Magnetic Energy') if evolution_type == 'total' else ax1.plot(z[index_O:index_F], n1, linewidth=line1, label='Magnetic Energy Induction')
+    ax1.plot(z[index_o:index_f], n0, linewidth=line1, label='Magnetic Energy \nfrom Induction') if evolution_type == 'total' else ax1.plot(z[index_o:index_f], n0, linewidth=line1, label='Predicted Induction')
+    ax1.plot(z[index_o:index_f], total_work, '--', linewidth=line1, label='Magnetic Energy \nfrom Induction (Compacted)')
+    ax1.plot(z[index_o:index_f], diver_work, '--', linewidth=line2, label='Divergence', color='pink')
+    ax1.plot(z[index_o:index_f], compres_work, '--', linewidth=line2, label='Compression', color='purple')
+    ax1.plot(z[index_o:index_f], stretch_work, '--', linewidth=line2, label='Stretching', color='orange')
+    ax1.plot(z[index_o:index_f], advec_work, '--', linewidth=line2, label='Advection', color='red')
+    ax1.plot(z[index_o:index_f], drag_work, '--', linewidth=line2, label='Cosmic Drag', color='gray')
+    ax1.plot(z[index_O:index_F], cinetic_work, linewidth=line1, label='Cinetic Energy', color='#8FBC8F')
+    ax1.legend(prop=font_legend)
+    if Cancel_Limits == False:
+        ax1.set_xlim(xlimo, xlimf)
+        ax1.set_ylim(ylimo, ylimf)
+    if SXAxis == 'log':
+        ax1.set_xscale('log')
+        ax1.set_xlabel('Time log[z]', fontproperties=font)
+    if SYAxis == 'log':
+        ax1.set_yscale('log')
+        ax1.set_ylabel('Magnetic Energy log[erg]', fontproperties=font) if evolution_type == 'total' else ax1.set_ylabel('Magnetic Energy Induction log[erg/s]', fontproperties=font)
+
+# Add a title and show the plot
+plt.title('Integrated Magnetic Energy\nand Induction Prediction - ' + f'{np.round(F*R_max_mass)} Mpc', y=y_title, fontproperties=font_title) if evolution_type == 'total' else plt.title('Integrated Magnetic Energy Induction and Predicted Induction - ' + f'{np.round(F*R_max_mass)} Mpc', y=y_title, fontproperties=font_title)
+if Cancel_Limits == True:
+    plt.gca().invert_xaxis()
+fig1.tight_layout()
+plt.show()
+
+# Create a figure and axes
+fig2, ax2 = plt.subplots(figsize=(XX, YY), dpi=DPI)
+
+# Plot the smoothed curves
+if XAxis == 'years':
+    ax2.set_xlabel('Time (yr)')
+    ax2.set_ylabel('Magnetic Energy (erg)') if evolution_type == 'total' else ax2.set_ylabel('Magnetic Energy Induction (erg/s)')
+    ax2.plot(t[index_O:index_F], n1_smooth, linewidth=line1, label='Magnetic Energy') if evolution_type == 'total' else ax2.plot(t[index_O:index_F], n1_smooth, linewidth=line1, label='Magnetic Energy Induction')
+    ax2.plot(t[index_o:index_f], n0_smooth, linewidth=line1, label='Magnetic Energy from Induction') if evolution_type == 'total' else ax2.plot(t[index_o:index_f], n0_smooth, linewidth=line1, label='Predicted Induction')
+    ax2.plot(t[index_o:index_f], total_work_smooth, '--', linewidth=line1, label='Magnetic Energy from Induction (Compacted)')
+    ax2.plot(t[index_o:index_f], diver_work_smooth, '--', linewidth=line2, label='Divergence')
+    ax2.plot(t[index_o:index_f], compres_work_smooth, '--', linewidth=line2, label='Compression')
+    ax2.plot(t[index_o:index_f], stretch_work_smooth, '--', linewidth=line2, label='Stretching')
+    ax2.plot(t[index_o:index_f], advec_work_smooth, '--', linewidth=line2, label='Advection')
+    ax2.plot(t[index_o:index_f], drag_work_smooth, '--', linewidth=line2, label='Cosmic Drag')
+    ax2.plot(t[index_O:index_F], cinetic_work_smooth, linewidth=line1, label='Cinetic Energy')
+    ax2.legend(fontsize='small')
+    if Cancel_Limits == False:
+        ax2.set_xlim(xlimo, xlimf)
+        ax2.set_ylim(ylimo, ylimf)
+    if SXAxis == 'log':
+        ax2.set_xscale('log')
+        ax2.set_xlabel('Time log[yr]')
+    if SYAxis == 'log':
+        ax2.set_yscale('log')
+        ax2.set_ylabel('Magnetic Energy log[erg]') if evolution_type == 'total' else ax2.set_ylabel('Magnetic Energy Induction log[erg/s]')
+elif XAxis == 'zeta':
+    ax2.set_xlabel('Redshift (z)')
+    ax2.set_ylabel('Magnetic Energy (erg)') if evolution_type == 'total' else ax2.set_ylabel('Magnetic Energy Induction (erg/s)')
+    ax2.plot(z[index_O:index_F], n1_smooth, linewidth=line1, label='Magnetic Energy') if evolution_type == 'total' else ax2.plot(z[index_O:index_F], n1_smooth, linewidth=line1, label='Magnetic Energy Induction')
+    ax2.plot(z[index_o:index_f], n0_smooth, linewidth=line1, label='Magnetic Energy from Induction') if evolution_type == 'total' else ax2.plot(z[index_o:index_f], n0_smooth, linewidth=line1, label='Predicted Induction')
+    ax2.plot(z[index_o:index_f], total_work_smooth, '--', linewidth=line1, label='Magnetic Energy from Induction (Compacted)')
+    ax2.plot(z[index_o:index_f], diver_work_smooth, '--', linewidth=line2, label='Divergence')
+    ax2.plot(z[index_o:index_f], compres_work_smooth, '--', linewidth=line2, label='Compression')
+    ax2.plot(z[index_o:index_f], stretch_work_smooth, '--', linewidth=line2, label='Stretching')
+    ax2.plot(z[index_o:index_f], advec_work_smooth, '--', linewidth=line2, label='Advection')
+    ax2.plot(z[index_o:index_f], drag_work_smooth, '--', linewidth=line2, label='Cosmic Drag')
+    ax2.plot(z[index_O:index_F], cinetic_work_smooth, linewidth=line1, label='Cinetic Energy')
+    ax2.legend(fontsize='small')
+    if Cancel_Limits == False:
+        ax2.set_xlim(xlimo, xlimf)
+        ax2.set_ylim(ylimo, ylimf)
+    if SXAxis == 'log':
+        ax2.set_xscale('log')
+        ax2.set_xlabel('Time log[z]')
+    if SYAxis == 'log':
+        ax2.set_yscale('log')
+        ax2.set_ylabel('Magnetic Energy log[erg]') if evolution_type == 'total' else ax2.set_ylabel('Magnetic Energy Induction log[erg/s]')
+
+# Add a title and show the plot
+plt.title('Integrated Magnetic Energy and Induction Prediction - ' + f'{np.round(F*R_max_mass)} Mpc', y=y_title) if evolution_type == 'total' else plt.title('Integrated Magnetic Energy Induction and Predicted Induction - ' + f'{np.round(F*R_max_mass)} Mpc', y=y_title)
+if Cancel_Limits == True:
+    plt.gca().invert_xaxis()
+fig2.tight_layout()
+plt.show()
+
+# Create a figure and axes
+fig3, ax3 = plt.subplots(figsize=(XX, YY), dpi=DPI)
+
+# Plot the interpolated curves
+if XAxis == 'years':
+    ax3.set_xlabel('Time (yr)')
+    ax3.set_ylabel('Magnetic Energy (erg)') if evolution_type == 'total' else ax3.set_ylabel('Magnetic Energy Induction (erg/s)')
+    ax3.plot(t_new, n1_interp(t_new), linewidth=line1, label='Magnetic Energy') if evolution_type == 'total' else ax2.plot(z, n1_smooth, linewidth=line1, label='Magnetic Energy Induction')
+    ax3.plot(t_new, n0_interp(t_new), linewidth=line1, label='Magnetic Energy from Induction') if evolution_type == 'total' else ax2.plot(z, n1_smooth, linewidth=line1, label='Predicted Induction')
+    ax3.plot(t_new, total_work_interp(t_new), '--', linewidth=line1, label='Magnetic Energy from Induction (Compacted)')
+    ax3.plot(t_new, diver_work_interp(t_new), '--', linewidth=line2, label='Divergence')
+    ax3.plot(t_new, compres_work_interp(t_new), '--', linewidth=line2, label='Compression')
+    ax3.plot(t_new, stretch_work_interp(t_new), '--', linewidth=line2, label='Stretching')
+    ax3.plot(t_new, advec_work_interp(t_new), '--', linewidth=line2, label='Advection')
+    ax3.plot(t_new, drag_work_interp(t_new), '--', linewidth=line2, label='Cosmic Drag')
+    ax3.plot(t_new, cinetic_work_interp(t_new), linewidth=line1, label='Cinetic Energy')
+    ax3.legend(fontsize='small')
+    if Cancel_Limits == False:
+        ax3.set_xlim(xlimo, xlimf)
+        ax3.set_ylim(ylimo, ylimf)
+    if SXAxis == 'log':
+        ax3.set_xscale('log')
+        ax3.set_xlabel('Time log[yr]')
+    if SYAxis == 'log':
+        ax3.set_yscale('log')
+        ax3.set_ylabel('Magnetic Energy log[erg]') if evolution_type == 'total' else ax3.set_ylabel('Magnetic Energy Induction log[erg/s]')
+elif XAxis == 'zeta':
+    ax3.set_xlabel('Redshift (z)')
+    ax3.set_ylabel('Magnetic Energy (erg)') if evolution_type == 'total' else ax3.set_ylabel('Magnetic Energy Induction (erg/s)')
+    ax3.plot(z_new, n1_interp_z(z_new), linewidth=line1, label='Magnetic Energy') if evolution_type == 'total' else ax3.plot(z_new, n1_interp_z(z_new), linewidth=line1, label='Magnetic Energy Induction')
+    ax3.plot(z_new, n0_interp_z(z_new), linewidth=line1, label='Magnetic Energy from Induction') if evolution_type == 'total' else ax3.plot(z_new, n0_interp_z(z_new), linewidth=line1, label='Predicted Induction')
+    ax3.plot(z_new, total_work_interp_z(z_new), '--', linewidth=line1, label='Magnetic Energy from Induction (Compacted)')
+    ax3.plot(z_new, diver_work_interp_z(z_new), '--', linewidth=line2, label='Divergence')
+    ax3.plot(z_new, compres_work_interp_z(z_new), '--', linewidth=line2, label='Compression')
+    ax3.plot(z_new, stretch_work_interp_z(z_new), '--', linewidth=line2, label='Stretching')
+    ax3.plot(z_new, advec_work_interp_z(z_new), '--', linewidth=line2, label='Advection')
+    ax3.plot(z_new, drag_work_interp_z(z_new), '--', linewidth=line2, label='Cosmic Drag')
+    ax3.plot(z_new, cinetic_work_interp_z(z_new), linewidth=line1, label='Cinetic Energy')
+    ax3.legend(fontsize='small')
+    if Cancel_Limits == False:
+        ax3.set_xlim(xlimo, xlimf)
+        ax3.set_ylim(ylimo, ylimf)
+    if SXAxis == 'log':
+        ax3.set_xscale('log')
+        ax3.set_xlabel('Time log[z]')
+    if SYAxis == 'log':
+        ax3.set_yscale('log')
+        ax3.set_ylabel('Magnetic Energy log[erg]') if evolution_type == 'total' else ax3.set_ylabel('Magnetic Energy Induction log[erg/s]')
+
+# Add a title and show the plot
+plt.title('Integrated Magnetic Energy and Induction Prediction - ' + f'{np.round(F*R_max_mass)} Mpc', y=y_title) if evolution_type == 'total' else plt.title('Integrated Magnetic Energy Induction and Predicted Induction - ' + f'{np.round(F*R_max_mass)} Mpc', y=y_title)
+if Cancel_Limits == True:
+    plt.gca().invert_xaxis()
+fig3.tight_layout()
+plt.show()
+
+# Create a figure and axes
+fig4, ax4 = plt.subplots(figsize=(XX, YY), dpi=DPI)
+
+# Plot the interpolated curves
+if XAxis == 'years':
+    ax4.set_xlabel('Time (yr)')
+    ax4.set_ylabel('Integration Volume')
+    ax4.plot(t, volume_fi, linewidth=line1, label='Physical')
+    ax4.plot(t, volume_co, linewidth=line1, label='Comoving')
+    ax4.legend(fontsize='small')
+    ax4.set_yscale('log')
+    ax4.set_xscale('log') 
+elif XAxis == 'zeta':
+    ax4.set_xlabel('Redshift (z)')
+    ax4.set_ylabel('Integration Volume')
+    ax4.plot(z, volume_fi, linewidth=line1, label='Physical')
+    ax4.plot(z, volume_co, linewidth=line1, label='Comoving')
+    ax4.legend(fontsize='small')
+    ax4.set_yscale('log')
+    ax4.set_xscale('log')
+    ax4.invert_xaxis()
+
+# Add a title and show the plot
+plt.title('Integrated Volume')
+fig4.tight_layout()
+plt.show()
+
+for i in range(len(sims)):
+    for j in range(len(it)-1) if derivative == 'central' else range(len(it)-2):
+        print('Simulation: ' + str(sims[i]) + ' | Iteration: ' + str(it[j]))
+        
+        print('Magnetic energy density in snap '+ str(i+j+1) + ': ' + str(n1[i+j+1])) if evolution_type == 'total' else print('Magnetic induction in snap '+ str(i+j+1) + ': ' + str(n0[i+j]))
+        print('Magnetic.from induction in snap '+ str(i+j+1) + ': ' + str(n0[i+j])) if evolution_type == 'total' else print('Predicted induction in snap '+ str(i+j+1) + ': ' + str(n0[i+j]))
+        print('Cinetic energy in snap '+ str(i+j+1) + ': ' + str(int_cinetic_energy[i+j+1])) if evolution_type == 'total' else print('Cinetic energy rate in snap '+ str(i+j+1) + ': ' + str(int_cinetic_energy[i+j]))
+
+        print('Divergence work: ' + str(diver_work[i+j]))
+        print('Compressive work: ' + str(compres_work[i+j]))
+        print('Stretching work: ' + str(stretch_work[i+j]))
+        print('Advection work: ' + str(advec_work[i+j]))
+        print('Drag work: ' + str(drag_work[i+j]))
+        print('Total work (compacted): ' + str(total_work[i+j]))
+        
+# Save the plots
+
+if save == True:
+    fig1.savefig(image_folder + f'/integrated_energy_{level}_{F}_{vir_kind}_{rad_kind}_{XAxis}_{SXAxis}_{SYAxis}_{xlimo}_{ylimo}_{ylimf}_{int_MIE_diver_B2[-1].dtype}_{stencil}_{plotid if plotid != 0 else _}.png')
+    fig2.savefig(image_folder + f'/smoothed_energy_{level}_{F}_{vir_kind}_{rad_kind}_{XAxis}_{SXAxis}_{SYAxis}_{xlimo}_{ylimo}_{ylimf}_{sigma}_{int_MIE_diver_B2[-1].dtype}_{stencil}_{plotid if plotid != 0 else _}.png')
+    fig3.savefig(image_folder + f'/interpolated_energy_{level}_{F}_{vir_kind}_{rad_kind}_{XAxis}_{SXAxis}_{SYAxis}_{xlimo}_{ylimo}_{ylimf}_{int_MIE_diver_B2[-1].dtype}_{stencil}_{plotid if plotid != 0 else _}.png')
+    fig4.savefig(image_folder + f'/integrated_volume_{level}_{F}_{vir_kind}_{rad_kind}_{XAxis}_{SXAxis}_{SYAxis}_{xlimo}_{ylimo}_{ylimf}_{int_MIE_diver_B2[-1].dtype}_{stencil}_{plotid if plotid != 0 else _}.png')
+
+
 def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rho_b, 
                             clus_cr0amr, clus_solapst, clus_kp,
                             grid_irr, grid_npatch,

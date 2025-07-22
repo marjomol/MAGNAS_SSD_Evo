@@ -317,11 +317,12 @@ def main(box, up_to_level, nmax, size,
             core_patchrx = [patchrx[i] for i in which_patches]
             core_patchry = [patchry[i] for i in which_patches]
             core_patchrz = [patchrz[i] for i in which_patches]
+            core_kept_patches = [kept_patches[i] if i < len(kept_patches) else False for i in which_patches]
 
             this_core_args = (which_patches, core_patch_level, up_to_level,
                             size, nmax, core_patchrx, core_patchry, core_patchrz, core_patchnx, core_patchny, core_patchnz,
                             core_field, sub_nx[ic], ny, nz, sub_grid_faces_x[ic], grid_faces_y, grid_faces_z,
-                            sub_grid_centers_x[ic], grid_centers_y, grid_centers_z, kept_patches, verbose)
+                            sub_grid_centers_x[ic], grid_centers_y, grid_centers_z, core_kept_patches, verbose)
                             
             data_sub.append(this_core_args)
         t1 = time.time()
