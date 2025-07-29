@@ -731,6 +731,26 @@ def which_patches_inside_box(box_limits, patchnx, patchny, patchnz, patchrx, pat
     return which_ipatch
 
 
+def E(z,omega_m, omega_lambda, omega_r=0):
+    """
+    Computes the evolution function of the Hubble parameter (H(z) = H_0 E(z)).
+
+    Args:
+        z: redshift where to evaluate the function
+        omega_m: matter density parameter, at z=0
+        omega_lambda: dark energy density parameter, at z=0
+        omega_r: radiation density parameter, at z=0. Don't specify if negligible
+
+    Returns:
+        Value of the E(z) function for this cosmology
+        
+    Author: David Vallés
+    """
+    omega_k = 1 - omega_m - omega_lambda - omega_r
+    a = 1/(1+z)
+    E = np.sqrt(omega_lambda + omega_k/a**2 + omega_m/a**3 + omega_r/a**4)
+    return E
+
 def magnitude(field_x, field_y, field_z, kept_patches=None):
     '''
     Calculates the magnitude of a vector field.
@@ -809,13 +829,12 @@ def magnitude2(field_x, field_y, field_z, kept_patches=None):
     return field
 
 
-def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, kept_patches=None, vol=False):
+def vol_integral(field, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, a0=1, units=1, kept_patches=None, vol=False):
     """
     Given a scalar field and a sphere defined with a center (x,y,z) and a radious together with the patch structure, returns the volumetric integral of the field along the sphere.
 
     Args:
         - field: scalar field to be integrated
-        - units: change of units factor to be multiplied by the final integral if one wants physical units
         - zeta: redshift of the simulation snap to calculate the scale factor
         - cr0amr: AMR maximum refinement factor (only the maximally resolved cells are considered)
         - solapst: AMR overlap factor (only the maximally resolved cells are considered)
@@ -826,6 +845,8 @@ def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, 
         - nmax: number of cells in the coarsest resolution level
         - coords: center of the sphere in a numpy array [x,y,z]
         - rad: radius of the sphere
+        - a0: scale factor at z=0 (default is 1)
+        - units: change of units factor to be multiplied by the final integral if one wants physical units (default is 1)
         - kept_patches: boolean array to select the patches to be considered in the integration. True if the patch is kept, False if not. If None, all patches are kept.
         - vol: if True, returns the volume of the region instead of the integral. Default is False.
 
@@ -842,7 +863,7 @@ def vol_integral(field, units, zeta, cr0amr, solapst, npatch, patchrx, patchry, 
     
     dx = size/nmax
     
-    a = 1 / (1 + zeta) # We compute the scale factor
+    a = a0 / (1 + zeta) # We compute the scale factor
     
     integral = 0
     

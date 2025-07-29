@@ -11,7 +11,7 @@ Created by Marco Molina Pradillo
 import numpy as np
 import os
 import psutil
-from scripts.units import a0_masclet, H0_masclet, omega_lambda, omega_k, omega_m
+from scripts.units import *
 from scripts.readers import write_parameters
 
 # ============================
@@ -25,7 +25,6 @@ IND_PARAMS = {
     "nmay": [128],
     "nmaz": [128],
     "size": [40], # Size of the box in Mpc
-    "units": [1], # Factor to convert the units of the resulting volume integrals
     "npalev": [13000],
     "nlevels": [7],
     "namrx": [32],
@@ -37,19 +36,21 @@ IND_PARAMS = {
     "F": 1.0, # Factor to multiply the viral radius to define the box size
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
+    "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
     "level": 100, # Max. level of the AMR grid to be used
     "up_to_level": 3, # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
+    # "a0": a0_isu,
     "H0": H0_masclet,
-    "zeta": 100,
+    # "H0": H0_isu,
     "epsilon": 1e-30,
-    "divergence": False, # Process the divergence induction component
+    "divergence": True, # Process the divergence induction component
     "compression": True, # Process the compression induction component
-    "stretching": False, # Process the stretching induction component
-    "advection": False, # Process the advection induction component
-    "drag": False, # Process the drag induction component
-    "total": False, # Process the total induction component
+    "stretching": True, # Process the stretching induction component
+    "advection": True, # Process the advection induction component
+    "drag": True, # Process the drag induction component
+    "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": True, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
@@ -62,7 +63,7 @@ IND_PARAMS = {
 # Directories and Results Parameters #
 
 OUTPUT_PARAMS = {
-    "save": False,
+    "save": True,
     "verbose": True,
     "debug": False,
     "chunk_factor": 2,
@@ -71,11 +72,12 @@ OUTPUT_PARAMS = {
     "ncores": 1,
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
-    "dpi": 300,
     "run": f'MAGNAS_SSD_Evo_test',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
-    "it": [1050], # For different redshift snap iterations analysis
-    # "it": list(range(1000, 2001, 50)) + [2119], 
+    # "it": [1050], # For different redshift snap iterations analysis
+    # "it": [1800, 1850, 1900, 1950, 2000, 2119],
+    # "it": list(range(1000, 2001, 50)) + [2119],
+    "it": list(range(250, 2001, 50)) + [2119], # For different redshift snap iterations analysis
     "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
@@ -88,6 +90,29 @@ OUTPUT_PARAMS = {
     "ID1": "dynamo/",
     "ID2": "test",
     "random_seed": 23 # Set the random seed for reproducibility
+}
+
+EVO_PLOT_PARAMS = {
+    'evolution_type': IND_PARAMS["evolution_type"],
+    'derivative': IND_PARAMS["derivative"],
+    'x_axis': 'zeta', # 'zeta' or 'years'
+    'x_scale': 'lin', # 'lin' or 'log'
+    'y_scale': 'log',
+    'xlim': [2.5, 0], # None for auto
+    # 'xlim': None, # None for auto
+    # 'ylim': [1e58, 1e63], # None for auto
+    'ylim': None, # None for auto
+    'cancel_limits': False, # bool to flip the x axis (useful for zeta)
+    'figure_size': [12, 8], # [width, height]
+    'line_widths': [5, 3], # [line1, line2] for main and component lines
+    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
+    'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
+    'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
+    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method
+    'volume_evolution': True, # bool to plot volume evolution as additional figure
+    'title': 'Magnetic Field Evolution Analysis',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
 }
 
 # ============================
@@ -140,15 +165,8 @@ size = IND_PARAMS["size"]
 nmax = IND_PARAMS["nmax"]
 a0 = IND_PARAMS["a0"]
 H0 = IND_PARAMS["H0"]
-zeta = IND_PARAMS["zeta"]
 
 dx = [size[i]/nmax[i] for i in range(len(size))]  # Cell size in Mpc/h
-
-a = a0 / (1 + zeta)
-E = (omega_lambda + omega_k/a**2 + omega_m/a**3)**(1/2)
-H = H0*E
-rho_b = 3 * (H0)**2 * omega_m * (1 + zeta)**3 # We compute the background density at this redshift
-
 volume = [] # (Mpc)^3
 
 for i in range(len(OUTPUT_PARAMS['sims'])):
@@ -159,10 +177,6 @@ for i in range(len(OUTPUT_PARAMS['sims'])):
                     IND_PARAMS['namry'][i], IND_PARAMS['namrz'][i], size[i], path=parameters_folders[i])
     
 IND_PARAMS["dx"] = dx
-IND_PARAMS["a"] = a
-IND_PARAMS["E"] = E
-IND_PARAMS["H"] = H
-IND_PARAMS["rho_b"] = rho_b
 IND_PARAMS["volume"] = volume
 OUTPUT_PARAMS["dir_params"] = parameters_folders
 
