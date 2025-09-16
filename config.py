@@ -13,6 +13,7 @@ import os
 import psutil
 from scripts.units import *
 from scripts.readers import write_parameters
+from scripts.test import test_limits
 
 # ============================
 # Only edit the section below
@@ -37,8 +38,8 @@ IND_PARAMS = {
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
-    "level": 100, # Max. level of the AMR grid to be used
-    "up_to_level": 3, # AMR level up to which calculate
+    "level": [0,1,2,3,4,5,6,7], # Max. level of the AMR grid to be read
+    "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
@@ -54,10 +55,14 @@ IND_PARAMS = {
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": True, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
-    "derivative": 'central', # Derivative to use for the evolution (implicit or central)
+    "derivative": 'implicit', # Derivative to use for the evolution (implicit or central)
     "profiles": False, # Calculate the profiles of the induction components
     "projection": False, # Calculate the projection of the induction components
-    "A2U": True # Transform the AMR grid to a uniform grid
+    "A2U": False, # Transform the AMR grid to a uniform grid
+    "test_params": {
+        "test": False,
+        "B0": 2.3e-8
+    }
 }
 
 # Directories and Results Parameters #
@@ -72,7 +77,7 @@ OUTPUT_PARAMS = {
     "ncores": 1,
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
-    "run": f'MAGNAS_SSD_Evo_test',
+    "run": f'MAGNAS_SSD_Evo_test_kp',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [1050], # For different redshift snap iterations analysis
     # "it": [1800, 1850, 1900, 1950, 2000, 2119],
@@ -100,11 +105,11 @@ EVO_PLOT_PARAMS = {
     'y_scale': 'log',
     'xlim': [2.5, 0], # None for auto
     # 'xlim': None, # None for auto
-    # 'ylim': [1e58, 1e63], # None for auto
-    'ylim': None, # None for auto
+    'ylim': [1e58, 1e63], # None for auto
+    # 'ylim': None, # None for auto
     'cancel_limits': False, # bool to flip the x axis (useful for zeta)
     'figure_size': [12, 8], # [width, height]
-    'line_widths': [5, 3], # [line1, line2] for main and component lines
+    'line_widths': [5, 1.5], # [line1, line2] for main and component lines
     'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
     'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
     'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
@@ -179,6 +184,45 @@ for i in range(len(OUTPUT_PARAMS['sims'])):
 IND_PARAMS["dx"] = dx
 IND_PARAMS["volume"] = volume
 OUTPUT_PARAMS["dir_params"] = parameters_folders
+
+if IND_PARAMS["test_params"]["test"]:
+    TEST = test_limits(a0, OUTPUT_PARAMS['dir_grids'], OUTPUT_PARAMS['dir_params'][0], 
+                                            OUTPUT_PARAMS['sims'][0], OUTPUT_PARAMS['it'],
+                                            nmax[0], size[0])
+    
+    (
+        x_test,
+        y_test,
+        z_test,
+        k,
+        ω,
+        clus_cr0amr_test,
+        clus_solapst_test,
+        grid_patchrx_test,
+        grid_patchry_test,
+        grid_patchrz_test,
+        grid_patchnx_test,
+        grid_patchny_test,
+        grid_patchnz_test,
+        grid_npatch_test
+    ) = TEST
+    
+    print(f"Test fields parameters: k = {k}, ω = {ω}")
+    
+    IND_PARAMS["test_params"]["k"] = k
+    IND_PARAMS["test_params"]["ω"] = ω
+    IND_PARAMS["test_params"]["x_test"] = x_test
+    IND_PARAMS["test_params"]["y_test"] = y_test
+    IND_PARAMS["test_params"]["z_test"] = z_test
+    IND_PARAMS["test_params"]["clus_cr0amr_test"] = clus_cr0amr_test
+    IND_PARAMS["test_params"]["clus_solapst_test"] = clus_solapst_test
+    IND_PARAMS["test_params"]["grid_patchrx_test"] = grid_patchrx_test
+    IND_PARAMS["test_params"]["grid_patchry_test"] = grid_patchry_test
+    IND_PARAMS["test_params"]["grid_patchrz_test"] = grid_patchrz_test
+    IND_PARAMS["test_params"]["grid_patchnx_test"] = grid_patchnx_test
+    IND_PARAMS["test_params"]["grid_patchny_test"] = grid_patchny_test
+    IND_PARAMS["test_params"]["grid_patchnz_test"] = grid_patchnz_test
+    IND_PARAMS["test_params"]["grid_npatch_test"] = grid_npatch_test
 
 ## Inducction components to be checked
 

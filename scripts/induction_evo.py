@@ -20,6 +20,7 @@ import scripts.utils as utils
 import scripts.diff as diff
 import scripts.readers as reader
 from scripts.units import *
+from scripts.test import analytic_test_fields, numeric_test_fields
 from scipy.special import gamma
 # from scipy import fft
 from matplotlib import pyplot as plt
@@ -175,7 +176,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
     return region, region_size
 
 
-def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, A2U=False, region=None, verbose=False):
+def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, A2U=False, region=None, verbose=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -190,6 +191,12 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, A2U=False
         - dir_gas: directory where the gas data is stored
         - dir_params: directory where the parameters are stored
         - level: level of the AMR grid to be used
+        - test: Dictionary containing the parameters for the test fields:
+            - test: boolean to use test fields or not
+            - x_test, y_test, z_test: 3D grid coordinates.
+            - k: Wave number for the sinusoidal test fields.
+            - ω: Angular frequency for the sinusoidal test fields.
+            - B0: Amplitude of the magnetic field.
         - A2U: boolean to transform the AMR grid to a uniform grid (default is False)
         - region: region to be used (default is None)
         - verbose: boolean to print the data type loaded or not (default is False)
@@ -203,92 +210,179 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, A2U=False
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
 
-    # Read grid data using the reader
-    grid = reader.read_grids(
-        it=it,
-        path=dir_grids + sims,
-        parameters_path=dir_params,
-        digits=5,
-        read_general=True,
-        read_patchnum=True,
-        read_dmpartnum=False,
-        read_patchcellextension=True,
-        read_patchcellposition=False,
-        read_patchposition=True,
-        read_patchparent=False,
-        nparray=True
-    )
+    if test['test'] == False:
+        # Read grid data using the reader
+        grid = reader.read_grids(
+            it=it,
+            path=dir_grids + sims,
+            parameters_path=dir_params,
+            digits=5,
+            read_general=True,
+            read_patchnum=True,
+            read_dmpartnum=False,
+            read_patchcellextension=True,
+            read_patchcellposition=False,
+            read_patchposition=True,
+            read_patchparent=False,
+            nparray=True
+        )
 
-    # Unpack grid data with explicit variable names for clarity
-    (
-        grid_irr,
-        grid_t,
-        _,  # grid_nl (unused)
-        _,  # grid_mass_dmpart (unused)
-        grid_zeta,
-        grid_npatch,
-        grid_patchnx,
-        grid_patchny,
-        grid_patchnz,
-        grid_patchrx,
-        grid_patchry,
-        grid_patchrz,
-        *_
-    ) = grid
+        # Unpack grid data with explicit variable names for clarity
+        (
+            grid_irr,
+            grid_time,
+            _,  # grid_nl (unused)
+            _,  # grid_mass_dmpart (unused)
+            grid_zeta,
+            grid_npatch,
+            grid_patchnx,
+            grid_patchny,
+            grid_patchnz,
+            grid_patchrx,
+            grid_patchry,
+            grid_patchrz,
+            *_
+        ) = grid
+        
+        # Only keep patches up to the desired AMR level
+        grid_npatch[level+1:] = 0
+        
+        # Read cluster data
+        clus = reader.read_clus(
+            it=it,
+            path=dir_gas + sims,
+            parameters_path=dir_params,
+            digits=5,
+            max_refined_level=level,
+            output_delta=True,
+            output_v=True,
+            output_pres=False,
+            output_pot=False,
+            output_opot=False,
+            output_temp=False,
+            output_metalicity=False,
+            output_cr0amr=True,
+            output_solapst=True,
+            is_mascletB=True,
+            output_B=True,
+            is_cooling=False,
+            verbose=False,
+            read_region=region
+        )
 
-    # Only keep patches up to the desired AMR level
-    grid_npatch[level+1:] = 0
-    
+        # Unpack cluster data
+        (
+            clus_rho_rho_b,
+            clus_vx,
+            clus_vy,
+            clus_vz,
+            clus_cr0amr,
+            clus_solapst,
+            clus_bx,
+            clus_by,
+            clus_bz,
+            *rest
+        ) = clus
+    else:
+        # Read grid data using the reader
+        grid = reader.read_grids(
+            it=it,
+            path=dir_grids + sims,
+            parameters_path=dir_params,
+            digits=5,
+            read_general=True,
+            read_patchnum=False,
+            read_dmpartnum=False,
+            read_patchcellextension=False,
+            read_patchcellposition=False,
+            read_patchposition=False,
+            read_patchparent=False,
+            nparray=False
+        )
+
+        # Unpack grid data with explicit variable names for clarity
+        (
+            grid_irr,
+            grid_time,
+            _,  # grid_nl (unused)
+            _,  # grid_mass_dmpart (unused)
+            grid_zeta,
+            *_
+        ) = grid
+        
+        grid_patchrx = test['grid_patchrx_test']
+        grid_patchry = test['grid_patchry_test']
+        grid_patchrz = test['grid_patchrz_test']
+        grid_patchnx = test['grid_patchnx_test']
+        grid_patchny = test['grid_patchny_test']
+        grid_patchnz = test['grid_patchnz_test']
+        grid_npatch = test['grid_npatch_test']
+        
+    # Create vector_levels using the tools module
+    vector_levels = utils.create_vector_levels(grid_npatch)
+
     a = a0 / (1 + grid_zeta)  # Scale factor at the redshift zeta
     E = utils.E(grid_zeta, omega_m, omega_lambda)
     H = H0*E
     rho_b = 3 * (H0)**2 * omega_m * (1 + grid_zeta)**3 # We compute the background density at this redshift
-
-    # Create vector_levels using the tools module
-    vector_levels = utils.create_vector_levels(grid_npatch)
+    # rho_b = 1
     
-    # Read cluster data
-    clus = reader.read_clus(
-        it=it,
-        path=dir_gas + sims,
-        parameters_path=dir_params,
-        digits=5,
-        max_refined_level=level,
-        output_delta=True,
-        output_v=True,
-        output_pres=False,
-        output_pot=False,
-        output_opot=False,
-        output_temp=False,
-        output_metalicity=False,
-        output_cr0amr=True,
-        output_solapst=True,
-        is_mascletB=True,
-        output_B=True,
-        is_cooling=False,
-        verbose=False,
-        read_region=region
-    )
+    if test['test'] == True:
+        # Read cluster data
+        clus = reader.read_clus(
+            it=it,
+            path=dir_gas + sims,
+            parameters_path=dir_params,
+            digits=5,
+            max_refined_level=level,
+            output_delta=True,
+            output_v=False,
+            output_pres=False,
+            output_pot=False,
+            output_opot=False,
+            output_temp=False,
+            output_metalicity=False,
+            output_cr0amr= False,
+            output_solapst= False,
+            is_mascletB=True,
+            output_B=False,
+            is_cooling=False,
+            verbose=False,
+            read_region=region
+        )
 
-    # Unpack cluster data
-    (
-        clus_rho_rho_b,
-        clus_vx,
-        clus_vy,
-        clus_vz,
-        clus_cr0amr,
-        clus_solapst,
-        clus_bx,
-        clus_by,
-        clus_bz,
-        *rest
-    ) = clus
-
+        # Unpack cluster data
+        (
+            clus_rho_rho_b,
+            *rest
+        ) = clus
+        
+        rest = None
+        clus_cr0amr = test['clus_cr0amr_test']
+        clus_solapst = test['clus_solapst_test']
+        
+        clus_bv = numeric_test_fields(
+            grid_time=grid_time,
+            grid_npatch=grid_npatch,
+            a=a,
+            H=H,
+            test_params=test
+        )
+        
+        (
+            clus_bx,
+            clus_by,
+            clus_bz,
+            clus_vx,
+            clus_vy,
+            clus_vz
+        ) = clus_bv
+        
     # Determine mask for valid patches
     if region is not None and rest:
         clus_kp = rest[0]
     else:
-        clus_kp = np.ones((len(clus_bx[-1]),), dtype=bool)
+        clus_kp = np.ones((len(clus_bx),), dtype=bool)
 
     # Normalize magnetic field components
     clus_Bx = [clus_bx[p] / np.sqrt(rho_b) if clus_kp[p] != 0 else 0 for p in range(1 + np.sum(grid_npatch))]
@@ -298,6 +392,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, A2U=False
     if verbose == True:
         print('Data type loaded for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype))
 
+    # Convert to float64 if not transforming to uniform grid
     if A2U == False: 
         clus_rho_rho_b = [(1+clus_rho_rho_b[p]).astype(np.float64) if clus_kp[p] != 0 else (1+clus_rho_rho_b[p]) for p in range(1+np.sum(grid_npatch))] # Delta is (rho/rho_b) - 1
         clus_vx = [clus_vx[p].astype(np.float64) if clus_kp[p] != 0 else clus_vx[p] for p in range(1+np.sum(grid_npatch))]
@@ -319,7 +414,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, A2U=False
         
     results = {
         'grid_irr': grid_irr,
-        'grid_t': grid_t,
+        'grid_time': grid_time,
         'grid_zeta': grid_zeta,
         'grid_npatch': grid_npatch,
         'grid_patchnx': grid_patchnx,
@@ -696,7 +791,7 @@ def induction_equation_energy(components, induction_equation,
 
 def induction_vol_integral(components, induction_energy, clus_b2,
                             clus_cr0amr, clus_solapst, clus_kp,
-                            grid_irr, grid_zeta, grid_npatch,
+                            grid_irr, grid_zeta, grid_npatch, up_to_level,
                             grid_patchrx, grid_patchry, grid_patchrz,
                             grid_patchnx, grid_patchny, grid_patchnz,
                             it, sims, nmax, size, coords, rad,
@@ -724,6 +819,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         - grid_irr: index of the snapshot
         - grid_zeta: redshift of the snapshot
         - grid_npatch: number of patches in the grid
+        - up_to_level: maximum refinement level to be considered
         - grid_patchrx, grid_patchry, grid_patchrz: patch sizes in the x, y, and z directions
         - grid_patchnx, grid_patchny, grid_patchnz: number of patches in the x, y, and z directions
         - it: index of the snapshot in the simulation
@@ -769,7 +865,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         ('total', 'MIE_total_B2')
     ]:
         if components.get(key, False):
-            results[f'int_{prefix}'] = utils.vol_integral(induction_energy[prefix], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+            results[f'int_{prefix}'] = utils.vol_integral(induction_energy[prefix], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
                                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
                                                             size, nmax, coords, rad, a0_masclet, units, kept_patches=clus_kp)
     
@@ -779,7 +875,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
             results[f'int_{prefix}'] = zero
     
     if induction_energy['kinetic_energy_density']:
-        results['int_kinetic_energy'] = utils.vol_integral(induction_energy['kinetic_energy_density'], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+        results['int_kinetic_energy'] = utils.vol_integral(induction_energy['kinetic_energy_density'], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
                                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
                                                             size, nmax, coords, rad, a0_masclet, units, kept_patches=clus_kp)
         if verbose == True:
@@ -788,7 +884,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         results['int_kinetic_energy'] = zero
         
     if clus_b2:
-        results['int_b2'] = utils.vol_integral(clus_b2, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+        results['int_b2'] = utils.vol_integral(clus_b2, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
                                                 grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
                                                 size, nmax, coords, rad, a0_masclet, units, kept_patches=clus_kp)
         if verbose == True:
@@ -796,7 +892,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
     else:
         results['int_b2'] = zero
     
-    results['volume'] = utils.vol_integral(induction_energy[prefix], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch,
+    results['volume'] = utils.vol_integral(induction_energy[prefix], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
                                             size, nmax, coords, rad, a0_masclet, units, kept_patches=clus_kp, vol=True)
 
@@ -812,7 +908,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
 
 def induction_energy_integral_evolution(components, induction_energy_integral,
                                         evolution_type, derivative, rho_b,
-                                        grid_t, grid_zeta, verbose=False):
+                                        grid_time, grid_zeta, verbose=False):
     '''
     Given the volume integrals of the magnetic energy density and its components at different redshifts,
     computes the evolution of the magnetic integrated energy and that of its components for their further representation.
@@ -833,7 +929,7 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
         - evolution_type: type of evolution to compute ('total' or 'differential')
         - derivative: type of derivative to compute ('implicit' or 'central')
         - rho_b: density contrast of the simulation
-        - grid_t: time grid for the simulation
+        - grid_time: time grid for the simulation
         - grid_zeta: redshift grid for the simulation
         - verbose: boolean to print the data type loaded or not (default is False)
         
@@ -860,7 +956,7 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
     
     start_time_evolution = time.time() # Record the start time
     
-    n = len(grid_t)-1
+    n = len(grid_time)-1
     zero = [0] * n
     
     results = {}
@@ -890,38 +986,40 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
             if components.get(key, False):
                 if derivative == 'central':
                     results[f'evo_{prefix}'] = [(rho_b[i+1] * ((1/rho_b[i]) * (induction_energy_integral[f'int_b2'][i]) +
-                    2 * (grid_t[i+1] - grid_t[i]) * (induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
+                    2 * (grid_time[i+1] - grid_time[i]) * (induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
                 elif derivative == 'implicit':
                     results[f'evo_{prefix}'] = [((rho_b[i+2]/rho_b[i+1]) * induction_energy_integral[f'int_b2'][i+1] +
-                    2 * rho_b[i+2] * (grid_t[i+2] - grid_t[i+1]) * (induction_energy_integral[f'int_{prefix}'][i+1] +
-                    ((grid_t[i+2] - grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
+                    2 * rho_b[i+2] * (grid_time[i+2] - grid_time[i+1]) * (induction_energy_integral[f'int_{prefix}'][i+1] +
+                    ((grid_time[i+2] - grid_time[i+1])/(grid_time[i+2] - grid_time[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
                     induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n-1)]
                 if verbose == True:
                     print(f'Energy evolution: {key} volume energy integral evolution done')
             else:
                 results[f'evo_{prefix}'] = zero
             
-            results['evo_b2'] = [induction_energy_integral['int_b2'][i] for i in range(n+1)]
-            results['evo_kinetic_energy'] = [rho_b[i] * induction_energy_integral['int_kinetic_energy'][i] for i in range(n+1)]
-            if verbose == True:
-                print(f'Energy evolution: magnetic and kinetic energy integral evolution done')
+
         elif evolution_type == 'differential':
             if components.get(key, False):
                 if derivative == 'central':
                     results[f'evo_{prefix}'] = [2 * (induction_energy_integral[f'int_{prefix}'][i]) for i in range(n)]
                 elif derivative == 'implicit':
-                    results[f'evo_{prefix}'] = [2 * ((induction_energy_integral[f'int_{prefix}'][i+1] + ((grid_t[i+2] -
-                    grid_t[i+1])/(grid_t[i+2] - grid_t[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
+                    results[f'evo_{prefix}'] = [2 * ((induction_energy_integral[f'int_{prefix}'][i+1] + ((grid_time[i+2] -
+                    grid_time[i+1])/(grid_time[i+2] - grid_time[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
                     induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n-1)]
                 if verbose == True:
                     print(f'Energy evolution: {key} energy integral evolution done')
             else:
                 results[f'evo_{prefix}'] = zero
-            
-            results['evo_b2'] = [(1/((grid_t[i+1] - grid_t[i]))) * (induction_energy_integral['int_b2'][i+1]/rho_b[i+1] - induction_energy_integral['int_b2'][i]/rho_b[i]) for i in range(n)]
-            results['evo_kinetic_energy'] = [(1/(grid_t[i+1] - grid_t[i])) * ((rho_b[i+1] * induction_energy_integral['int_kinetic_energy'][i+1]) - (rho_b[i] * induction_energy_integral['int_kinetic_energy'][i])) for i in range(n)]
-            if verbose == True:
-                print(f'Energy evolution: magnetic and kinetic energy integral evolution done')
+    
+    if evolution_type == 'total':
+        results['evo_b2'] = [induction_energy_integral['int_b2'][i] for i in range(n+1)]
+        results['evo_kinetic_energy'] = [rho_b[i] * induction_energy_integral['int_kinetic_energy'][i] for i in range(n+1)]
+    elif evolution_type == 'differential':
+        results['evo_b2'] = [(1/((grid_time[i+1] - grid_time[i]))) * (induction_energy_integral['int_b2'][i+1]/rho_b[i+1] - induction_energy_integral['int_b2'][i]/rho_b[i]) for i in range(n)]
+        results['evo_kinetic_energy'] = [(1/(grid_time[i+1] - grid_time[i])) * ((rho_b[i+1] * induction_energy_integral['int_kinetic_energy'][i+1]) - (rho_b[i] * induction_energy_integral['int_kinetic_energy'][i])) for i in range(n)]
+    
+    if verbose == True:
+        print(f'Energy evolution: magnetic and kinetic energy integral evolution done')
             
     results['evo_volume_phi'] = [(induction_energy_integral['volume'][i]) for i in range(n+1)]
     results['evo_volume_co'] = [(induction_energy_integral['volume'][i] / ((1/(1+grid_zeta[i]))**3)) for i in range(n+1)]
@@ -1185,7 +1283,7 @@ def uniform_induction(components, induction_equation,
 
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, Box, rad, rmin, level, up_to_level,
-                    nmax, size, H0, a0, units =1, nbins=25, logbins=True,
+                    nmax, size, H0, a0, test, units =1, nbins=25, logbins=True,
                     stencil=3, A2U=False, mag=False,
                     energy_evolution=True, profiles=True, projection=True,
                     verbose=False):
@@ -1209,6 +1307,12 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - size: size of the grid
         - H0: Hubble parameter at the present time
         - a0: scale factor of the universe at the present time
+        - test: Dictionary containing the parameters for the test fields:
+            - test: boolean to use test fields or not
+            - x_test, y_test, z_test: 3D grid coordinates.
+            - k: Wave number for the sinusoidal test fields.
+            - ω: Angular frequency for the sinusoidal test fields.
+            - B0: Amplitude of the magnetic field.
         - units: factor to convert the units multiplied by the final result (default is 1
         - nbins: number of bins for the radial profile (default is 25)
         - logbins: boolean to use logarithmic bins (default is True)
@@ -1221,7 +1325,14 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - verbose: boolean to print progress information (default is False)
         
     Returns:
-        
+        - data: dictionary containing the loaded data from the simulation
+        - vectorial: dictionary containing the computed vectorial quantities
+        - induction: dictionary containing the components of the magnetic induction equation
+        - induction_energy: dictionary containing the components of the magnetic induction equation in terms of the magnetic energy
+        - induction_energy_integral: dictionary containing the volume integrals of the magnetic induction equation in terms of the magnetic energy
+        - induction_energy_profiles: dictionary containing the radial profiles of the magnetic induction equation in terms of the magnetic energy
+        - induction_uniform: dictionary containing the uniform projection of the magnetic induction equation in terms of the magnetic energy
+
     Author: Marco Molina
     '''
 
@@ -1237,7 +1348,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, A2U=A2U, region=Box, verbose=verbose)
+    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, A2U=A2U, region=Box, verbose=verbose)
     
     # Vectorial calculus
 
@@ -1281,7 +1392,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         
         induction_energy_integral = induction_vol_integral(components, induction_energy, data['clus_b2'],
                                 data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
-                                data['grid_irr'], data['grid_zeta'], data['grid_npatch'],
+                                data['grid_irr'], data['grid_zeta'], data['grid_npatch'], up_to_level,
                                 data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                                 data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                                 it, sims, nmax, size, coords, rad,
@@ -1327,7 +1438,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             print('Projection is set to False, skipping uniform projection of the magnetic induction equation.')
     
     data = {
-        'grid_t': data['grid_t'],
+        'grid_time': data['grid_time'],
         'grid_zeta': data['grid_zeta'],
         'rho_b': data['rho_b']
     }

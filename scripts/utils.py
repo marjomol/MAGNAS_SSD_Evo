@@ -375,7 +375,8 @@ def create_vector_levels(npatch):
     Creates a vector containing the level for each patch. Nothing really important, just for ease
 
     Args:
-        npatch: number of patches in each level, starting in l=0 (numpy vector of NLEVELS integers)
+        npatch: number of patches in each level, starting in l=0 where there is 1 whole single patch,
+        writen here like [0, 1, 1, 2, 2, 2, ...] (numpy vector of NLEVELS integers)
 
     Returns:
         numpy array containing the level for each patch
@@ -829,7 +830,7 @@ def magnitude2(field_x, field_y, field_z, kept_patches=None):
     return field
 
 
-def vol_integral(field, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, a0=1, units=1, kept_patches=None, vol=False):
+def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, a0=1, units=1, kept_patches=None, vol=False):
     """
     Given a scalar field and a sphere defined with a center (x,y,z) and a radious together with the patch structure, returns the volumetric integral of the field along the sphere.
 
@@ -855,6 +856,8 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz
         
     Author: Marco Molina
     """
+    field = clean_field(field, cr0amr, solapst, npatch, up_to_level)
+    
     if kept_patches is None:
         total_npatch = len(field)
         kept_patches = np.ones((total_npatch,), dtype=bool)
@@ -870,9 +873,12 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz
     if vol:
         field = [np.ones_like(field[p]) for p in range(1 + np.sum(npatch))] # If vol is True, we just want the volume, so we set the field to 1
     
-    for p in range(len(kept_patches)): # We run across all the patches
+    for p in range(1 + np.sum(npatch)): # We run across all the patches
         
-        patch_res = dx/(2**vector_levels[p])
+        if p == 0:
+            patch_res = dx
+        else:
+            patch_res = dx/(2**vector_levels[p])
         
         x0 = patchrx[p] - patch_res/2 #Center of the left-bottom-front cell
         y0 = patchry[p] - patch_res/2
@@ -894,11 +900,9 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, patchrx, patchry, patchrz
         
         masked = np.where(mask, field[p], 0)
         
-        integral += np.sum(masked*cr0amr[p]*solapst[p])*dr3
+        integral += np.sum(masked)*dr3
     
     integral = units * integral
-    
-    # print('Total integrated field: ' + str(integral))
     
     return integral
 
