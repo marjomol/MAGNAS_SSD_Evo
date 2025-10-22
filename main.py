@@ -63,6 +63,7 @@ if __name__ == "__main__":
             all_magnitudes = {}
             all_induction_energy = {}
             all_induction_energy_integral = {}
+            all_induction_test_energy_integral = {}
             all_induction_energy_profiles = {}
             all_induction_uniform = {}
 
@@ -72,7 +73,8 @@ if __name__ == "__main__":
             # Process each iteration in serial
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 for it, j in zip(out_params["it"], range(len(out_params["it"]))):
-                    data, _, _, _, _, induction_energy_integral, _, _ = process_iteration(
+                    
+                    data, _, _, _, _, induction_energy_integral, induction_test_energy_integral, _, _ = process_iteration(
                         ind_params["components"], 
                         out_params["dir_grids"], 
                         out_params["dir_gas"],
@@ -116,6 +118,10 @@ if __name__ == "__main__":
                         if induction_energy_integral is not None:
                             for key in induction_energy_integral.keys():
                                 all_induction_energy_integral[key] = []
+                                
+                        if induction_test_energy_integral is not None:
+                            for key in induction_test_energy_integral.keys():
+                                all_induction_test_energy_integral[key] = []
                         
                         # if induction_energy_profiles is not None:
                         #     for key in induction_energy_profiles.keys():
@@ -147,6 +153,10 @@ if __name__ == "__main__":
                     if induction_energy_integral is not None:
                         for key in induction_energy_integral.keys():
                             all_induction_energy_integral[key].append(induction_energy_integral[key])
+                            
+                    if induction_test_energy_integral is not None:
+                        for key in induction_test_energy_integral.keys():
+                            all_induction_test_energy_integral[key].append(induction_test_energy_integral[key])
                     
                     # if induction_energy_profiles is not None:
                     #     for key in induction_energy_profiles.keys():
@@ -172,7 +182,14 @@ if __name__ == "__main__":
                 all_data['rho_b'], all_data['grid_time'], all_data['grid_zeta'],
                 verbose=out_params["verbose"])
             
+            induction_test_energy_integral_evo = induction_energy_integral_evolution(
+                ind_params["components"], all_induction_test_energy_integral,
+                ind_params['evolution_type'], ind_params['derivative'],
+                all_data['rho_b'], all_data['grid_time'], all_data['grid_zeta'],
+                verbose=out_params["verbose"])
+            
             ind_params["up_to_level"] = ind_params["level"][L]
+            
             plot_integral_evolution(
                 induction_energy_integral_evo,
                 evo_plot_params, ind_params,
@@ -180,7 +197,18 @@ if __name__ == "__main__":
                 Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
                 folder=out_params['image_folder']
             )
-                
+
+            print(f"Ploting " + evo_plot_params["title"] + " completed.")
+
+            plot_integral_evolution(
+                induction_test_energy_integral_evo,
+                ind_params["test_params"]['evo_plot_params'], ind_params,
+                all_data['grid_time'], all_data['grid_zeta'],
+                Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                folder=out_params['image_folder']
+            )
+
+            print(f"Ploting " + ind_params["test_params"]['evo_plot_params']["title"] + " completed.")
             
         
 # ============================

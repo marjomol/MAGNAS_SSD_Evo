@@ -830,9 +830,9 @@ def magnitude2(field_x, field_y, field_z, kept_patches=None):
     return field
 
 
-def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, rad, a0=1, units=1, kept_patches=None, vol=False):
+def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, region_coords, rad, a0=1, units=1, kept_patches=None, vol=False):
     """
-    Given a scalar field and a sphere defined with a center (x,y,z) and a radious together with the patch structure, returns the volumetric integral of the field along the sphere.
+    Given a scalar field and a region defined with a center (x,y,z) and a radious together with the patch structure, returns the volumetric integral of the field along the volume.
 
     Args:
         - field: scalar field to be integrated
@@ -844,16 +844,17 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, pat
         - patchnx, patchny, patchnz: x-extension of each patch (in level l cells) (and Y and Z)
         - size: comoving size of the simulation box
         - nmax: number of cells in the coarsest resolution level
-        - coords: center of the sphere in a numpy array [x,y,z]
-        - rad: radius of the sphere
+        - coords: center of the volume in a numpy array [x,y,z]
+        - region_coords: comoving coordinates of the integration area.
+        - rad: radius of the volume region
         - a0: scale factor at z=0 (default is 1)
         - units: change of units factor to be multiplied by the final integral if one wants physical units (default is 1)
         - kept_patches: boolean array to select the patches to be considered in the integration. True if the patch is kept, False if not. If None, all patches are kept.
         - vol: if True, returns the volume of the region instead of the integral. Default is False.
 
     Returns:
-        - integral: volumetric integral of the field along the sphere
-        
+        - integral: volumetric integral of the field along the volume
+
     Author: Marco Molina
     """
     field = clean_field(field, cr0amr, solapst, npatch, up_to_level)
@@ -863,8 +864,8 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, pat
         kept_patches = np.ones((total_npatch,), dtype=bool)
         
     vector_levels = create_vector_levels(npatch)
-    
     dx = size/nmax
+    resolution = dx/(2**vector_levels) # Resolution of each patch at its level
     
     a = a0 / (1 + zeta) # We compute the scale factor
     
@@ -875,10 +876,7 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, pat
     
     for p in range(1 + np.sum(npatch)): # We run across all the patches
         
-        if p == 0:
-            patch_res = dx
-        else:
-            patch_res = dx/(2**vector_levels[p])
+        patch_res = resolution[p]
         
         x0 = patchrx[p] - patch_res/2 #Center of the left-bottom-front cell
         y0 = patchry[p] - patch_res/2
@@ -890,17 +888,21 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, pat
         
         X_grid, Y_grid, Z_grid = np.meshgrid(x_grid, y_grid, z_grid, indexing='ij')
         
-        # Create a boolean mask where the condition is True
-        mask = ((coords[0] - X_grid)**2 + (coords[1] - Y_grid)**2 + (coords[2] - Z_grid)**2) <= rad**2
-        
+        if region_coords[0] == "sphere":
+            # Create a boolean mask where the condition is True
+            mask = ((coords[0] - X_grid)**2 + (coords[1] - Y_grid)**2 + (coords[2] - Z_grid)**2) <= rad**2
+        elif region_coords[0] == "box":
+            mask = ( (X_grid >= region_coords[1]) & (X_grid <= region_coords[2]) &
+                    (Y_grid >= region_coords[3]) & (Y_grid <= region_coords[4]) &
+                    (Z_grid >= region_coords[5]) & (Z_grid <= region_coords[6]) )
+        elif region_coords[0] == None:
+            mask = np.ones_like(X_grid, dtype=bool)
+
         # Calculate the physical volume of the cell in this simulation patch
         dr3 = (a*patch_res)**3
         
         # Calculate the integral of the scalar quantity over the volume
-        
-        masked = np.where(mask, field[p], 0)
-        
-        integral += np.sum(masked)*dr3
+        integral += np.sum(field[p]*mask)*dr3
     
     integral = units * integral
     

@@ -149,9 +149,9 @@ def numeric_test_fields(grid_time, grid_npatch, a, H, test_params):
 
     return bx, by, bz, vx, vy, vz
 
-def analytic_test_fields(grid_time, grid_npatch, rho_b, a, H, Bx, test_params):
+def analytic_test_fields(grid_time, grid_npatch, a, H, Bx, test_params):
     """
-    Defines the analytical expressions of the components of the induction equation for the test fields defined in numeric_test_fields.
+    Defines the analytical expressions of the components of the induction energy equation for the test fields defined in numeric_test_fields.
     The components are defined as follows:
         Divergence:
             $$	\frac{1}{a} \tilde{\vec{B}} \cdot \vec{v} ( \vec{\nabla} \cdot \tilde{\vec{B}} ) = 0$$
@@ -169,7 +169,6 @@ def analytic_test_fields(grid_time, grid_npatch, rho_b, a, H, Bx, test_params):
     Args:
         - grid_time: List of times for each iteration.
         - grid_npatch: List of number of patches for each iteration.
-        - rho_b: Background density.
         - a: Scale factor at the current iteration.
         - H: Hubble parameter at the current iteration.
         - Bx: x-component of the magnetic field from numeric_test_fields.
@@ -183,24 +182,29 @@ def analytic_test_fields(grid_time, grid_npatch, rho_b, a, H, Bx, test_params):
     Returns:
         compression, divergence, stretching, advection, cosmic_drag, total
     """
+
     x = test_params['x_test']
     y = test_params['y_test']
     z = test_params['z_test']
     k = test_params['k']
     ω = test_params['ω']
-    B0 = test_params['B0']
+    
+    results = {}
     
     # Compression
-    compression = [(1/a) * (Bx[p])**2 * (ω * a * (1/np.tan(k * z * a + ω * grid_time)) + 3 * H * a) for p in range(sum(grid_npatch)+1)]
+    results['MIE_compres_B2'] = [(1/a) * (Bx[p])**2 * (ω * a * (1/np.tan(k * z * a + ω * grid_time)) + 3 * H * a) for p in range(sum(grid_npatch)+1)]
     # Divergence is given to be 0, no calculation needed
-    divergence = np.zeros_like(compression)
+    results['MIE_diver_B2'] = np.zeros_like(results['MIE_compres_B2'])
     # Stretching
-    stretching = [- H * Bx[p]**2 for p in range(sum(grid_npatch)+1)]
+    results['MIE_stretch_B2'] = [- H * Bx[p]**2 for p in range(sum(grid_npatch)+1)]
     # Advection
-    advection = [H * a * ((B0**2 * k)/rho_b) * np.sin(k * z * a + ω * grid_time) * np.cos(k * z * a + ω * grid_time) for _ in range(sum(grid_npatch)+1)]
+    results['MIE_advec_B2'] = [H * a * (Bx[p]**2 /np.sin(k * z * a + ω * grid_time)) * k * np.cos(k * z * a + ω * grid_time) for p in range(sum(grid_npatch)+1)]
     # Cosmic Drag
-    cosmic_drag = [-(H/2) * Bx[p]**2 for p in range(sum(grid_npatch)+1)]
+    results['MIE_drag_B2'] = [-(H/2) * Bx[p]**2 for p in range(sum(grid_npatch)+1)]
     # Total Compact Induction
-    total = [Bx[p]**2 * ((ω + k * H * a * z) * (1/np.tan(k * z * a + ω * grid_time)) + ((3*H)/2)) for p in range(sum(grid_npatch)+1)]
+    results['MIE_total_B2'] = [Bx[p]**2 * ((ω + k * H * a * z) * (1/np.tan(k * z * a + ω * grid_time)) + ((3*H)/2)) for p in range(sum(grid_npatch)+1)]
     
-    return compression, divergence, stretching, advection, cosmic_drag, total
+    results['kinetic_energy_density'] = [0.5 * ( (H * a * z)**2 + (ω * y * a * (1/np.tan(k * z * a + ω * grid_time)) + H * a * y)**2 + (H * a * z)**2 ) for _ in range(sum(grid_npatch)+1)]
+    results['int_b2'] = [np.mean(Bx[p]**2) for p in range(sum(grid_npatch)+1)]
+    
+    return results
