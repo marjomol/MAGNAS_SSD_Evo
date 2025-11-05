@@ -39,13 +39,14 @@ IND_PARAMS = {
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
-    "level": [0,1,2,3,4,5], # Max. level of the AMR grid to be read
-    # "level": [0,1], # Max. level of the AMR grid to be read
-    "up_to_level": [0,1,2,3,4,5], # AMR level up to which calculate
-    # "up_to_level": [0,1], # AMR level up to which calculate
+    # "units": 1, # Factor to convert the units of the resulting volume integrals
+    # "level": [0,1,2,3,4,5,6,7], # Max. level of the AMR grid to be read
+    "level": [0,5], # Max. level of the AMR grid to be read
+    # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
+    "up_to_level": [0,5], # AMR level up to which calculate
     # "level": [0], # Max. level of the AMR grid to be read
     # "up_to_level": [0], # AMR level up to which calculate
-    "region": 'None', # Region of interest to calculate the induction components (BOX, SPH, or None)
+    "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
     "H0": H0_masclet,
@@ -60,12 +61,12 @@ IND_PARAMS = {
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": True, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
-    "derivative": 'central', # Derivative to use for the evolution (implicit or central)
+    "derivative": 'rate', # Derivative to use for the evolution (implicit, central, RK or rate)
     "profiles": False, # Calculate the profiles of the induction components
     "projection": False, # Calculate the projection of the induction components
     "A2U": False, # Transform the AMR grid to a uniform grid
     "test_params": {
-        "test": True,
+        "test": False,
         "B0": 2.3e-8
     }
 }
@@ -82,12 +83,13 @@ OUTPUT_PARAMS = {
     "ncores": 1,
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
-    "run": f'MAGNAS_SSD_Evo_test_numerical_field',
+    "run": f'MAGNAS_SSD_Evo_test_rho_corrected_RKlinear',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [1050], # For different redshift snap iterations analysis
     # "it": [1800, 1850, 1900, 1950, 2000, 2119],
     # "it": list(range(1000, 2001, 50)) + [2119],
     "it": list(range(250, 2001, 50)) + [2119], # For different redshift snap iterations analysis
+    # "it": list(range(0, 2001, 50)) + [2119], # For different redshift snap iterations analysis
     "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
@@ -110,8 +112,8 @@ EVO_PLOT_PARAMS = {
     'y_scale': 'log',
     'xlim': [2.5, 0], # None for auto
     # 'xlim': None, # None for auto
-    'ylim': [1e57, 1e60], # For the test
-    # 'ylim': [1e59, 1e64], # None for auto
+    # 'ylim': [1e57, 1e60], # For the test
+    'ylim': [1e58, 1e63], # None for auto
     # 'ylim': None, # None for auto
     'cancel_limits': False, # bool to flip the x axis (useful for zeta)
     'figure_size': [12, 8], # [width, height]

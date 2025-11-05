@@ -478,19 +478,59 @@ def scan_animation_3D(arr, size, study_box, depth = 2, arrow_scale = 1, units = 
         ani.save(folder + f'/{file_title}_{run}_scan.gif', writer='pillow', dpi = DPI)
         
     return ani
+
+
+def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font):
+        """Helper function to set up axis properties"""
+        if x_axis == 'years':
+            ax.set_xlabel('Time (yr)', fontproperties=font)
+            if evolution_type == 'total':
+                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
+            else:
+                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
+        else:  # zeta
+            ax.set_xlabel('Redshift (z)', fontproperties=font)
+            if evolution_type == 'total':
+                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
+            else:
+                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
+        
+        if not cancel_limits and xlim:
+            ax.set_xlim(xlim[0], xlim[1])
+        if not cancel_limits and ylim:
+            ax.set_ylim(ylim[0], ylim[1])
+            
+        if x_scale == 'log':
+            ax.set_xscale('log')
+            if x_axis == 'years':
+                ax.set_xlabel('Time log[yr]', fontproperties=font)
+            else:
+                ax.set_xlabel('Redshift log[z]', fontproperties=font)
+                
+        if y_scale == 'log':
+            ax.set_yscale('log')
+            if evolution_type == 'total':
+                ax.set_ylabel('Magnetic Energy log[erg]', fontproperties=font)
+            else:
+                ax.set_ylabel('Magnetic Energy Induction log[erg/s]', fontproperties=font)
+                
+def should_plot_component(data, threshold=1e-30):
+        """Check if component has any non-zero values worth plotting"""
+        arr = np.asarray(data)
+        return np.any(np.abs(arr) > threshold)
         
         
 def plot_integral_evolution(evolution_data, plot_params, induction_params,
                             grid_t, grid_zeta, rad,
                             verbose=True, save=False, folder=None):
     """
-    Plot the evolution of the integrated magnetic energy and its induction components.
+    Plot the evolution of the integrated magnetic energy and its induction components attending to the time derivative prediction from the induction equation.
     
     Args:
         - evolution_data: dictionary containing the evolution data from induction_energy_integral_evolution()
         - plot_params: dictionary containing plotting parameters:
             - evolution_type: 'total' or 'differential'
-            - derivative: 'central' or 'implicit' 
+            - derivative: 'RK', 'central', 'implicit' or 'rate'
             - x_axis: 'zeta' or 'years'
             - x_scale: 'lin' or 'log'
             - y_scale: 'lin' or 'log'
@@ -611,20 +651,32 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     # Get the appropriate data arrays based on evolution_type and derivative
     if evolution_type == 'total':
         index_O, index_F = 0, len(grid_t)
-        if derivative == 'central':
+        if derivative == 'RK':
+            index_o, index_f = 0, len(grid_t)
+            plotid = 'RK_total'
+        elif derivative == 'central':
             index_o, index_f = 1, len(grid_t)
             plotid = 'central_total'
+        elif derivative == 'rate':
+            index_o, index_f = 1, len(grid_t)
+            plotid = 'rate_total'
         else:  # implicit
             index_o, index_f = 2, len(grid_t)
             plotid = 'implicit_total'
     else:  # differential
         index_O, index_F = 1, len(grid_t)
-        if derivative == 'central':
+        if derivative == 'RK':
+            index_o, index_f = 0, len(grid_t)
+            plotid = 'RK_differential'
+        elif derivative == 'central':
             index_o, index_f = 1, len(grid_t)
-            plotid = 'central_derivative'
+            plotid = 'central_differential'
+        elif derivative == 'rate':
+            index_o, index_f = 1, len(grid_t)
+            plotid = 'rate_differential'
         else:  # implicit
             index_o, index_f = 2, len(grid_t)
-            plotid = 'implicit_derivative'
+            plotid = 'implicit_differential'
     
     # Extract component data with units
     n1 = [units * evolution_data['evo_b2'][i] for i in range(len(evolution_data['evo_b2']))]
@@ -718,44 +770,6 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         index_o_plot = index_o
         index_f_plot = index_f
     
-    def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis):
-        """Helper function to set up axis properties"""
-        if x_axis == 'years':
-            ax.set_xlabel('Time (yr)', fontproperties=font)
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
-        else:  # zeta
-            ax.set_xlabel('Redshift (z)', fontproperties=font)
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
-        
-        if not cancel_limits and xlim:
-            ax.set_xlim(xlim[0], xlim[1])
-        if not cancel_limits and ylim:
-            ax.set_ylim(ylim[0], ylim[1])
-            
-        if x_scale == 'log':
-            ax.set_xscale('log')
-            if x_axis == 'years':
-                ax.set_xlabel('Time log[yr]', fontproperties=font)
-            else:
-                ax.set_xlabel('Redshift log[z]', fontproperties=font)
-                
-        if y_scale == 'log':
-            ax.set_yscale('log')
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy log[erg]', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction log[erg/s]', fontproperties=font)
-                
-    def should_plot_component(data, threshold=1e-30):
-        """Check if component has any non-zero values worth plotting"""
-        return any(abs(val) > threshold for val in data)
-    
     # Create figures list
     figures = []
     
@@ -809,7 +823,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                 linewidth=line1, label='Kinetic Energy', color='#8FBC8F')
         components_plotted.append('kinetic')
     
-    setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis)
+    setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font)
     ax1.legend(prop=font_legend)
 
     if region == 'None':
@@ -887,436 +901,12 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                 
     if verbose:       
         for i, sim in enumerate(induction_params.get('sims', ['default'])):
-            n_iter = len(induction_params.get('it', [0])) - 1 if derivative == 'central' else len(induction_params.get('it', [0])) - 2
-            if n_iter > 0:
-                for j in range(min(n_iter, len(n0_data))):
-                    print(f'Simulation: {sim} | Iteration: {j}')
-                    
-                    if evolution_type == 'total':
-                        print(f'Magnetic energy density in snap {i+j+1}: {n1_data[min(i+j+1, len(n1_data)-1)]}')
-                        print(f'Magnetic from induction in snap {i+j+1}: {n0_data[min(i+j, len(n0_data)-1)]}')
-                    else:
-                        print(f'Magnetic induction in snap {i+j+1}: {n0_data[min(i+j, len(n0_data)-1)]}')
-                        print(f'Predicted induction in snap {i+j+1}: {n0_data[min(i+j, len(n0_data)-1)]}')
-                    
-                    print(f'Divergence work: {diver_work_data[min(i+j, len(diver_work_data)-1)]}')
-                    print(f'Compressive work: {compres_work_data[min(i+j, len(compres_work_data)-1)]}')
-                    print(f'Stretching work: {stretch_work_data[min(i+j, len(stretch_work_data)-1)]}')
-                    print(f'Advection work: {advec_work_data[min(i+j, len(advec_work_data)-1)]}')
-                    print(f'Drag work: {drag_work_data[min(i+j, len(drag_work_data)-1)]}')
-                    print(f'Total work (compacted): {total_work_data[min(i+j, len(total_work_data)-1)]}')
-                    print(f'Kinetic energy: {kinetic_work_data[min(i+j, len(kinetic_work_data)-1)]}')
-    
-    return figures
-
-def plot_rate_evolution(evolution_data, plot_params, induction_params,
-                            grid_t, grid_zeta, rad,
-                            verbose=True, save=False, folder=None):
-    """
-    Plot the evolution of the integrated magnetic energy and its induction components.
-    
-    Args:
-        - evolution_data: dictionary containing the evolution data from induction_energy_integral_evolution()
-        - plot_params: dictionary containing plotting parameters:
-            - evolution_type: 'total' or 'differential'
-            - derivative: 'central' or 'implicit' 
-            - x_axis: 'zeta' or 'years'
-            - x_scale: 'lin' or 'log'
-            - y_scale: 'lin' or 'log'
-            - xlim: [xlimo, xlimf] or None for auto
-            - ylim: [ylimo, ylimf] or None for auto
-            - cancel_limits: bool to flip the x axis (useful for zeta)
-            - figure_size: [width, height]
-            - line_widths: [line1, line2] for main and component lines
-            - plot_type: 'raw', 'smoothed', or 'interpolated' to choose plot style
-            - smoothing_sigma: sigma for Gaussian smoothing (only for 'smooth' type)
-            - interpolation_points: number of points for interpolation (only for 'interpolated' type)
-            - interpolation_kind: 'linear', 'cubic', or 'nearest' for interpolation method
-            - volume_evolution: bool to plot volume evolution as additional figure
-            - title: title for the plots (default: 'Magnetic Field Evolution')
-            - dpi: dots per inch for saved plots (default: 300)
-            - run: identifier for the run (default: '_')
-        - induction_params: dictionary containing simulation parameters:
-            - units: energy unit conversion
-            - F: size factor
-            - level: refinement level
-        - grid_t: time grid
-        - grid_zeta: redshift grid  
-        - rad: radius of the region in the last snapshot
-        - verbose: bool for verbose output
-        - save: bool to save plots
-        - folder: folder to save plots (if None, uses current directory)
-        
-    Returns:
-        - List of figure objects
-        
-    Author: Marco Molina
-    """
-    
-    # Validate plot_params
-    plot_type = plot_params.get('plot_type', 'raw')
-    assert plot_type in ['raw', 'smoothed', 'interpolated'], "plot_type must be 'raw', 'smoothed', or 'interpolated'"
-    assert plot_params.get('interpolation_kind', 'linear') in ['linear', 'cubic', 'nearest'], "interpolation_kind must be 'linear', 'cubic', or 'nearest'"
-    assert plot_params.get('smoothing_sigma', 1.10) > 0, "smoothing_sigma must be a positive number"
-    assert plot_params.get('x_axis', 'zeta') in ['zeta', 'years'], "x_axis must be 'zeta' or 'years'"
-    
-    # Extract parameters from plot_params
-    evolution_type = plot_params['evolution_type']
-    derivative = plot_params['derivative']
-    x_axis = plot_params['x_axis']
-    if x_axis == 'zeta':
-        assert len(grid_zeta) > 0, "grid_zeta must not be empty when x_axis is 'zeta'"
-        assert plot_params.get('interpolation points', 5000) > 0, "interpolation_points must be a positive integer"
-    elif x_axis == 'years':
-        assert len(grid_t) > 0, "grid_t must not be empty when x_axis is 'years'"
-        assert plot_params.get('interpolation points', 500) > 0, "interpolation_points must be a positive integer"
-    x_scale = plot_params['x_scale']
-    y_scale = plot_params['y_scale']
-    xlim = plot_params.get('xlim', None)
-    ylim = plot_params.get('ylim', None)
-    cancel_limits = plot_params.get('cancel_limits', False)
-    figure_size = plot_params.get('figure_size', [10, 8])
-    line_widths = plot_params.get('line_widths', [5, 3])
-    volume_evolution = plot_params.get('volume_evolution', False)
-    title = plot_params.get('title', 'Integrated Magnetic Energy Evolution and Induction Prediction')
-    dpi = plot_params.get('dpi', 300)
-    run = plot_params.get('run', '_')
-    
-    # Parameters specific to plot type
-    plot_type = plot_params.get('plot_type', 'raw')
-    if plot_type == 'smoothed':
-        smoothing_sigma = plot_params.get('smoothing_sigma', 1.10)
-    elif plot_type == 'interpolated':
-        interpolation_points = plot_params.get('interpolation_points', {'years': 500, 'zeta': 5000})
-        interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
-    
-    # Extract induction parameters
-    units = induction_params['units']
-    factor_F = induction_params['F']
-    region = induction_params['region']
-    
-    # Set up matplotlib parameters
-    plt.rcParams.update({
-        'font.size': 16,
-        'axes.labelsize': 16,
-        'axes.titlesize': 18,
-        'xtick.labelsize': 14,
-        'ytick.labelsize': 14,
-        'legend.fontsize': 14,
-        'figure.titlesize': 20
-    })
-    
-    # Define font properties
-    font = FontProperties()
-    font.set_style('normal')
-    font.set_weight('normal')
-    font.set_size(12)
-    
-    font_title = FontProperties()
-    font_title.set_style('normal')
-    font_title.set_weight('bold')
-    font_title.set_size(24)
-    
-    font_legend = FontProperties()
-    font_legend.set_style('normal')
-    font_legend.set_weight('normal')
-    font_legend.set_size(12)
-    
-    y_title = 1.005
-    line1, line2 = line_widths
-    
-    # Prepare time and redshift arrays
-    if x_axis == 'zeta':
-        z = np.array([grid_zeta[i] for i in range(len(grid_zeta))])
-        if z[-1] < 0:
-            z[-1] = abs(z[-1])
-    else: # years
-        t = [grid_t[i] * time_to_yr for i in range(len(grid_t))]
-    
-    # Extract evolution data with units
-    if evolution_type == 'differential':
-        units = units / time_to_s
-    
-    # Get the appropriate data arrays based on evolution_type and derivative
-    if evolution_type == 'total':
-        index_O, index_F = 0, len(grid_t)
-        if derivative == 'central':
-            index_o, index_f = 1, len(grid_t)
-            plotid = 'central_total'
-        else:  # implicit
-            index_o, index_f = 2, len(grid_t)
-            plotid = 'implicit_total'
-    else:  # differential
-        index_O, index_F = 1, len(grid_t)
-        if derivative == 'central':
-            index_o, index_f = 1, len(grid_t)
-            plotid = 'central_derivative'
-        else:  # implicit
-            index_o, index_f = 2, len(grid_t)
-            plotid = 'implicit_derivative'
-    
-    # Extract component data with units
-    n1 = [units * evolution_data['evo_b2'][i] for i in range(len(evolution_data['evo_b2']))]
-    n0 = [units * evolution_data['evo_ind_b2'][i] for i in range(len(evolution_data['evo_ind_b2']))]
-    diver_work = [units * evolution_data['evo_MIE_diver_B2'][i] for i in range(len(evolution_data['evo_MIE_diver_B2']))]
-    compres_work = [units * evolution_data['evo_MIE_compres_B2'][i] for i in range(len(evolution_data['evo_MIE_compres_B2']))]
-    stretch_work = [units * evolution_data['evo_MIE_stretch_B2'][i] for i in range(len(evolution_data['evo_MIE_stretch_B2']))]
-    advec_work = [units * evolution_data['evo_MIE_advec_B2'][i] for i in range(len(evolution_data['evo_MIE_advec_B2']))]
-    drag_work = [units * evolution_data['evo_MIE_drag_B2'][i] for i in range(len(evolution_data['evo_MIE_drag_B2']))]
-    total_work = [units * evolution_data['evo_MIE_total_B2'][i] for i in range(len(evolution_data['evo_MIE_total_B2']))]
-    kinetic_work = [units * evolution_data['evo_kinetic_energy'][i] for i in range(len(evolution_data['evo_kinetic_energy']))]
-    
-    # Volume data
-    volume_phi = evolution_data['evo_volume_phi']
-    volume_co = evolution_data['evo_volume_co']
-    
-    # Prepare data based on plot type
-    if plot_type == 'smoothed':
-        # Apply Gaussian smoothing
-        n1_data = gaussian_filter1d(n1, sigma=smoothing_sigma)
-        n0_data = gaussian_filter1d(n0, sigma=smoothing_sigma)
-        diver_work_data = gaussian_filter1d(diver_work, sigma=smoothing_sigma)
-        compres_work_data = gaussian_filter1d(compres_work, sigma=smoothing_sigma)
-        stretch_work_data = gaussian_filter1d(stretch_work, sigma=smoothing_sigma)
-        advec_work_data = gaussian_filter1d(advec_work, sigma=smoothing_sigma)
-        drag_work_data = gaussian_filter1d(drag_work, sigma=smoothing_sigma)
-        total_work_data = gaussian_filter1d(total_work, sigma=smoothing_sigma)
-        kinetic_work_data = gaussian_filter1d(kinetic_work, sigma=smoothing_sigma)
-        x_data = z if x_axis == 'zeta' else t
-        plot_suffix = f'_smoothed_sigma_{smoothing_sigma}'
-        
-    elif plot_type == 'interpolated':
-        # Create interpolations
-        if x_axis == 'years':
-            x_data = t
-            x_new = np.linspace(min(t[index_o:index_f]), max(t[index_o:index_f]), 
-                                    num=interpolation_points['years'], endpoint=True)
-        else:  # zeta
-            x_data = z
-            x_new = np.linspace(max(z[index_o:index_f]), min(z[index_o:index_f]), 
-                                    num=interpolation_points['zeta'], endpoint=True)
-        
-        # Create interpolation functions
-        n1_interp = interp1d(x_data[index_O:index_F], n1[index_O:index_F], kind=interpolation_kind)
-        n0_interp = interp1d(x_data[index_o:index_f], n0, kind=interpolation_kind)
-        diver_work_interp = interp1d(x_data[index_o:index_f], diver_work, kind=interpolation_kind)
-        compres_work_interp = interp1d(x_data[index_o:index_f], compres_work, kind=interpolation_kind)
-        stretch_work_interp = interp1d(x_data[index_o:index_f], stretch_work, kind=interpolation_kind)
-        advec_work_interp = interp1d(x_data[index_o:index_f], advec_work, kind=interpolation_kind)
-        drag_work_interp = interp1d(x_data[index_o:index_f], drag_work, kind=interpolation_kind)
-        total_work_interp = interp1d(x_data[index_o:index_f], total_work, kind=interpolation_kind)
-        kinetic_work_interp = interp1d(x_data[index_O:index_F], kinetic_work[index_O:index_F], kind=interpolation_kind)
-        
-        # Use interpolated data
-        x_data = x_new
-        n1_data = n1_interp(x_new)
-        n0_data = n0_interp(x_new)
-        diver_work_data = diver_work_interp(x_new)
-        compres_work_data = compres_work_interp(x_new)
-        stretch_work_data = stretch_work_interp(x_new)
-        advec_work_data = advec_work_interp(x_new)
-        drag_work_data = drag_work_interp(x_new)
-        total_work_data = total_work_interp(x_new)
-        kinetic_work_data = kinetic_work_interp(x_new)
-        plot_suffix = f'{interpolation_kind}_interpolated_{interpolation_points[x_axis]}_points'
-
-        # Adjust indices for interpolated data
-        index_O_plot = 0
-        index_F_plot = len(n1_data)
-        index_o_plot = 0
-        index_f_plot = len(n0_data)
-        
-    else:  # raw
-        # Use raw data
-        n1_data = n1
-        n0_data = n0
-        diver_work_data = diver_work
-        compres_work_data = compres_work
-        stretch_work_data = stretch_work
-        advec_work_data = advec_work
-        drag_work_data = drag_work
-        total_work_data = total_work
-        kinetic_work_data = kinetic_work
-        x_data = z if x_axis == 'zeta' else t
-        plot_suffix = '_raw'
-        
-    # For raw and smooth data, use original indices
-    if plot_type != 'interpolated':
-        index_O_plot = index_O
-        index_F_plot = index_F
-        index_o_plot = index_o
-        index_f_plot = index_f
-    
-    def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis):
-        """Helper function to set up axis properties"""
-        if x_axis == 'years':
-            ax.set_xlabel('Time (yr)', fontproperties=font)
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
-        else:  # zeta
-            ax.set_xlabel('Redshift (z)', fontproperties=font)
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
-        
-        if not cancel_limits and xlim:
-            ax.set_xlim(xlim[0], xlim[1])
-        if not cancel_limits and ylim:
-            ax.set_ylim(ylim[0], ylim[1])
-            
-        if x_scale == 'log':
-            ax.set_xscale('log')
-            if x_axis == 'years':
-                ax.set_xlabel('Time log[yr]', fontproperties=font)
-            else:
-                ax.set_xlabel('Redshift log[z]', fontproperties=font)
-                
-        if y_scale == 'log':
-            ax.set_yscale('log')
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy log[erg]', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction log[erg/s]', fontproperties=font)
-                
-    def should_plot_component(data, threshold=1e-30):
-        """Check if component has any non-zero values worth plotting"""
-        return any(abs(val) > threshold for val in data)
-    
-    # Create figures list
-    figures = []
-    
-    # Main evolution plot
-    fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
-    
-    # Main energy line (always plot)
-    if evolution_type == 'total':
-        label = 'Magnetic Energy'
-    else:
-        label = 'Magnetic Energy Induction'
-    ax1.plot(x_data[index_O_plot:index_F_plot], n1_data[index_O_plot:index_F_plot], 
-            linewidth=line1, label=label)
-    
-    # Induction prediction (plot if has data)
-    if should_plot_component(n0_data):
-        if evolution_type == 'total':
-            label = 'Magnetic Energy \nfrom Induction'
-        else:
-            label = 'Predicted Induction'
-        ax1.plot(x_data[index_o_plot:index_f_plot], n0_data, 
-                linewidth=line1, label=label)
-    
-    # Track which components were plotted
-    components_plotted = []
-    
-    # Total work (compacted)
-    if should_plot_component(total_work_data):
-        ax1.plot(x_data[index_o_plot:index_f_plot], total_work_data, '--', 
-                linewidth=line1, label='Magnetic Energy \nfrom Induction (Compacted)')
-        components_plotted.append('total')
-    
-    # Individual components with their colors
-    component_configs = [
-        (diver_work_data, 'Divergence', 'pink'),
-        (compres_work_data, 'Compression', 'purple'),
-        (stretch_work_data, 'Stretching', 'orange'),
-        (advec_work_data, 'Advection', 'red'),
-        (drag_work_data, 'Cosmic Drag', 'gray')
-    ]
-    
-    for data, label, color in component_configs:
-        if should_plot_component(data):
-            ax1.plot(x_data[index_o_plot:index_f_plot], data, '--', 
-                    linewidth=line2, label=label, color=color)
-            components_plotted.append(label.lower())
-    
-    # Kinetic energy
-    if should_plot_component(kinetic_work_data):
-        ax1.plot(x_data[index_O_plot:index_F_plot], kinetic_work_data[index_O_plot:index_F_plot], 
-                linewidth=line1, label='Kinetic Energy', color='#8FBC8F')
-        components_plotted.append('kinetic')
-    
-    setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis)
-    ax1.legend(prop=font_legend)
-
-    if region == 'None':
-        plot_title = f'{title} - {np.round(induction_params["size"][0]/2)} Mpc'
-    else:
-        plot_title = f'{title} - {np.round(factor_F*rad)} Mpc'
-
-    if evolution_type != 'total':
-        plot_title = plot_title.replace('Evolution', 'Induction Evolution')
-    plt.title(plot_title, y=y_title, fontproperties=font_title)
-    
-    if cancel_limits and x_axis == 'zeta':
-        plt.gca().invert_xaxis()
-    fig1.tight_layout()
-    figures.append(fig1)
-    
-    # Volume plot (optional)
-    if volume_evolution:
-        fig2, ax2 = plt.subplots(figsize=figure_size, dpi=dpi)
-        
-        if x_axis == 'years':
-            ax2.set_xlabel('Time (yr)')
-            ax2.plot(t, volume_phi, linewidth=line1, label='Physical')
-            ax2.plot(t, volume_co, linewidth=line1, label='Comoving')
-            ax2.set_xscale('log')
-        else:  # zeta
-            ax2.set_xlabel('Redshift (z)')
-            ax2.plot(z, volume_phi, linewidth=line1, label='Physical')
-            ax2.plot(z, volume_co, linewidth=line1, label='Comoving')
-            ax2.set_xscale('log')
-            ax2.invert_xaxis()
-        
-        ax2.set_ylabel('Integration Volume')
-        ax2.legend(fontsize='small')
-        ax2.set_yscale('log')
-        
-        plt.title('Integrated Volume')
-        fig2.tight_layout()
-        figures.append(fig2)
-    
-    if verbose:
-        print(f'Plotting... {plot_type.capitalize()} integrated magnetic energy and induction prediction plot created')
-        print(f'Components plotted: {", ".join(components_plotted)}')
-        if volume_evolution:
-            print(f'Plotting... Volume evolution plot created')
-    
-    # Save plots if requested
-    if save:
-        if folder is None:
-            folder = os.getcwd()
-        
-        # Create filename components
-        sim_info = f'{induction_params["up_to_level"]}_{induction_params["F"]}_{induction_params["vir_kind"]}vir_{induction_params["rad_kind"]}rad_{region}Region'
-        axis_info = f'{x_axis}_{x_scale}_{y_scale}'
-        if cancel_limits:
-            limit_info = 'cancel_limits'
-        else:
-            limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
-        
-        # Save main plot
-        file_title = '_'.join(title.split()[:3])
-        filename1 = f'{folder}/{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{plotid}{plot_suffix}_{run}.png'
-        fig1.savefig(filename1, dpi=dpi)
-        
-        if verbose:
-            print(f'Plotting... Main plot saved as: {filename1}')
-        
-        # Save volume plot if created
-        if volume_evolution:
-            filename2 = f'{folder}/{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{plotid}_{run}.png'
-            fig2.savefig(filename2, dpi=dpi)
-            
-            if verbose:
-                print(f'Plotting... Volume plot saved as: {filename2}')
-                
-    if verbose:       
-        for i, sim in enumerate(induction_params.get('sims', ['default'])):
-            n_iter = len(induction_params.get('it', [0])) - 1 if derivative == 'central' else len(induction_params.get('it', [0])) - 2
+            if derivative == 'RK':
+                n_iter = len(induction_params.get('it', [0]))
+            elif derivative == 'central' or derivative == 'rate':
+                n_iter = len(induction_params.get('it', [0])) - 1
+            else:  # implicit
+                n_iter = len(induction_params.get('it', [0])) - 2
             if n_iter > 0:
                 for j in range(min(n_iter, len(n0_data))):
                     print(f'Simulation: {sim} | Iteration: {j}')

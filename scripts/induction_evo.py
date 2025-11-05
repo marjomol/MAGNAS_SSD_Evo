@@ -900,7 +900,8 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
                                         grid_time, grid_zeta, verbose=False):
     '''
     Given the volume integrals of the magnetic energy density and its components at different redshifts,
-    computes the evolution of the magnetic integrated energy and that of its components for their further representation.
+    computes the evolution of the magnetic integrated energy and that of its components for their further representation
+    attending to the time derivative prediction from the induction equation.
     
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
@@ -916,7 +917,8 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
             - int_b2: volume integral of the magnetic energy density
             - volume: volume of the studied region
         - evolution_type: type of evolution to compute ('total' or 'differential')
-        - derivative: type of derivative to compute ('implicit' or 'central')
+        - derivative: type of derivative to compute ('RK' for Runge-Kutta, 'implicit' for implicit differences,
+                    'central' for central differences, 'rate' for rate of change)
         - rho_b: density contrast of the simulation
         - grid_time: time grid for the simulation
         - grid_zeta: redshift grid for the simulation
@@ -939,14 +941,14 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
     '''
     
     assert evolution_type in ['total', 'differential'], "evolution_type must be 'total' or 'differential'"
-    assert derivative in ['implicit', 'central'], "derivative must be 'implicit' or 'central'"
+    assert derivative in ['RK', 'implicit', 'central', 'rate'], "derivative must be 'RK', 'implicit', 'central' or 'rate'"
     
     ## Here we compute the evolution of the magnetic energy density and its components
     
     start_time_evolution = time.time() # Record the start time
     
     n = len(grid_time)-1
-    zero = [0] * n
+    zero = [0] * (n+1)
     
     results = {}
     
@@ -973,7 +975,10 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
     ]:
         if evolution_type == 'total':
             if components.get(key, False):
-                if derivative == 'central':
+                if derivative == 'RK':
+                    results[f'evo_{prefix}'] = diff.integrate_energy(grid_time, induction_energy_integral[f'int_b2'][0],
+                                                                rho_b, induction_energy_integral[f'int_{prefix}'])
+                elif derivative == 'central':
                     results[f'evo_{prefix}'] = [(rho_b[i+1] * ((1/rho_b[i]) * (induction_energy_integral[f'int_b2'][i]) +
                     2 * (grid_time[i+1] - grid_time[i]) * (induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
                 elif derivative == 'implicit':
@@ -981,6 +986,9 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
                     2 * rho_b[i+2] * (grid_time[i+2] - grid_time[i+1]) * (induction_energy_integral[f'int_{prefix}'][i+1] +
                     ((grid_time[i+2] - grid_time[i+1])/(grid_time[i+2] - grid_time[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
                     induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n-1)]
+                elif derivative == 'rate':
+                    results[f'evo_{prefix}'] = [(rho_b[i+1] * ((1/rho_b[i]) * (induction_energy_integral[f'int_b2'][i]) +
+                    (grid_time[i+1] - grid_time[i]) * (induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
                 if verbose == True:
                     print(f'Energy evolution: {key} volume energy integral evolution done')
             else:
@@ -989,12 +997,16 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
 
         elif evolution_type == 'differential':
             if components.get(key, False):
-                if derivative == 'central':
+                if derivative == 'RK':
+                    results[f'evo_{prefix}'] = [2 * (induction_energy_integral[f'int_{prefix}'][i]) for i in range(n)]
+                elif derivative == 'central':
                     results[f'evo_{prefix}'] = [2 * (induction_energy_integral[f'int_{prefix}'][i]) for i in range(n)]
                 elif derivative == 'implicit':
                     results[f'evo_{prefix}'] = [2 * ((induction_energy_integral[f'int_{prefix}'][i+1] + ((grid_time[i+2] -
                     grid_time[i+1])/(grid_time[i+2] - grid_time[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
                     induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n-1)]
+                elif derivative == 'rate':
+                    results[f'evo_{prefix}'] = [induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i] for i in range(n)]
                 if verbose == True:
                     print(f'Energy evolution: {key} energy integral evolution done')
             else:

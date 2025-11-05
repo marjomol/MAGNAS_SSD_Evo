@@ -167,7 +167,7 @@ def read_grids(it, path='', parameters_path='', digits=5, read_general=True, rea
         npatch: number of patches in each level, starting in l=0
 
         -only if readdmpartnum set to True
-        npart: number of dm particles in each leve, starting in l=0
+        npart: number of dm particles in each level, starting in l=0
 
         -only if readpatchcellextension set to True
         patchnx (...): x-extension of each patch (in level l cells) (and Y and Z)

@@ -11,6 +11,7 @@ Created by David Vallés and enriched by Marco Molina Pradillo.
 
 import numpy as np
 from numba import njit, prange
+from scipy.interpolate import CubicSpline
 import scripts.utils as tools
 
 # On patch functions (arr_) #
@@ -912,3 +913,93 @@ def periodic_directional_derivative_vector_field(vfield_x, vfield_y, vfield_z, u
         u_nabla_v_z.append(uz)
 
     return u_nabla_v_x, u_nabla_v_y, u_nabla_v_z
+
+def rhs_energy(t, f_term):
+    '''
+    Evaluate dE/dt for the magnetic energy ODE at time `t`.
+    
+    Args:
+        - t : float. Current time.
+        - f_term : callable. Source-term integrand returning ∫_V f(B, v) dV at the queried time.
+        
+    Returns:
+        - float. Time derivative dE/dt.
+        
+    Author: Marco Molina
+    '''
+    return 2.0 * f_term(t)
+
+def rk4_step(t, dt, E, rho_b, f_term):
+    '''
+    Advance the magnetic energy one Runge–Kutta 4 step.
+    
+    Args:
+        - t : float. Current time.
+        - dt : float. Integration step size.
+        - E : float. Magnetic energy at `t`.
+        - rho_b : object. Background-density wrapper supplying `value` and `derivative`.
+        - f_term : callable. Source-term integrand as in `rhs_energy`.
+        
+    Returns:
+        - float. Updated magnetic energy at time `t + dt`.
+        
+    Author: Marco Molina
+    '''
+    k1 = rhs_energy(t,         f_term)
+    k2 = rhs_energy(t + dt/2., f_term)
+    k3 = rhs_energy(t + dt/2., f_term)
+    k4 = rhs_energy(t + dt,    f_term)
+    return (E/rho_b(t)) + (dt/6.) * (k1 + 2*k2 + 2*k3 + k4)
+
+class TabulatedSignal:
+    '''
+    Hold a time-sampled signal and expose value/derivative callables.
+    
+    Args:
+        - t : array_like. Monotonic time samples.
+        - y : array_like. Signal values at `t`.
+        - kind : {"cubic", "linear"}, optional. Interpolation scheme; cubic uses `CubicSpline`, linear relies on
+                `numpy.interp` and a gradient-based derivative
+                
+    Returns:
+        - value : callable. Interpolated signal value at arbitrary times.
+        - derivative : callable. Interpolated signal derivative at arbitrary times.
+
+    Author: Marco Molina
+    '''                      
+    def __init__(self, t, y, kind="cubic"):
+        if kind == "cubic":
+            self._spline = CubicSpline(t, y)
+            self.value = self._spline
+            self.derivative = self._spline.derivative()
+        else:
+            self._t = np.asarray(t, dtype=np.float64)
+            self._y = np.asarray(y, dtype=np.float64)
+            self._dy = np.gradient(self._y, self._t)
+        if kind != "cubic":
+            self.value = lambda x: np.interp(x, self._t, self._y)
+            self.derivative = lambda x: np.interp(x, self._t, self._dy)
+
+def integrate_energy(t, E0, rho_b_samples, f_samples):
+    '''
+    Integrate the magnetic energy ODE over the supplied time grid.
+
+    Args:
+        - t : array_like. Monotonic time samples.
+        - E0 : float. Initial magnetic energy at `t[0]`.
+        - rho_b_samples : array_like. Background density values matching `t`.
+        - f_samples : array_like. Source term samples matching `t`.
+
+    Returns:
+        - E : array_like. Integrated magnetic energy at every entry of `t`.
+        
+    Author: Marco Molina
+    '''
+    rho_b = TabulatedSignal(t, rho_b_samples, kind="cubic")
+    f_term = TabulatedSignal(t, f_samples, kind="cubic")
+    E = np.empty_like(t, dtype=np.float64)
+    E[0] = E0
+    for i in range(len(t) - 1):
+        dt = t[i+1] - t[i]
+        E[i+1] = rho_b_samples[i+1] * rk4_step(t[i], dt, E[i], rho_b.value, f_term.value)
+    return E
