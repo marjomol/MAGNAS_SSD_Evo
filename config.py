@@ -41,9 +41,9 @@ IND_PARAMS = {
     "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
     # "units": 1, # Factor to convert the units of the resulting volume integrals
     # "level": [0,1,2,3,4,5,6,7], # Max. level of the AMR grid to be read
-    "level": [0,5], # Max. level of the AMR grid to be read
+    "level": [1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
-    "up_to_level": [0,5], # AMR level up to which calculate
+    "up_to_level": [1,5], # AMR level up to which calculate
     # "level": [0], # Max. level of the AMR grid to be read
     # "up_to_level": [0], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
@@ -61,7 +61,9 @@ IND_PARAMS = {
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": True, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
-    "derivative": 'rate', # Derivative to use for the evolution (implicit, central, RK or rate)
+    "derivative": 'implicit', # Derivative to use for the evolution (implicit, central, RK or rate)
+    "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
+    "buffer": True, # Use buffer zones to avoid boundary effects (recommended but slower)
     "profiles": False, # Calculate the profiles of the induction components
     "projection": False, # Calculate the projection of the induction components
     "A2U": False, # Transform the AMR grid to a uniform grid
@@ -78,12 +80,11 @@ OUTPUT_PARAMS = {
     "verbose": True,
     "debug": False,
     "chunk_factor": 2,
-    "bitformat": np.float32,
+    "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
-    "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
-    "run": f'MAGNAS_SSD_Evo_test_rho_corrected_RKlinear',
+    "run": f'MAGNAS_SSD_Evo_test_rho_corrected_Buffer',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [1050], # For different redshift snap iterations analysis
     # "it": [1800, 1850, 1900, 1950, 2000, 2119],
@@ -113,8 +114,8 @@ EVO_PLOT_PARAMS = {
     'xlim': [2.5, 0], # None for auto
     # 'xlim': None, # None for auto
     # 'ylim': [1e57, 1e60], # For the test
-    'ylim': [1e58, 1e63], # None for auto
-    # 'ylim': None, # None for auto
+    # 'ylim': [1e58, 1e63], # None for auto
+    'ylim': None, # None for auto
     'cancel_limits': False, # bool to flip the x axis (useful for zeta)
     'figure_size': [12, 8], # [width, height]
     'line_widths': [5, 1.5], # [line1, line2] for main and component lines
@@ -170,8 +171,15 @@ if OUTPUT_PARAMS["bitformat"] == np.float32:
     OUTPUT_PARAMS["complex_bitformat"] = np.complex64
 elif OUTPUT_PARAMS["bitformat"] == np.float64:
     OUTPUT_PARAMS["complex_bitformat"] = np.complex128
-    
-    
+
+if IND_PARAMS["stencil"] not in [3, 5]:
+    raise ValueError("Invalid stencil value. It must be either 3 or 5.")
+elif IND_PARAMS["stencil"] == 3:
+    IND_PARAMS["nghost"] = 1
+elif IND_PARAMS["stencil"] == 5:
+    IND_PARAMS["nghost"] = 2
+
+
 ## Some seed parameters are calculated from the previous ones
 
 size = IND_PARAMS["size"]

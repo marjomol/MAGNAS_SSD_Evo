@@ -885,7 +885,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save main plot
         file_title = '_'.join(title.split()[:3])
-        filename1 = f'{folder}/{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{plotid}{plot_suffix}_{run}.png'
+        filename1 = f'{folder}/{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}_{run}.png'
         fig1.savefig(filename1, dpi=dpi)
         
         if verbose:
@@ -893,7 +893,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save volume plot if created
         if volume_evolution:
-            filename2 = f'{folder}/{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{plotid}_{run}.png'
+            filename2 = f'{folder}/{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{induction_params["stencil"]}_{plotid}_{run}.png'
             fig2.savefig(filename2, dpi=dpi)
             
             if verbose:

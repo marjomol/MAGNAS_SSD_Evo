@@ -5,7 +5,7 @@ A tool to analyse simulated cosmological magnetic field induction and the Small 
 buffer module
 Provides functions to create and manage data buffers for their proper AMR differential treatment by the diff.py module.
 
-Created by Òscar Monllor and Marco Molina Pradillo.
+Created by Marco Molina Pradillo and Òscar Monllor.
 """
 
 import numpy as np
@@ -44,8 +44,8 @@ def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
                     patch_nx, patch_ny, patch_nz,
                     patch_field, level_res,
                     patches_pare, patches_nx, patches_ny, patches_nz,
-                    patches_rx, patches_ry, patches_rz,
-                    patches_x, patches_y, patches_z, patches_levels,
+                    patches_x, patches_y, patches_z,
+                    patches_rx, patches_ry, patches_rz, patches_levels,
                     coarse_field, arr_fields):
     """
     Performs TSC interpolation for a point, handling boundaries via parent patch interpolation.
@@ -62,8 +62,8 @@ def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
         level_res: resolution (cell size) for each level
         patches_pare: parent patch indices
         patches_nx, patches_ny, patches_nz: dimensions of all patches
-        patches_rx, patches_ry, patches_rz: physical positions (center of first cell)
         patches_x, patches_y, patches_z: cell positions in parent coordinates
+        patches_rx, patches_ry, patches_rz: physical positions (center of first cell)
         patches_levels: refinement level of each patch
         coarse_field: level 0 field data
         arr_fields: list of all patch fields
@@ -211,13 +211,12 @@ def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
     return value
 
 
-@njit(fastmath=True, parallel=True)
 def fill_ghost_buffer(ipatch, buffered_patch, nghost,
                     patchnx, patchny, patchnz,
-                    patchrx, patchry, patchrz,
                     patchx, patchy, patchz,
+                    patchrx, patchry, patchrz,
                     patchpare, levels, level_res,
-                    field, nmax, size):
+                    field, nmax):
     """
     Fills ghost cells of a single patch using TSC interpolation from parent patches.
     
@@ -226,14 +225,13 @@ def fill_ghost_buffer(ipatch, buffered_patch, nghost,
         buffered_patch: array with ghost cells (interior already filled)
         nghost: number of ghost cells on each side
         patchnx, patchny, patchnz: dimensions of all patches
-        patches_x, patches_y, patches_z: cell indices in parent (from patchx, patchy, patchz)
+        patchx, patchy, patchz: cell indices in parent
         patchrx, patchry, patchrz: physical positions of patches
         patchpare: parent patch indices
         levels: refinement levels
         level_res: cell sizes for each level
         field: list of all patch fields
         nmax: base level grid size
-        size: simulation box size
         
     Returns:
         buffered_patch: buffered_patch with ghost cells filled
@@ -290,16 +288,17 @@ def fill_ghost_buffer(ipatch, buffered_patch, nghost,
                     nx, ny, nz,
                     field[ipatch], level_res,
                     patchpare, patchnx, patchny, patchnz,
-                    patchrx, patchry, patchrz,
-                    patchx, patchy, patchz, levels,
+                    patchx, patchy, patchz,
+                    patchrx, patchry, patchrz, levels,
                     field[0], field
                 )
     
     return buffered_patch
 
 
-def add_ghost_buffer(field, npatch, patchnx, patchny, patchnz,
-                    patches_x, patches_y, patches_z,
+def add_ghost_buffer(field, npatch,
+                    patchnx, patchny, patchnz,
+                    patchx, patchy, patchz,
                     patchrx, patchry, patchrz, patchpare,
                     size, nmax, nghost=1, kept_patches=None):
     """
@@ -309,7 +308,7 @@ def add_ghost_buffer(field, npatch, patchnx, patchny, patchnz,
         field: list of numpy arrays, each containing a patch of the AMR field
         npatch: number of patches per level (from read_grids)
         patchnx, patchny, patchnz: dimensions of each patch
-        patches_x, patches_y, patches_z: cell indices in parent (patchx, patchy, patchz from read_grids)
+        patchx, patchy, patchz: cell indices in parent (patchx, patchy, patchz from read_grids)
         patchrx, patchry, patchrz: physical positions of patches
         patchpare: parent patch index for each patch (pare from read_grids)
         size: simulation box size
@@ -332,13 +331,33 @@ def add_ghost_buffer(field, npatch, patchnx, patchny, patchnz,
     buffered_field = []
     
     # Convert to numba List for njit compatibility
+    # Build a homogeneous typed List: replace non-array entries with zero arrays
     field_list = List()
+    # determine fallback dtype from the first real array
+    fallback_dtype = None
     for f in field:
-        field_list.append(f)
+        if isinstance(f, np.ndarray):
+            fallback_dtype = f.dtype
+            break
+    if fallback_dtype is None:
+        fallback_dtype = np.float32
+
+    for idx in range(len(field)):
+        f = field[idx]
+        if isinstance(f, np.ndarray):
+            field_list.append(f)
+        else:
+            # create placeholder array with the expected patch shape so numba types stay consistent
+            nx_i = patchnx[idx]
+            ny_i = patchny[idx]
+            nz_i = patchnz[idx]
+            placeholder = np.zeros((nx_i, ny_i, nz_i), dtype=fallback_dtype, order='F')
+            field_list.append(placeholder)
     
     for ipatch in range(len(field)):
         if not kept_patches[ipatch]:
-            buffered_field.append(None)
+            # keep same convention as readers: use scalar 0 for patches outside region
+            buffered_field.append(0)
             continue
             
         nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
@@ -354,10 +373,10 @@ def add_ghost_buffer(field, npatch, patchnx, patchny, patchnz,
         buffered_patch = fill_ghost_buffer(
             ipatch, buffered_patch, nghost,
             patchnx, patchny, patchnz,
-            patches_x, patches_y, patches_z,
+            patchx, patchy, patchz,
             patchrx, patchry, patchrz,
             patchpare, levels, level_res,
-            field_list, nmax, size
+            field_list, nmax
         )
         
         buffered_field.append(buffered_patch)
@@ -387,8 +406,9 @@ def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kep
     field = []
     
     for ipatch in range(len(buffered_field)):
-        if not kept_patches[ipatch] or buffered_field[ipatch] is None:
-            field.append(None)
+        if not kept_patches[ipatch] or isinstance(buffered_field[ipatch], (int, float)):
+            # return scalar 0 for outside-region patches to match readers' convention
+            field.append(0)
             continue
         
         nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
@@ -401,7 +421,6 @@ def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kep
         field.append(interior_patch)
     
     return field
-
 
 def inplace_ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kept_patches=None):
     """
@@ -424,7 +443,7 @@ def inplace_ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghos
         kept_patches = np.ones(len(buffered_field), dtype=bool)
     
     for ipatch in range(len(buffered_field)):
-        if not kept_patches[ipatch] or buffered_field[ipatch] is None:
+        if not kept_patches[ipatch] or isinstance(buffered_field[ipatch], (int, float)):
             continue
         
         nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]

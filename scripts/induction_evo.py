@@ -18,6 +18,7 @@ from time import gmtime
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
+import buffer as buff
 import scripts.readers as reader
 from scripts.units import *
 from scripts.test import analytic_test_fields, numeric_test_fields
@@ -207,9 +208,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, A2U
             read_patchnum=True,
             read_dmpartnum=False,
             read_patchcellextension=True,
-            read_patchcellposition=False,
+            read_patchcellposition=True,
             read_patchposition=True,
-            read_patchparent=False,
+            read_patchparent=True,
             nparray=True
         )
 
@@ -224,9 +225,13 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, A2U
             grid_patchnx,
             grid_patchny,
             grid_patchnz,
+            grid_patchx,
+            grid_patchy,
+            grid_patchz,
             grid_patchrx,
             grid_patchry,
             grid_patchrz,
+            pare,
             *_
         ) = grid
         
@@ -408,9 +413,13 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, A2U
         'grid_patchnx': grid_patchnx,
         'grid_patchny': grid_patchny,
         'grid_patchnz': grid_patchnz,
+        'grid_patchx': grid_patchx,
+        'grid_patchy': grid_patchy,
+        'grid_patchz': grid_patchz,
         'grid_patchrx': grid_patchrx,
         'grid_patchry': grid_patchry,
         'grid_patchrz': grid_patchrz,
+        'grid_pare': pare,
         'vector_levels': vector_levels,
         'clus_rho_rho_b': clus_rho_rho_b,
         'clus_vx': clus_vx,
@@ -1288,7 +1297,7 @@ def uniform_induction(components, induction_equation,
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
-                    stencil=3, A2U=False, mag=False,
+                    stencil=3, buffer=True, nghost=1, A2U=False, mag=False,
                     energy_evolution=True, profiles=True, projection=True,
                     verbose=False):
     '''
@@ -1321,6 +1330,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - nbins: number of bins for the radial profile (default is 25)
         - logbins: boolean to use logarithmic bins (default is True)
         - stencil: stencil size for the magnetic induction equation (default is 3)
+        - buffer: boolean to add ghost buffer cells before derivatives (default is True)
+        - nghost: number of ghost cells to add for the derivatives (default is 1)
         - A2U: boolean to convert from A to U units (default is False)
         - mag: boolean to compute magnitudes (default is False)
         - energy_evolution: boolean to compute energy evolution (default is True)
@@ -1354,6 +1365,19 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     
     data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, A2U=A2U, region=region_coords, verbose=verbose)
     
+    # Add ghost buffer cells before derivatives
+    if buffer == True:
+        for key in ['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']:
+            if data[f'clus_{key}'] is None:
+                raise ValueError(f"Data for clus_{key} is None. Cannot add ghost buffer.")
+            elif verbose == True:
+                print(f'Adding ghost buffer to {key} field')
+            buffered_field = buff.add_ghost_buffer(data[f'clus_{key}'], data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                                                    data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
+                                                    data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
+                                                    size=size, nmax=nmax, nghost=nghost, kept_patches=data['clus_kp'])
+            data[f'clus_{key}'] = buffered_field
+
     # Vectorial calculus
 
     ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
@@ -1365,6 +1389,19 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                                 data['clus_kp'], data['grid_npatch'], data['grid_irr'],
                                 dx, stencil=stencil, verbose=verbose)
     
+    # Remove ghost buffer cells after derivatives
+    if buffer == True:
+        if verbose == True:
+            print('Removing ghost buffer from computed vectorial fields')
+        for key in vectorial.keys():
+            if verbose == True:
+                print(f'Removing ghost buffer from {key} field')
+            buff.inplace_ghost_buffer_buster(vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+        for key in ['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']:
+            if verbose == True:
+                print(f'Removing ghost buffer from clus_{key} field')
+            buff.inplace_ghost_buffer_buster(data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+
     # Magnetic Induction Equation
     
     ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.

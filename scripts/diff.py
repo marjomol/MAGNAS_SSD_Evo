@@ -357,11 +357,16 @@ def gradient(field, dx, npatch, kept_patches=None, stencil=3):
     if kept_patches is None:
         kept_patches = np.ones(npatch.sum()+1, dtype=bool)
 
-    for ipatch in prange(npatch.sum()+1):
+    for ipatch in prange(npatch.sum() + 1):
         if kept_patches[ipatch]:
-            gx,gy,gz = arr_gradient(field[ipatch], resolution[ipatch], stencil=stencil)
+            if ipatch == 0:
+                # Level 0: use periodic boundaries
+                gx, gy, gz = arr_periodic_gradient(field[ipatch], resolution[ipatch], stencil=stencil)
+            else:
+                # Refined levels: use regular boundaries with extrapolation
+                gx, gy, gz = arr_gradient(field[ipatch], resolution[ipatch], stencil=stencil)
         else:
-            gx,gy,gz = 0,0,0
+            gx, gy, gz = 0, 0, 0
         grad_x.append(gx)
         grad_y.append(gy)
         grad_z.append(gz)
@@ -401,7 +406,12 @@ def divergence(field_x, field_y, field_z, dx, npatch, kept_patches=None, stencil
 
     for ipatch in prange(npatch.sum()+1):
         if kept_patches[ipatch]:
-            div.append(arr_divergence(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
+            if ipatch == 0:
+                # Level 0: use periodic boundaries
+                div.append(arr_periodic_divergence(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
+            else:
+                # Refined levels: use regular boundaries with extrapolation
+                div.append(arr_divergence(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
         else:
             div.append(0)
 
@@ -444,7 +454,12 @@ def curl(field_x, field_y, field_z, dx, npatch, kept_patches=None, stencil=3):
 
     for ipatch in prange(npatch.sum()+1):
         if kept_patches[ipatch]:
-            cx,cy,cz = arr_curl(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil)
+            if ipatch == 0:
+                # Level 0: use periodic boundaries
+                cx,cy,cz = arr_periodic_curl(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil)
+            else:
+                # Refined levels: use regular boundaries with extrapolation
+                cx,cy,cz = arr_curl(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil)
         else:
             cx,cy,cz = 0,0,0
         curl_x.append(cx)
@@ -486,7 +501,12 @@ def curl_magnitude(field_x, field_y, field_z, dx, npatch, kept_patches=None, ste
 
     for ipatch in prange(npatch.sum()+1):
         if kept_patches[ipatch]:
-            curl_mag.append(arr_curl_magnitude(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
+            if ipatch == 0:
+                # Level 0: use periodic boundaries
+                curl_mag.append(arr_periodic_curl_magnitude(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
+            else:
+                # Refined levels: use regular boundaries with extrapolation
+                curl_mag.append(arr_curl_magnitude(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
         else:
             curl_mag.append(0)
 
@@ -522,7 +542,12 @@ def gradient_magnitude(field, dx, npatch, kept_patches=None, stencil=3):
 
     for ipatch in prange(npatch.sum()+1):
         if kept_patches[ipatch]:
-            grad_mag.append(arr_gradient_magnitude(field[ipatch], resolution[ipatch], stencil=stencil))
+            if ipatch == 0:
+                # Level 0: use periodic boundaries
+                grad_mag.append(arr_periodic_gradient_magnitude(field[ipatch], resolution[ipatch], stencil=stencil))
+            else:
+                # Refined levels: use regular boundaries with extrapolation
+                grad_mag.append(arr_gradient_magnitude(field[ipatch], resolution[ipatch], stencil=stencil))
         else:
             grad_mag.append(0)
 
@@ -766,7 +791,12 @@ def directional_derivative_scalar_field(sfield, ufield_x, ufield_y, ufield_z, dx
 
     for ipatch in prange(npatch.sum()+1):
         if kept_patches[ipatch]:
-            u_nabla_phi.append(arr_u_nabla_phi(sfield[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch], stencil=stencil))
+            if ipatch == 0:
+                # Level 0: use periodic boundaries
+                u_nabla_phi.append(arr_periodic_u_nabla_phi(sfield[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch], stencil=stencil))
+            else:
+                # Refined levels: use regular boundaries with extrapolation
+                u_nabla_phi.append(arr_u_nabla_phi(sfield[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch], stencil=stencil))
         else:
             u_nabla_phi.append(0)
 
@@ -854,7 +884,13 @@ def directional_derivative_vector_field(vfield_x, vfield_y, vfield_z, ufield_x, 
 
     for ipatch in prange(npatch.sum()+1):
         if kept_patches[ipatch]:
-            ux,uy,uz = arr_u_nabla_v(vfield_x[ipatch], vfield_y[ipatch], vfield_z[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch],
+            if ipatch == 0:
+                # Level 0: use periodic boundaries
+                ux,uy,uz = arr_periodic_u_nabla_v(vfield_x[ipatch], vfield_y[ipatch], vfield_z[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch],
+                                        stencil=stencil)
+            else:
+                # Refined levels: use regular boundaries with extrapolation
+                ux,uy,uz = arr_u_nabla_v(vfield_x[ipatch], vfield_y[ipatch], vfield_z[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch],
                                         stencil=stencil)
         else:
             ux,uy,uz = 0,0,0
