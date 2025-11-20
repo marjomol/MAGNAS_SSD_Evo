@@ -20,8 +20,8 @@ from multiprocessing import Pool
 from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
 from numba import njit, prange
-import warnings
 from numba.typed import List
+import warnings
 
 def check_memory():
     '''
@@ -369,6 +369,54 @@ def update_loading_bar(progress):
     '''
     sys.stdout.write('\r[{0}] {1}%'.format('#' * (progress // 1), progress))
     sys.stdout.flush()
+    
+def python_to_numba_list(py_list, patchnx, patchny, patchnz, fallback_dtype=None, order='F'):
+    """
+    Convert a Python list of per-patch items into a numba.typed.List of numpy arrays.
+    
+    Args:
+        - py_list: iterable with length == number of patches. Each element may be:
+            * a numpy.ndarray (kept, optionally re-cast to fallback_dtype/order)
+            * a scalar / None / missing -> replaced by zero-array placeholder
+            * already a numba.typed.List -> returned as-is (no conversion)
+        - patchnx/patchny/patchnz: arrays (or lists) with per-patch interior shapes
+        - fallback_dtype: if None, inferred from first ndarray in py_list, else used
+        - order: 'F' or 'C' memory order for placeholders / conversions
+        
+    Returns: numba.typed.List of numpy arrays (homogeneous element type).
+    
+    Author: Marco Molina
+    """
+    # Fast return if input already a numba List
+    if isinstance(py_list, List):
+        return py_list
+
+    # Infer fallback dtype if not provided
+    if fallback_dtype is None:
+        for p in py_list:
+            if isinstance(p, np.ndarray):
+                fallback_dtype = p.dtype
+                break
+        if fallback_dtype is None:
+            fallback_dtype = np.float32
+
+    typed = List()
+    npatches = len(py_list)
+    for ip in range(npatches):
+        p = py_list[ip]
+        if isinstance(p, np.ndarray):
+            # enforce dtype and memory order for consistency
+            arr = np.asarray(p, dtype=fallback_dtype, order=order)
+            typed.append(arr)
+        else:
+            # create placeholder array matching patch shape
+            nx_i = patchnx[ip]
+            ny_i = patchny[ip]
+            nz_i = patchnz[ip]
+            placeholder = np.zeros((nx_i, ny_i, nz_i), dtype=fallback_dtype, order=order)
+            typed.append(placeholder)
+
+    return typed
     
 def create_vector_levels(npatch):
     """

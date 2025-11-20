@@ -160,7 +160,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
     return region, region_size
 
 
-def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, A2U=False, region=None, verbose=False):
+def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, verbose=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -181,7 +181,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, A2U
             - k: Wave number for the sinusoidal test fields.
             - ω: Angular frequency for the sinusoidal test fields.
             - B0: Amplitude of the magnetic field.
-        - A2U: boolean to transform the AMR grid to a uniform grid (default is False)
+        - bitformat: data type for the loaded fields (default is np.float32)
         - region: region coordinates to be used (default is None)
         - verbose: boolean to print the data type loaded or not (default is False)
         
@@ -386,7 +386,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, A2U
         print('Data type loaded for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype))
 
     # Convert to float64 if not transforming to uniform grid
-    if A2U == False:
+    if bitformat == np.float64:
         clus_rho_rho_b = [(1+clus_rho_rho_b[p]).astype(np.float64) if bool(clus_kp[p]) else (1+clus_rho_rho_b[p]) for p in range(n)] # Delta is (rho/rho_b) - 1
         clus_vx = [clus_vx[p].astype(np.float64) if bool(clus_kp[p]) else clus_vx[p] for p in range(n)]
         clus_vy = [clus_vy[p].astype(np.float64) if bool(clus_kp[p]) else clus_vy[p] for p in range(n)]
@@ -1297,7 +1297,7 @@ def uniform_induction(components, induction_equation,
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
-                    stencil=3, buffer=True, nghost=1, A2U=False, mag=False,
+                    stencil=3, buffer=True, nghost=1, bitformat=np.float32, mag=False,
                     energy_evolution=True, profiles=True, projection=True,
                     verbose=False):
     '''
@@ -1332,7 +1332,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - stencil: stencil size for the magnetic induction equation (default is 3)
         - buffer: boolean to add ghost buffer cells before derivatives (default is True)
         - nghost: number of ghost cells to add for the derivatives (default is 1)
-        - A2U: boolean to convert from A to U units (default is False)
+        - bitformat: data type for the fields (default is np.float32)
         - mag: boolean to compute magnitudes (default is False)
         - energy_evolution: boolean to compute energy evolution (default is True)
         - profiles: boolean to compute radial profiles (default is True)
@@ -1363,20 +1363,19 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, A2U=A2U, region=region_coords, verbose=verbose)
+    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, bitformat=bitformat, region=region_coords, verbose=verbose)
     
     # Add ghost buffer cells before derivatives
     if buffer == True:
-        for key in ['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']:
-            if data[f'clus_{key}'] is None:
-                raise ValueError(f"Data for clus_{key} is None. Cannot add ghost buffer.")
-            elif verbose == True:
-                print(f'Adding ghost buffer to {key} field')
-            buffered_field = buff.add_ghost_buffer(data[f'clus_{key}'], data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
-                                                    data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
-                                                    data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
-                                                    size=size, nmax=nmax, nghost=nghost, kept_patches=data['clus_kp'])
-            data[f'clus_{key}'] = buffered_field
+        
+        buffered_field = buff.add_ghost_buffer([data[f'clus_Bx'], data[f'clus_By'], data[f'clus_Bz'], data[f'clus_vx'], data[f'clus_vy'], data[f'clus_vz']],
+                                                data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                                                data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
+                                                data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
+                                                size=size, nmax=nmax, nghost=nghost, kept_patches=data['clus_kp'])
+        for i, key in enumerate(['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']):
+            data[f'clus_{key}'] = buffered_field[i]
+        print('Ghost buffer added to magnetic and velocity fields')
 
     # Vectorial calculus
 
@@ -1394,13 +1393,13 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         if verbose == True:
             print('Removing ghost buffer from computed vectorial fields')
         for key in vectorial.keys():
-            if verbose == True:
-                print(f'Removing ghost buffer from {key} field')
-            buff.inplace_ghost_buffer_buster(vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+            vectorial[key] = buff.ghost_buffer_buster(vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+            # buff.inplace_ghost_buffer_buster(vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+        if verbose == True:
+            print(f'Removing ghost buffer from magnetic and velocity fields')
         for key in ['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']:
-            if verbose == True:
-                print(f'Removing ghost buffer from clus_{key} field')
-            buff.inplace_ghost_buffer_buster(data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+            data[f'clus_{key}'] = buff.ghost_buffer_buster(data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+            # buff.inplace_ghost_buffer_buster(data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
 
     # Magnetic Induction Equation
     

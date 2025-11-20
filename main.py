@@ -91,7 +91,7 @@ if __name__ == "__main__":
                         stencil=ind_params["stencil"],
                         buffer=ind_params["buffer"],
                         nghost=ind_params["nghost"],
-                        A2U=ind_params["A2U"],
+                        bitformat=out_params["bitformat"],
                         mag=ind_params["mag"],
                         energy_evolution=ind_params["energy_evolution"],
                         profiles=ind_params["profiles"],

@@ -84,7 +84,7 @@ OUTPUT_PARAMS = {
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
-    "run": f'MAGNAS_SSD_Evo_test_rho_corrected_Buffer',
+    "run": f'MAGNAS_SSD_Evo_test_Buffer_Brother_fast',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [1050], # For different redshift snap iterations analysis
     # "it": [1800, 1850, 1900, 1950, 2000, 2119],

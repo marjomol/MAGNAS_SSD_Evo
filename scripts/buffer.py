@@ -10,7 +10,6 @@ Created by Marco Molina Pradillo and Òscar Monllor.
 
 import numpy as np
 from numba import njit, prange
-from numba.typed import List
 import scripts.utils as tools
 
 @njit(fastmath=True)
@@ -37,8 +36,34 @@ def TSC_kernel(x, h):
     return w
 
 @njit(fastmath=True)
+def SPH_kernel(r, h):
+    """
+    3D cubic-spline SPH kernel (Monaghan). Support radius = 2*h.
+    Returns W(|r|,h) (not multiplied by mass/density).
+    Normalisation constant uses 1/(pi*h^3) for 3D.
+    
+    Args:
+        r: distance from cell center
+        h: smoothing length (cell size)
+        
+    Returns:
+        Weight for SPH interpolation (between 0 and ~0.318/h^3)
+    
+    Author: Marco Molina
+    """
+    q = r / h
+    sigma = 1.0 / (np.pi * h**3)   # 3D normalisation
+    if q < 0.0:
+        q = -q
+    if q <= 1.0:
+        return sigma * (1.0 - 1.5*q*q + 0.75*q*q*q)
+    elif q <= 2.0:
+        return sigma * 0.25 * (2.0 - q)**3
+    else:
+        return 0.0
+
+@njit(fastmath=True)
 def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
-                    x0, y0, z0,
                     x, y, z,
                     pres,nmax,
                     patch_nx, patch_ny, patch_nz,
@@ -53,7 +78,6 @@ def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
     Args:
         ipatch: current patch index
         i_patch, j_patch, k_patch: cell indices in current patch
-        x0, y0, z0: center coordinates of the cell (i_patch, j_patch, k_patch)
         x, y, z: target coordinates for interpolation
         pres: current patch cell size
         nmax: base level grid size
@@ -75,178 +99,261 @@ def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
     """ 
 
     # 3x3x3 stencil for TSC interpolation
-    tsc_array = np.zeros((3, 3, 3), dtype=np.float32)
     l0 = patches_levels[ipatch]
 
-    # If the 3x3x3 stencil is entirely inside the l patch, just copy values
-    if (i_patch < patch_nx-1 and i_patch > 0 and
-        j_patch < patch_ny-1 and j_patch > 0 and
-        k_patch < patch_nz-1 and k_patch > 0):
+    ipatch2 = ipatch
+    ii2 = i_patch
+    jj2 = j_patch
+    kk2 = k_patch
 
-        for di in range(-1, 2):
-            for dj in range(-1, 2):
-                for dk in range(-1, 2):
-                    tsc_array[di+1, dj+1, dk+1] = patch_field[i_patch + di, j_patch + dj, k_patch + dk]
+    proper_bounds = False
+    while not proper_bounds:
+        ipare = patches_pare[ipatch2]
+        pare_l = patches_levels[ipare]
+        
+        if pare_l > 0:
+            pare_nx = patches_nx[ipare]
+            pare_ny = patches_ny[ipare]
+            pare_nz = patches_nz[ipare]
+            pare_field = arr_fields[ipare]
+        else:
+            # Level 0 - use periodic boundaries
+            pare_nx = nmax
+            pare_ny = nmax
+            pare_nz = nmax
+            pare_field = coarse_field
 
-    # If at boundary, some stencil cells from l level need interpolation from parent patches (l-1, l-2, ...)
-    else:
-        for di in range(-1, 2):
-            for dj in range(-1, 2):
-                for dk in range(-1, 2):
-                    ii = i_patch + di
-                    jj = j_patch + dj
-                    kk = k_patch + dk
+        # Convert child cell indices to parent cell indices
+        # patches_x/y/z are the starting indices in parent coordinates
+        imin_pare = patches_x[ipatch2]
+        jmin_pare = patches_y[ipatch2]
+        kmin_pare = patches_z[ipatch2]
 
-                    # If inside current patch, use direct value
-                    if (ii < patch_nx and ii >= 0 and
-                        jj < patch_ny and jj >= 0 and
-                        kk < patch_nz and kk >= 0):
-                        tsc_array[di+1, dj+1, dk+1] = patch_field[ii, jj, kk]
+        # Map child cell to parent cell (refinement factor = 2)
+        ii_pare = imin_pare + ii2 // 2
+        jj_pare = jmin_pare + jj2 // 2
+        kk_pare = kmin_pare + kk2 // 2
+        
+        # Check if we have proper stencil bounds in parent (need ±1 cells)
+        if (ii_pare < pare_nx - 1 and ii_pare > 0 and
+            jj_pare < pare_ny - 1 and jj_pare > 0 and 
+            kk_pare < pare_nz - 1 and kk_pare > 0):
+            proper_bounds = True
 
-                    # Otherwise, need to get value from parent (granparent or ancestor)
-                    else:
-                        ipatch2 = ipatch
-                        ii2 = ii
-                        jj2 = jj
-                        kk2 = kk
+        # Exit condition: reached level 0 or found proper bounds
+        if ipare == 0 or proper_bounds:
+            break
+        else:
+            # Go up another level
+            ipatch2 = ipare
+            ii2 = ii_pare
+            jj2 = jj_pare
+            kk2 = kk_pare
+    
 
-                        proper_bounds = False
-                        while not proper_bounds:
-                            ipare = patches_pare[ipatch2]
-                            pare_l = patches_levels[ipare]
-                            
-                            if pare_l > 0:
-                                pare_nx = patches_nx[ipare]
-                                pare_ny = patches_ny[ipare]
-                                pare_nz = patches_nz[ipare]
-                                pare_field = arr_fields[ipare]
-                            else:
-                                # Level 0 - use periodic boundaries
-                                pare_nx = nmax
-                                pare_ny = nmax
-                                pare_nz = nmax
-                                pare_field = coarse_field
+    # Parent cell size
+    hx = level_res[pare_l]
 
-                            # Convert child cell indices to parent cell indices
-                            # patches_x/y/z are the starting indices in parent coordinates
-                            imin_pare = patches_x[ipatch2]
-                            jmin_pare = patches_y[ipatch2]
-                            kmin_pare = patches_z[ipatch2]
+    # Center coordinates of parent cell containing the child cell
+    x0_pare = patches_rx[ipare] + (ii_pare - 0.5) * hx
+    y0_pare = patches_ry[ipare] + (jj_pare - 0.5) * hx
+    z0_pare = patches_rz[ipare] + (kk_pare - 0.5) * hx
 
-                            # Map child cell to parent cell (refinement factor = 2)
-                            ii_pare = imin_pare + ii2 // 2
-                            jj_pare = jmin_pare + jj2 // 2
-                            kk_pare = kmin_pare + kk2 // 2
-                            
-                            # Check if we have proper stencil bounds in parent (need ±1 cells)
-                            if (ii_pare < pare_nx - 1 and ii_pare > 0 and
-                                jj_pare < pare_ny - 1 and jj_pare > 0 and 
-                                kk_pare < pare_nz - 1 and kk_pare > 0):
-                                proper_bounds = True
+    # TSC interpolation using parent values
+    value = 0.
+    for di2 in range(-1, 2):
+        x1 = x0_pare + di2 * hx
+        wx = TSC_kernel(x - x1, hx)
+        for dj2 in range(-1, 2):
+            y1 = y0_pare + dj2 * hx
+            wy = TSC_kernel(y - y1, hx)
+            for dk2 in range(-1, 2):
+                z1 = z0_pare + dk2 * hx
+                wz = TSC_kernel(z - z1, hx)
 
-                            # Exit condition: reached level 0 or found proper bounds
-                            if ipare == 0 or proper_bounds:
-                                break
-                            else:
-                                # Go up another level
-                                ipatch2 = ipare
-                                ii2 = ii_pare
-                                jj2 = jj_pare
-                                kk2 = kk_pare
-
-                        # If even level 0 has no proper bounds, use 0th order (nearest neighbor)
-                        if not proper_bounds:
-                            # Apply periodic boundary conditions for level 0
-                            if pare_l == 0:
-                                ii_pare = ii_pare % nmax
-                                jj_pare = jj_pare % nmax
-                                kk_pare = kk_pare % nmax
-                            tsc_array[di+1, dj+1, dk+1] = pare_field[ii_pare, jj_pare, kk_pare]
-                        
-                        #pare patch properly inside bounds -> interpolate from pare values
-                        else:
-                            # Parent cell size
-                            hx = level_res[pare_l]
-
-                            # Center coordinates of parent cell containing the child cell
-                            x0_pare = patches_rx[ipare] + (ii_pare - 0.5) * hx
-                            y0_pare = patches_ry[ipare] + (jj_pare - 0.5) * hx
-                            z0_pare = patches_rz[ipare] + (kk_pare - 0.5) * hx
-
-                            # Child cell center to interpolate (outside current patch)
-                            x_interp = x0 + di * pres
-                            y_interp = y0 + dj * pres
-                            z_interp = z0 + dk * pres
-
-                            # TSC interpolation using parent values
-                            value = 0.0
-                            for di2 in range(-1, 2):
-                                x1 = x0_pare + di2 * hx
-                                wx = TSC_kernel(x_interp - x1, hx)
-                                for dj2 in range(-1, 2):
-                                    y1 = y0_pare + dj2 * hx
-                                    wy = TSC_kernel(y_interp - y1, hx)
-                                    for dk2 in range(-1, 2):
-                                        z1 = z0_pare + dk2 * hx
-                                        wz = TSC_kernel(z_interp - z1, hx)
-
-                                        value += pare_field[ii_pare + di2, jj_pare + dj2, kk_pare + dk2] * wx * wy * wz
-
-                            tsc_array[di+1, dj+1, dk+1] = value
-
-    # Final TSC interpolation using the filled 3x3x3 stencil
-    value = 0.0
-    for di in range(-1, 2):
-        x1 = x0 + di * pres
-        wx = TSC_kernel(x - x1, pres)
-        for dj in range(-1, 2):
-            y1 = y0 + dj * pres
-            wy = TSC_kernel(y - y1, pres)
-            for dk in range(-1, 2):
-                z1 = z0 + dk * pres
-                wz = TSC_kernel(z - z1, pres)
-
-                value += tsc_array[di+1, dj+1, dk+1] * wx * wy * wz
+                value += pare_field[ii_pare + di2, jj_pare + dj2, kk_pare + dk2] * wx * wy * wz
 
     return value
 
+@njit(fastmath=True)
+def SPH_interpolation(ipatch, i_patch, j_patch, k_patch,
+                        x, y, z,
+                        pres, nmax,
+                        patch_nx, patch_ny, patch_nz,
+                        patch_field, level_res,
+                        patches_pare, patches_nx, patches_ny, patches_nz,
+                        patches_x, patches_y, patches_z,
+                        patches_rx, patches_ry, patches_rz, patches_levels,
+                        coarse_field, arr_fields):
+    """
+    SPH-style interpolation at point (x,y,z) using parent/ancestor cells.
+    Similar parent-walk as TSC_interpolation, but uses cubic-spline SPH kernel
+    with support 2*h. We gather a small parent stencil (±2) and compute
+    weighted average (weights normalized).
+    
+    Args:
+        ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
+        x, y, z: coordinates of the interpolation point
+        pres: pressure (unused here, but kept for consistency)
+        nmax: maximum number of cells in level 0
+        patch_nx, patch_ny, patch_nz: dimensions of the current patch
+        patch_field: field values in the current patch
+        level_res: resolution at each refinement level
+        patches_pare, patches_nx, patches_ny, patches_nz: parent patch info
+        patches_x, patches_y, patches_z: patch starting indices
+        patches_rx, patches_ry, patches_rz: patch reference coordinates
+        patches_levels: refinement levels of patches
+        coarse_field: level 0 field data
+        arr_fields: list of all patch fields
+        
+    Returns:
+        Interpolated value at (x, y, z)
+        
+    Author: Marco Molina
+    """
+    # Find a parent patch that provides a sufficiently large stencil (like TSC)
+    l0 = patches_levels[ipatch]
+    ipatch2 = ipatch
+    ii2 = i_patch
+    jj2 = j_patch
+    kk2 = k_patch
 
-def fill_ghost_buffer(ipatch, buffered_patch, nghost,
+    proper_bounds = False
+    while not proper_bounds:
+        ipare = patches_pare[ipatch2]
+        pare_l = patches_levels[ipare]
+
+        if pare_l > 0:
+            pare_nx = patches_nx[ipare]
+            pare_ny = patches_ny[ipare]
+            pare_nz = patches_nz[ipare]
+            pare_field = arr_fields[ipare]
+        else:
+            pare_nx = nmax
+            pare_ny = nmax
+            pare_nz = nmax
+            pare_field = coarse_field
+
+        imin_pare = patches_x[ipatch2]
+        jmin_pare = patches_y[ipatch2]
+        kmin_pare = patches_z[ipatch2]
+
+        ii_pare = imin_pare + ii2 // 2
+        jj_pare = jmin_pare + jj2 // 2
+        kk_pare = kmin_pare + kk2 // 2
+
+        # need margin of 2 cells for cubic SPH support (support 2*h)
+        if (ii_pare < pare_nx - 2 and ii_pare > 1 and
+            jj_pare < pare_ny - 2 and jj_pare > 1 and
+            kk_pare < pare_nz - 2 and kk_pare > 1):
+            proper_bounds = True
+
+        if ipare == 0 or proper_bounds:
+            break
+        else:
+            ipatch2 = ipare
+            ii2 = ii_pare
+            jj2 = jj_pare
+            kk2 = kk_pare
+
+    # parent cell size
+    hx = level_res[pare_l]
+
+    # center of parent cell
+    x0_pare = patches_rx[ipare] + (ii_pare - 0.5) * hx
+    y0_pare = patches_ry[ipare] + (jj_pare - 0.5) * hx
+    z0_pare = patches_rz[ipare] + (kk_pare - 0.5) * hx
+
+    # accumulate weighted sum and normalisation
+    wsum = 0.0
+    value = 0.0
+
+    # support radius = 2*h -> need indices di in [-2,2]
+    for di2 in range(-2, 3):
+        for dj2 in range(-2, 3):
+            for dk2 in range(-2, 3):
+                ii = ii_pare + di2
+                jj = jj_pare + dj2
+                kk = kk_pare + dk2
+                # boundary safety
+                if ii < 0 or ii >= pare_nx or jj < 0 or jj >= pare_ny or kk < 0 or kk >= pare_nz:
+                    continue
+                xc = patches_rx[ipare] + (ii - 0.5) * hx
+                yc = patches_ry[ipare] + (jj - 0.5) * hx
+                zc = patches_rz[ipare] + (kk - 0.5) * hx
+                dx = x - xc
+                dy = y - yc
+                dz = z - zc
+                r = np.sqrt(dx*dx + dy*dy + dz*dz)
+                w = SPH_kernel(r, hx)
+                if w > 0.0:
+                    value += pare_field[ii, jj, kk] * w
+                    wsum += w
+
+    if wsum > 0.0:
+        return value / wsum
+    else:
+        # fallback to direct parent cell value if no weight (rare)
+        return pare_field[ii_pare, jj_pare, kk_pare]
+
+@njit(fastmath=True)
+def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                     patchnx, patchny, patchnz,
                     patchx, patchy, patchz,
                     patchrx, patchry, patchrz,
                     patchpare, levels, level_res,
-                    field, nmax):
+                    fields, nmax, interpol='TSC'):
     """
     Fills ghost cells of a single patch using TSC interpolation from parent patches.
-    
+    If the ghost cell lies inside a brother patch (same refinement level), copy the
+    value directly from that brother instead of using parent interpolation.
+
     Args:
         ipatch: current patch index
-        buffered_patch: array with ghost cells (interior already filled)
+        buffered_patches: list of list of arrays with ghost cells (interior already filled) for each field
         nghost: number of ghost cells on each side
         patchnx, patchny, patchnz: dimensions of all patches
         patchx, patchy, patchz: cell indices in parent
         patchrx, patchry, patchrz: physical positions of patches
         patchpare: parent patch indices
-        levels: refinement levels
+        levels: refinement levels for each patch
         level_res: cell sizes for each level
-        field: list of all patch fields
+        fields: list of lists of all fields patches
         nmax: base level grid size
+        interpol: interpolation method ('TSC' or 'SPH')
         
     Returns:
-        buffered_patch: buffered_patch with ghost cells filled
+        buffered_patches: list of list of arrays with ghost cells filled
         
     Author: Marco Molina
     """
     
     nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
     pres = level_res[ipatch]
+    my_level = levels[ipatch]
+    
+    # Upper and lower indices for the current level patches
+    low_patch_index = (levels < my_level).sum()
+    high_patch_index = (levels <= my_level).sum()
     
     # Patch origin (lower-left-front corner, not cell center)
     # patchrx is the center of the first cell at parent resolution
     patch_x0 = patchrx[ipatch] - pres / 2
     patch_y0 = patchry[ipatch] - pres / 2
     patch_z0 = patchrz[ipatch] - pres / 2
+    
+    # Per-patch discovered-brothers cache (append-only, small)
+    ## Tune cache_size to expected number of nearby brothers (power of two good)
+    cache_size = 32
+    bro_list = np.full(cache_size, -1, np.int64)      # stored brother indices
+    bro_bx0 = np.zeros(cache_size, dtype=np.float64)
+    bro_by0 = np.zeros(cache_size, dtype=np.float64)
+    bro_bz0 = np.zeros(cache_size, dtype=np.float64)
+    bro_bnx = np.zeros(cache_size, dtype=np.int64)
+    bro_bny = np.zeros(cache_size, dtype=np.int64)
+    bro_bnz = np.zeros(cache_size, dtype=np.int64)
+    bro_pres = np.zeros(cache_size, dtype=np.float64)
+    bro_count = 0
     
     # Process all cells including ghost cells
     for i in prange(nx + 2*nghost):
@@ -265,47 +372,147 @@ def fill_ghost_buffer(ipatch, buffered_patch, nghost,
                 k_local = k - nghost
                 
                 # Physical coordinates of this ghost cell center
-                x_ghost = patch_x0 + (i_local + 0.5) * pres
-                y_ghost = patch_y0 + (j_local + 0.5) * pres
-                z_ghost = patch_z0 + (k_local + 0.5) * pres
+                x_ghost = patch_x0 + i_local * pres
+                y_ghost = patch_y0 + j_local * pres
+                z_ghost = patch_z0 + k_local * pres
                 
-                # Find which patch cell this ghost cell "belongs to" for indexing
-                i_patch = i_local
-                j_patch = j_local
-                k_patch = k_local
+                # First we try to find a brother patch at the same level that contains this point
+                brother_found = False
                 
-                # Cell center coordinates (for reference in TSC_interpolation)
-                x0 = patch_x0 + (i_patch + 0.5) * pres
-                y0 = patch_y0 + (j_patch + 0.5) * pres
-                z0 = patch_z0 + (k_patch + 0.5) * pres
+                ## Try discovered brothers first (cheap)
+                for bi in range(bro_count):
+                    ip = bro_list[bi]
+                    bx0 = bro_bx0[bi]; by0 = bro_by0[bi]; bz0 = bro_bz0[bi]
+                    bnx = bro_bnx[bi]; bny = bro_bny[bi]; bnz = bro_bnz[bi]
+                    pres_b = bro_pres[bi]
+                    
+                    # Check inclusion
+                    if (x_ghost >= bx0 and x_ghost < bx0 + bnx * pres_b and
+                        y_ghost >= by0 and y_ghost < by0 + bny * pres_b and
+                        z_ghost >= bz0 and z_ghost < bz0 + bnz * pres_b):
+                        
+                        # Compute integer indices inside brother patch
+                        ib = int((x_ghost - bx0) / pres_b)
+                        jb = int((y_ghost - by0) / pres_b)
+                        kb = int((z_ghost - bz0) / pres_b)
+                        
+                        # For some edge cases
+                        if ib < 0: ib = 0
+                        if ib > bnx - 1: ib = bnx - 1
+                        if jb < 0: jb = 0
+                        if jb > bny - 1: jb = bny - 1
+                        if kb < 0: kb = 0
+                        if kb > bnz - 1: kb = bnz - 1
+                        
+                        # Copy value from brother patch (nearest-cell copy)
+                        for f in range(len(fields)):
+                            buffered_patches[f][i, j, k] = fields[f][ip][ib, jb, kb]
+                        
+                        brother_found = True
+                        break
+
+                if brother_found:
+                    continue
                 
-                # Use TSC interpolation
-                buffered_patch[i, j, k] = TSC_interpolation(
-                    ipatch, i_patch, j_patch, k_patch,
-                    x0, y0, z0,
-                    x_ghost, y_ghost, z_ghost,
-                    pres, nmax,
-                    nx, ny, nz,
-                    field[ipatch], level_res,
-                    patchpare, patchnx, patchny, patchnz,
-                    patchx, patchy, patchz,
-                    patchrx, patchry, patchrz, levels,
-                    field[0], field
-                )
+                ## Full scan fallback (when not covered by discovered brothers)
+                for ip in range(low_patch_index, high_patch_index):
+                    if ip == ipatch:
+                        continue
+                    
+                    # Brother patch cell size and origin
+                    bnx, bny, bnz = patchnx[ip], patchny[ip], patchnz[ip]
+                    pres_b = level_res[ip]
+                    bx0 = patchrx[ip] - pres_b / 2
+                    by0 = patchry[ip] - pres_b / 2
+                    bz0 = patchrz[ip] - pres_b / 2
+
+                    # Check inclusion
+                    if (x_ghost >= bx0 and x_ghost < bx0 + bnx * pres_b and
+                        y_ghost >= by0 and y_ghost < by0 + bny * pres_b and
+                        z_ghost >= bz0 and z_ghost < bz0 + bnz * pres_b):
+                        
+                        # Compute integer indices inside brother patch
+                        ib = int((x_ghost - bx0) / pres_b)
+                        jb = int((y_ghost - by0) / pres_b)
+                        kb = int((z_ghost - bz0) / pres_b)
+                        
+                        # For some edge cases
+                        if ib < 0: ib = 0
+                        if ib > bnx - 1: ib = bnx - 1
+                        if jb < 0: jb = 0
+                        if jb > bny - 1: jb = bny - 1
+                        if kb < 0: kb = 0
+                        if kb > bnz - 1: kb = bnz - 1
+
+                        # Copy value from brother patch (nearest-cell copy)
+                        for f in range(len(fields)):
+                            buffered_patches[f][i, j, k] = fields[f][ip][ib, jb, kb]
+
+                        # Record discovered brother if cache not full and not already present
+                        already = False
+                        for bi in range(bro_count):
+                            if bro_list[bi] == ip:
+                                already = True
+                                break
+                        if (not already) and (bro_count < cache_size):
+                            idx = bro_count
+                            bro_list[idx] = ip
+                            bro_bx0[idx] = bx0
+                            bro_by0[idx] = by0
+                            bro_bz0[idx] = bz0
+                            bro_bnx[idx] = bnx
+                            bro_bny[idx] = bny
+                            bro_bnz[idx] = bnz
+                            bro_pres[idx] = pres_b
+                            bro_count += 1
+                            
+                        brother_found = True
+                        break
+
+                if brother_found:
+                    continue
+                
+                ## If not borther, use interpolation from parents (choose method)
+                for f in range(len(fields)):
+                    if interpol == 'TSC':
+                        buffered_patches[f][i, j, k] = TSC_interpolation(
+                            ipatch, i_local, j_local, k_local,
+                            x_ghost, y_ghost, z_ghost,
+                            pres, nmax,
+                            nx, ny, nz,
+                            fields[f][ipatch], level_res,
+                            patchpare, patchnx, patchny, patchnz,
+                            patchx, patchy, patchz,
+                            patchrx, patchry, patchrz, levels,
+                            fields[f][0], fields[f])
+                    else:
+                        buffered_patches[f][i, j, k] = SPH_interpolation(
+                            ipatch, i_local, j_local, k_local,
+                            x_ghost, y_ghost, z_ghost,
+                            pres, nmax,
+                            nx, ny, nz,
+                            fields[f][ipatch], level_res,
+                            patchpare, patchnx, patchny, patchnz,
+                            patchx, patchy, patchz,
+                            patchrx, patchry, patchrz, levels,
+                            fields[f][0], fields[f])
     
-    return buffered_patch
+    return buffered_patches
 
 
-def add_ghost_buffer(field, npatch,
+def add_ghost_buffer(fields, npatch,
                     patchnx, patchny, patchnz,
                     patchx, patchy, patchz,
                     patchrx, patchry, patchrz, patchpare,
-                    size, nmax, nghost=1, kept_patches=None):
+                    size, nmax, nghost=1, interpol='TSC', bitformat=np.float32, kept_patches=None):
     """
     Adds ghost buffer cells to all patches in an AMR field using TSC interpolation.
+    Accepts `fields` as a list of fields (each field is a list of per-patch arrays).
+    Converts each field to a numba.typed.List of arrays (placeholders for missing patches)
+    so njit functions receive homogeneous typed lists.
     
     Args:
-        field: list of numpy arrays, each containing a patch of the AMR field
+        fields: list of list of numpy arrays, each containing fields with each array being a patch of the AMR field
         npatch: number of patches per level (from read_grids)
         patchnx, patchny, patchnz: dimensions of each patch
         patchx, patchy, patchz: cell indices in parent (patchx, patchy, patchz from read_grids)
@@ -314,74 +521,67 @@ def add_ghost_buffer(field, npatch,
         size: simulation box size
         nmax: number of cells at base level
         nghost: number of ghost cells to add on each side (default: 1)
+        interpol: interpolation method ('TSC' or 'SPH')
+        bitformat: data type for the fields (default is np.float32)
         kept_patches: boolean array indicating which patches to process
         
     Returns:
-        buffered_field: list of numpy arrays with ghost cells added
+        buffered_fields: list of list of numpy arrays with ghost cells added
         
     Author: Marco Molina
     """
+    
+    if interpol not in ['TSC', 'SPH']:
+        raise ValueError("Interpolation method must be 'TSC' or 'SPH'")
     
     levels = tools.create_vector_levels(npatch)
     level_res = size / nmax / (2.0 ** levels)
     
     if kept_patches is None:
-        kept_patches = np.ones(len(field), dtype=bool)
+        kept_patches = np.ones(len(fields[0]), dtype=bool)
     
-    buffered_field = []
+    # Convert each field (list of per-patch items) into a numba.typed.List of arrays
     
-    # Convert to numba List for njit compatibility
-    # Build a homogeneous typed List: replace non-array entries with zero arrays
-    field_list = List()
-    # determine fallback dtype from the first real array
-    fallback_dtype = None
-    for f in field:
-        if isinstance(f, np.ndarray):
-            fallback_dtype = f.dtype
-            break
-    if fallback_dtype is None:
-        fallback_dtype = np.float32
+    fields_numba = []
+    for fset in fields:
+        L = tools.python_to_numba_list(fset, patchnx, patchny, patchnz, fallback_dtype=bitformat, order='F')
+        fields_numba.append(L)
 
-    for idx in range(len(field)):
-        f = field[idx]
-        if isinstance(f, np.ndarray):
-            field_list.append(f)
-        else:
-            # create placeholder array with the expected patch shape so numba types stay consistent
-            nx_i = patchnx[idx]
-            ny_i = patchny[idx]
-            nz_i = patchnz[idx]
-            placeholder = np.zeros((nx_i, ny_i, nz_i), dtype=fallback_dtype, order='F')
-            field_list.append(placeholder)
-    
-    for ipatch in range(len(field)):
+    buffered_fields = [[] for _ in range(len(fields))]
+        
+    for ipatch in range(len(fields[0])):
         if not kept_patches[ipatch]:
             # keep same convention as readers: use scalar 0 for patches outside region
-            buffered_field.append(0)
+            [buffered_fields[f].append(0) for f in range(len(fields))]
             continue
             
         nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
         
         # Create patch with ghost cells
-        buffered_patch = np.zeros((nx + 2*nghost, ny + 2*nghost, nz + 2*nghost), 
-                                dtype=field[ipatch].dtype, order='F')
-        
-        # Copy interior cells first (to avoid race conditions)
-        buffered_patch[nghost:nx+nghost, nghost:ny+nghost, nghost:nz+nghost] = field[ipatch][:,:,:]
+        buffered_patches = [np.zeros((nx + 2*nghost, ny + 2*nghost, nz + 2*nghost), 
+                                dtype=bitformat, order='F') for _ in range(len(fields))]
+            
+        for f in range(len(fields)):
+            src = fields[f][ipatch]
+            if isinstance(src, np.ndarray):
+                buffered_patches[f][nghost:nx+nghost, nghost:ny+nghost, nghost:nz+nghost] = src[:,:,:]
+            else:
+                # source was placeholder scalar 0: leave interior zeros (or could copy from placeholder)
+                pass
         
         # Fill ghost cells using TSC interpolation
-        buffered_patch = fill_ghost_buffer(
-            ipatch, buffered_patch, nghost,
+        buffered_patches = fill_ghost_buffer(
+            ipatch, buffered_patches, nghost,
             patchnx, patchny, patchnz,
             patchx, patchy, patchz,
             patchrx, patchry, patchrz,
             patchpare, levels, level_res,
-            field_list, nmax
+            fields_numba, nmax, interpol=interpol
         )
         
-        buffered_field.append(buffered_patch)
+        [buffered_fields[f].append(buffered_patches[f]) for f in range(len(fields))]
     
-    return buffered_field
+    return buffered_fields
 
 
 def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kept_patches=None):
