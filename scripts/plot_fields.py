@@ -777,14 +777,6 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     # Main evolution plot
     fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
     
-    # Main energy line (always plot)
-    if evolution_type == 'total':
-        label = 'Magnetic Energy'
-    else:
-        label = 'Magnetic Energy Induction'
-    ax1.plot(x_data[index_O_plot:index_F_plot], n1_data[index_O_plot:index_F_plot], 
-            linewidth=line1, label=label, color='#1f77b4')
-    
     # Track which components were plotted
     components_plotted = []
     
@@ -793,20 +785,28 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         ax1.plot(x_data[index_O_plot:index_F_plot], kinetic_work_data[index_O_plot:index_F_plot], 
                 linewidth=line1, label='Kinetic Energy', color='#17becf')
         components_plotted.append('kinetic')
+    
+    # Main energy line (always plot)
+    if evolution_type == 'total':
+        label = 'Magnetic Energy'
+    else:
+        label = 'Magnetic Energy Induction'
+    ax1.plot(x_data[index_O_plot:index_F_plot], n1_data[index_O_plot:index_F_plot], 
+            linewidth=line1, label=label, color='#1f77b4')
         
     # Total work (compacted)
     if should_plot_component(total_work_data):
-        ax1.plot(x_data[index_o_plot:index_f_plot], total_work_data, '--', 
-                linewidth=line1, label='Magnetic Energy \nfrom Induction (Compacted)', color='#d62728')
+        ax1.plot(x_data[index_o_plot:index_f_plot], total_work_data, '-', 
+                linewidth=line1, label='...from Compact Induction', color='#d62728')
         components_plotted.append('total')
 
     # Induction prediction (plot if has data)
     if should_plot_component(n0_data):
         if evolution_type == 'total':
-            label = 'Magnetic Energy \nfrom Induction'
+            label = '...from Itemize Induction'
         else:
             label = 'Predicted Induction'
-        ax1.plot(x_data[index_o_plot:index_f_plot], n0_data, 
+        ax1.plot(x_data[index_o_plot:index_f_plot], n0_data, '--',
                 linewidth=line1, label=label, color='#ff7f0e')
 
     # Individual components with their colors
@@ -886,6 +886,8 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             
         if induction_params['buffer'] == True:
             buffer_info = f'Buffered_{induction_params["interpol"]}'
+        else:
+            buffer_info = 'NoBuffer'
         
         # Save main plot
         file_title = '_'.join(title.split()[:3])
@@ -969,6 +971,14 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
             - units: energy unit conversion
             - F: size factor
             - level: refinement level
+            - vir_kind: type of virial radius
+            - rad_kind: type of radius used
+            - size: simulation box size
+            - buffer: bool indicating if buffer region is used
+            - interpol: interpolation method for buffer
+            - stencil: stencil type for induction calculation
+            - up_to_level: maximum refinement level
+            - sims: list of simulation identifiers
         - grid_t: time grid (in simulation units)
         - grid_zeta: redshift grid
         - rad: characteristic radius for normalization
@@ -1096,8 +1106,8 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     def safe_get(key):
         return profile_data.get(key, [np.zeros(nbins) for _ in it_indx])
 
-    clus_b2_profile = [units_y_2 * safe_get('clus_b2_profile')[i] for i in it_indx]
     kinetic_energy_profile = [units_y_2 * safe_get('kinetic_energy_profile')[i] for i in it_indx]
+    clus_b2_profile = [units_y_2 * safe_get('clus_b2_profile')[i] for i in it_indx]
     clus_rho_rho_b_profile = [units_y_3 * safe_get('clus_rho_rho_b_profile')[i] for i in it_indx]
     diver_profile = [units_y_1 * safe_get('MIE_diver_B2_profile')[i] for i in it_indx]
     compres_profile = [units_y_1 * safe_get('MIE_compres_B2_profile')[i] for i in it_indx]
@@ -1106,7 +1116,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     drag_profile = [units_y_1 * safe_get('MIE_drag_B2_profile')[i] for i in it_indx]
     total_profile = [units_y_1 * safe_get('MIE_total_B2_profile')[i] for i in it_indx]
     ind_b2_profile = [units_y_1 * safe_get('ind_b2_profile')[i] for i in it_indx]
-    post_ind_b2_profile = [units_y_1 * safe_get('post_ind_b2_profile')[i] for i in it_indx]
+    # post_ind_b2_profile = [units_y_1 * safe_get('post_ind_b2_profile')[i] for i in it_indx]
 
     
     # Prepare data based on plot type
@@ -1122,10 +1132,10 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         drag_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in drag_profile]
         total_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in total_profile]
         ind_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in ind_b2_profile]
-        post_ind_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in post_ind_b2_profile]
+        # post_ind_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in post_ind_b2_profile]
         
         r_pro = r
-        plot_suffix = f'_smoothed_sigma_{smoothing_sigma}'
+        plot_suffix = f'smoothed_sigma_{smoothing_sigma}'
 
     elif plot_type == 'interpolated':
         # Create interpolations per snapshot, produce callables
@@ -1140,66 +1150,109 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         drag_profile = [interp1d(r, drag_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(drag_profile))]
         total_profile = [interp1d(r, total_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(total_profile))]
         ind_b2_profile = [interp1d(r, ind_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(ind_b2_profile))]
-        post_ind_b2_profile = [interp1d(r, post_ind_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(post_ind_b2_profile))]
+        # post_ind_b2_profile = [interp1d(r, post_ind_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(post_ind_b2_profile))]
         
         r_pro = r_new
         plot_suffix = f'{interpolation_kind}_interpolated_{interpolation_points}_points'
 
     else:  # raw
         r_pro = r
-        plot_suffix = '_raw'
+        plot_suffix = 'raw'
 
     figures = []
     
     # Components configuration: (data_list, label, color, lw, linestyle, unit)
-    # components_configs = [
-    #     (clus_b2_profile, 'Magnetic Energy Density', "#184AE1", line1, '-', units_y_2),
-    #     (ind_b2_profile, 'Magnetic Energy \nfrom Induction', "#E08F2B", line1, '-', units_y_1),
-    #     (post_ind_b2_profile, 'Magnetic Energy \nfrom Induction (Post)', "#F1A40E", line1, '-.', units_y_1),
-    #     (total_profile, 'Magnetic Energy \nfrom Induction (Compacted)', "#08AF08", line1, '--', units_y_1),
-    #     (diver_profile, 'Divergence', 'pink', line2, '--', units_y_1),
-    #     (compres_profile, 'Compression', 'purple', line2, '--', units_y_1),
-    #     (stretch_profile, 'Stretching', 'orange', line2, '--', units_y_1),
-    #     (advec_profile, 'Advection', 'red', line2, '--', units_y_1),
-    #     (drag_profile, 'Cosmic Drag', 'gray', line2, '--', units_y_1),
-    #     (kinetic_energy_profile, 'Kinetic Energy Density', '#8FBC8F', line1, '-', units_y_2),
-    #     (clus_rho_rho_b_profile, 'Density Profile', "#0EF1F1", line1, '-', units_y_3)
-    # ]
-    
     components_configs = [
-        # Energies (units_y_2)
-        (clus_b2_profile, 'Magnetic Energy Density', "#1f77b4", line1, '-', units_y_2),
-        (kinetic_energy_profile, 'Kinetic Energy Density', "#17becf", line1, '-', units_y_2),
         # Density (units_y_3)
         (clus_rho_rho_b_profile, 'Density Profile', "#2ca02c", line1, '-', units_y_3),
+        # Energies (units_y_2)
+        (kinetic_energy_profile, 'Kinetic Energy Density', "#17becf", line1, '-', units_y_2),
+        (clus_b2_profile, 'Magnetic Energy Density', "#1f77b4", line1, '-', units_y_2),
         # Induction totals (units_y_1)
-        (total_profile, 'Magnetic Energy from Induction (Compacted)', "#d62728", line1, '--', units_y_1),
-        (ind_b2_profile, 'Magnetic Energy from Induction', "#ff7f0e", line1, '-', units_y_1),
-        (post_ind_b2_profile, 'Magnetic Energy from Induction (Post)', "#ffbb78", line1, '-.', units_y_1),
+        (total_profile, '...from Compact Induction', "#d62728", line1, '-', units_y_1),
+        (ind_b2_profile, '...from Itemize Induction', "#ff7f0e", line1, '--', units_y_1),
+        # (post_ind_b2_profile, '...from Post-Itemize Induction', "#ffbb78", line1, '-.', units_y_1),
         # Individual components (units_y_1)
-        (compres_profile, 'Compression', "#9467bd", line2, ':', units_y_1),
-        (stretch_profile, 'Stretching', "#ff9896", line2, ':', units_y_1),
-        (advec_profile, 'Advection', "#e377c2", line2, ':', units_y_1),
-        (diver_profile, 'Divergence', "#c5b0d5", line2, ':', units_y_1),
-        (drag_profile, 'Cosmic Drag', "#7f7f7f", line2, ':', units_y_1)
+        (compres_profile, 'Compression', "#9467bd", line2, '--', units_y_1),
+        (stretch_profile, 'Stretching', "#ff9896", line2, '--', units_y_1),
+        (advec_profile, 'Advection', "#e377c2", line2, '--', units_y_1),
+        (diver_profile, 'Divergence', "#c5b0d5", line2, '--', units_y_1),
+        (drag_profile, 'Cosmic Drag', "#7f7f7f", line2, '--', units_y_1)
     ]
 
-
     # Decide which components have data (per snapshot we check existence)
-    def has_nonzero(arr_or_callable, snap_idx):
+    def has_nonzero(arr_or_callable, snap_idx, threshold=induction_params.get('epsilon', 1e-30)):
         # If callable (interp), assume has values (could be NaN outside range)
         if callable(arr_or_callable):
             try:
                 y = arr_or_callable(r_pro)
-                return np.any(~np.isnan(y)) and np.any(np.abs(y) > 0)
+                return np.any(~np.isnan(y)) and np.any(np.abs(y) > threshold)
             except Exception:
                 return False
         # If list-like of arrays
         try:
             a = arr_or_callable[snap_idx]
-            return np.any(np.abs(np.asarray(a)) > 0)
+            return np.any(np.abs(np.asarray(a)) > threshold)
         except Exception:
             return False
+        
+    # Helper to plot signed data: single continuous line with per-segment styling
+    def plot_signed(ax, x, y, lw, ls, color, label, eps=induction_params.get('epsilon', 1e-30)):
+        """
+        Plot a single continuous line where:
+          - positive intervals use linestyle `ls`
+          - negative intervals use linestyle ':'
+        No gaps between positive and negative segments.
+        Returns a single Line2D handle for legend.
+        """
+        from matplotlib.collections import LineCollection
+        from matplotlib.lines import Line2D
+        
+        y = np.asarray(y)
+        x = np.asarray(x)
+
+        # mask out NaNs
+        valid = ~np.isnan(y)
+        if not np.any(valid):
+            return None
+
+        xv = x[valid]
+        yv = y[valid]
+        yabs = np.maximum(np.abs(yv), eps)  # clamp to avoid log issues
+
+        # Build segments with sign-dependent linestyle
+        segments = []
+        sign_styles = []  # True = positive (ls), False = negative (':')
+        
+        for i in range(len(xv) - 1):
+            seg = np.array([[xv[i], yabs[i]], [xv[i+1], yabs[i+1]]])
+            segments.append(seg)
+            # Use the sign of the first point in the segment
+            sign_styles.append(yv[i] >= 0)
+
+        if not segments:
+            return None
+
+        # Plot base thin continuous line (no legend)
+        ax.plot(xv, yabs, linestyle='-', linewidth=max(lw * 0.5, 0.3), 
+                color=color, alpha=0.2, label='_nolegend_')
+
+        # Overlay segments with sign-dependent dashes
+        lc_pos = LineCollection(
+            [seg for seg, is_pos in zip(segments, sign_styles) if is_pos],
+            linewidths=lw, colors=color, linestyles=ls, label='_nolegend_'
+        )
+        lc_neg = LineCollection(
+            [seg for seg, is_pos in zip(segments, sign_styles) if not is_pos],
+            linewidths=lw, colors=color, linestyles=':', label='_nolegend_'
+        )
+        
+        ax.add_collection(lc_pos)
+        ax.add_collection(lc_neg)
+
+        # Return a dummy handle for legend entry
+        h_legend, = ax.plot([], [], linestyle=ls, linewidth=lw, color=color, label=label)
+        return h_legend
     
     for snap_i in range(len(it_indx)):
         fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
@@ -1214,10 +1267,16 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         snap_z = np.abs(np.round(grid_zeta[it_indx[snap_i]], 2))
         ax1.set_title(f'{title} - z = {snap_z:.2f}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
 
-        lines = []
-        labels = []
+        unique_handles = []
+        unique_labels = []
+        
+        # Add one explanatory legend entry: dotted means negative interval
+        from matplotlib.lines import Line2D
+        neg_note = Line2D([0], [0], color="#364243", linestyle=':', linewidth=line2, label='Negative Interval')
+        unique_handles.append(neg_note)
+        unique_labels.append('Negative Interval')
 
-        for idx, (data_list, label, color, lw, ls, unit) in enumerate(components_configs):
+        for (data_list, label, color, lw, ls, unit) in components_configs:
             if not has_nonzero(data_list, snap_i):
                 continue
 
@@ -1229,18 +1288,16 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                 # if interpolation requested but we have raw arrays and r_pro is finer, interpolate on the fly
                 if plot_type == 'interpolated' and y.size == r.size and r_pro.size != r.size:
                     y = np.interp(r_pro, r, y)
-
-            # Choose axis: left for energy/density (units_y_2), right for induction and density (units_y_1, units_y_3)
+            
+            # Choose axis: left for energy/density (units_y_2), right for induction (units_y_1), density (units_y_3)
             if unit == units_y_1:
-                ln, = ax_right.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+                # unified signed plotting on right axis
+                _ = plot_signed(ax_right, r_pro, y, lw, ls, color, label)
             elif unit == units_y_3:
-                ln, = ax_density.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+                ax_density.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
             else:
-                ln, = ax1.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
-
-            lines.append(ln)
-            labels.append(label)
-
+                ax1.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+            
         # Axis scales and labels
         if x_scale == 'log':
             ax1.set_xscale('log')
@@ -1283,13 +1340,11 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         h1, l1 = ax1.get_legend_handles_labels()
         h2, l2 = ax_right.get_legend_handles_labels()
         h3, l3 = ax_density.get_legend_handles_labels()
-        all_handles = h1 + h2 + h3
-        all_labels = l1 + l2 + l3
+        all_handles = h3 + h1 + h2
+        all_labels = l3 + l1 + l2
         seen = set()
-        unique_handles = []
-        unique_labels = []
         for hh, ll in zip(all_handles, all_labels):
-            if ll not in seen:
+            if ll and not ll.startswith('_') and ll not in seen:
                 seen.add(ll)
                 unique_handles.append(hh)
                 unique_labels.append(ll)
@@ -1299,7 +1354,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
             # bbox_to_anchor is in figure coordinates when bbox_transform=fig1.transFigure.
             # ncol=2 forces two columns; adjust bbox_to_anchor if you need a different offset.
             fig1.legend(unique_handles, unique_labels, prop=font_legend,
-                        loc='upper right', bbox_to_anchor=(0.80, 0.89),
+                        loc='upper right', bbox_to_anchor=(0.49, 0.31),
                         bbox_transform=fig1.transFigure, ncol=2, frameon=True)
             # Slightly adjust subplot to avoid overlapping the legend or title
             fig1.subplots_adjust(top=0.90, right=0.86)
@@ -1328,9 +1383,10 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         axis_info = f'{x_scale}_{y_scale}'
         limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
 
-        buffer_info = ''
         if induction_params.get('buffer', False) == True:
             buffer_info = f'Buffered_{induction_params.get("interpol","")}'
+        else:
+            buffer_info = 'NoBuffer'
 
         for i, fig in enumerate(figures):
             file_title = '_'.join(title.split()[:3])
@@ -1340,6 +1396,294 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                 print(f'Saved {i} figure: {file_name}')
 
     return figures
+
+def distribution_check(arr, quantity, plot_params, induction_params,
+                    grid_t, grid_z, rad, ref_field=None,
+                    verbose=True, save=False, folder=None):
+    '''
+    Given a 3D array field (or list of patches per snapshot), generates two separate figures per snapshot:
+        - Figure 1: Analysis plots (4 subplots)
+            * Histogram of field values
+            * Cumulative distribution
+            * Cumulative absolute percentiles
+            * Cumulative relative percentiles (if ref_field provided)
+        - Figure 2: Projection plots (2 subplots)
+            * Max projection along XY plane
+            * Max projection along XZ plane
+    
+    This function is especially meant to check the divergence of the magnetic field induction at each calculation step.
+
+    Args:
+        - arr: list of snapshots, where each snapshot is either:
+             * A 3D numpy array (uniform grid), or
+             * A list of patches (AMR). For AMR: only analysis plots are produced (no projections).
+        - quantity: string with quantity name (for titles and labels)
+        - plot_params: dict with:
+            - it_indx: iteration indexes to select snapshots
+            - bins: number of bins for histogram
+            - log_scale: bool for log scale on y-axis
+            - %points: number of points for percentile curves
+            - subsample_fraction: fraction of cells to subsample for percentiles (0 < f <= 1)
+            - central_fraction: fraction of central box to consider (0 < f <= 1)
+            - title: title for the plots
+            - dpi: dots per inch for saved plots
+            - run: identifier for filenames
+        - induction_params: dict with metadata for file naming
+            - F: size factor
+            - region: region name
+            - vir_kind: 'r200' or 'r500'
+            - rad_kind: 'rvir' or 'r200' or 'r500'
+            - up_to_level: max refinement level
+            - buffer: bool for buffer usage
+            - interpol: interpolation method if buffer used
+            - stencil: stencil type
+        - grid_t: 1D array with grid time coordinates
+        - grid_z: 1D array with grid z coordinates
+        - rad: characteristic radius for normalization
+        - ref_field: optional list/array of 3D arrays (same format as arr) for relative plot (cell-wise |arr| / |ref_field|)
+                If ref_field equals arr element-wise, the relative plot will be 1 wherever ref!=0
+        - verbose: bool for verbose output
+        - save: bool to save plots
+        - folder: folder to save plots (if None, uses current directory)
+    
+    Returns:
+        - Tuple of two lists:
+            * figures_analysis: analysis plots (4 subplots each)
+            * figures_projections: projection plots (2 subplots each or None for AMR snapshots)
+            Each list contains one figure per snapshot in it_indx
+        
+    Author: Marco Molina
+    '''
+    
+    # Extract parameters from plot_params
+    DPI = plot_params.get('dpi', 300)
+    run = plot_params.get('run', '_')
+    title = plot_params.get('title', 'Field Check')
+    bins = plot_params.get('bins', 100)
+    log_scale = plot_params.get('log_scale', True)
+    p_points = plot_params.get('%points', 1001)
+    subsample_fraction = plot_params.get('subsample_fraction', 0.2)
+    central_fraction = plot_params.get('central_fraction', 1.0)
+    it_indx = plot_params.get('it_indx', [0])
+    
+    assert 0 < subsample_fraction <= 1, "subsample_fraction must be in (0,1]"
+    assert 0 < central_fraction <= 1, "central_fraction must be in (0,1]"
+    
+    # Prepare time/redshift arrays
+    t = np.array([grid_t[i] * time_to_yr for i in it_indx])
+    z = np.array([grid_z[i] for i in it_indx])
+    if z[-1] < 0:
+        z[-1] = abs(z[-1])
+
+    figures_analysis = []
+    figures_projections = []
+
+    def _is_patch_snapshot(snapshot):
+        return isinstance(snapshot, (list, tuple))
+
+    def _flatten_patches(patches):
+        if not patches:
+            return np.array([])
+        return np.concatenate([np.asarray(p).ravel() for p in patches])
+    
+    for snap_i in range(len(it_indx)):
+        # Get current snapshot data
+        current_raw = arr[it_indx[snap_i]]
+        is_patches = _is_patch_snapshot(current_raw)
+
+        # Optional reference field for this snapshot
+        current_ref_raw = None
+        if ref_field is not None:
+            if isinstance(ref_field, (list, tuple)):
+                current_ref_raw = ref_field[it_indx[snap_i]]
+            else:
+                current_ref_raw = ref_field
+
+        # Select central box if requested (only for uniform 3D arrays)
+        def central_crop(a):
+            if central_fraction >= 1.0:
+                return a
+            cx = int(a.shape[0] * central_fraction / 2)
+            cy = int(a.shape[1] * central_fraction / 2)
+            cz = int(a.shape[2] * central_fraction / 2)
+            x0, x1 = a.shape[0]//2 - cx, a.shape[0]//2 + cx
+            y0, y1 = a.shape[1]//2 - cy, a.shape[1]//2 + cy
+            z0, z1 = a.shape[2]//2 - cz, a.shape[2]//2 + cz
+            return a[x0:x1, y0:y1, z0:z1]
+
+        if is_patches:
+            # AMR patches: use all cells, skip projections
+            flat = _flatten_patches(current_raw)
+            arr_use = None  # Not used for projections
+        else:
+            assert hasattr(current_raw, "ndim") and current_raw.ndim == 3, f"Input array at snapshot {snap_i} must be 3D or list of patches"
+            nmax, nmay, nmaz = current_raw.shape
+            arr_use = central_crop(current_raw)
+            flat = arr_use.flatten()
+
+        n_cells = flat.size
+
+        # Subsample for percentile curves
+        sub_n = int(subsample_fraction * n_cells)
+        sub_idx = np.random.choice(n_cells, size=sub_n, replace=False)
+        sub_vals = np.abs(flat[sub_idx])
+
+        # Relative array if provided (cell-by-cell |field| / |ref|)
+        rel_vals = None
+        if current_ref_raw is not None:
+            if is_patches:
+                ref_flat = _flatten_patches(current_ref_raw)
+                if ref_flat.size == flat.size:
+                    ref_sub = np.abs(ref_flat[sub_idx])
+                    field_sub = np.abs(flat[sub_idx])
+                    nonzero = ref_sub != 0
+                    if np.any(nonzero):
+                        rel_vals = np.zeros_like(field_sub)
+                        rel_vals[nonzero] = field_sub[nonzero] / ref_sub[nonzero]
+                    elif verbose:
+                        print(f"Warning: Reference field is zero everywhere at snapshot {snap_i}. Skipping relative plot.")
+                elif verbose:
+                    print(f"Warning: ref_field length {ref_flat.size} != field length {flat.size} at snapshot {snap_i}. Skipping relative plot.")
+            else:
+                assert current_ref_raw.shape == current_raw.shape, f"ref_field must match arr shape at snapshot {snap_i}"
+                ref_use = central_crop(current_ref_raw)
+                ref_flat = np.abs(ref_use.flatten())
+                ref_sub = ref_flat[sub_idx]
+                field_sub = np.abs(flat[sub_idx])
+                nonzero = ref_sub != 0
+                if np.any(nonzero):
+                    rel_vals = np.zeros_like(field_sub)
+                    rel_vals[nonzero] = field_sub[nonzero] / ref_sub[nonzero]
+                elif verbose:
+                    print(f"Warning: Reference field is zero everywhere at snapshot {snap_i}. Skipping relative plot.")
+
+        # Percentiles
+        p_grid = np.linspace(0, 100, p_points)
+        abs_curve = np.percentile(sub_vals, p_grid)
+        rel_curve = np.percentile(rel_vals, p_grid) if rel_vals is not None else None
+
+        snap_z = np.abs(np.round(z[snap_i], 2))
+        snap_rad = np.round(rad, 1)
+
+        # ========== FIGURE 1: ANALYSIS PLOTS (4 subplots) ==========
+        fig_analysis, axes = plt.subplots(2, 2, figsize=(14, 10), dpi=DPI)
+        axes = axes.flatten()
+        plt.subplots_adjust(wspace=0.3, hspace=0.35)
+
+        # Histogram
+        axes[0].set_title(f'{quantity} Histogram', fontsize=12, fontweight='bold')
+        axes[0].set_xlabel(f'{quantity}', fontsize=11)
+        axes[0].set_ylabel('Number of Cells', fontsize=11)
+        if log_scale:
+            axes[0].set_yscale('log')
+        axes[0].hist(flat, bins=bins, color='#1f77b4', alpha=0.7, edgecolor='black', linewidth=0.5)
+        axes[0].grid(alpha=0.3)
+
+        # Cumulative distribution
+        sorted_arr = np.sort(flat)
+        cumulative = np.arange(1, len(sorted_arr) + 1) / len(sorted_arr)
+        axes[1].set_title(f'{quantity} Cumulative Distribution', fontsize=12, fontweight='bold')
+        axes[1].set_xlabel(f'{quantity}', fontsize=11)
+        axes[1].set_ylabel('Cumulative % of Cells', fontsize=11)
+        if log_scale:
+            axes[1].set_yscale('log')
+        axes[1].plot(sorted_arr, cumulative * 100, color='#ff7f0e', linewidth=2, alpha=0.8)
+        axes[1].grid(alpha=0.3)
+
+        # Cumulative absolute percentiles
+        axes[2].set_title('Cumulative Absolute |field|', fontsize=12, fontweight='bold')
+        axes[2].set_xlabel('Percent of cells', fontsize=11)
+        axes[2].set_ylabel(f'|{quantity}|', fontsize=11)
+        axes[2].plot(p_grid, abs_curve, color='#d62728', linewidth=2.5)
+        axes[2].set_yscale('log')
+        axes[2].grid(alpha=0.3)
+
+        # Cumulative relative percentiles (if available)
+        if rel_curve is not None:
+            axes[3].set_title('Cumulative Relative |field| / |ref|', fontsize=12, fontweight='bold')
+            axes[3].set_xlabel('Percent of cells', fontsize=11)
+            axes[3].set_ylabel('Relative amplitude', fontsize=11)
+            axes[3].plot(p_grid, rel_curve, color='#9467bd', linewidth=2.5)
+            axes[3].set_yscale('log')
+            axes[3].grid(alpha=0.3)
+        else:
+            axes[3].axis('off')
+            axes[3].text(0.5, 0.5, 'No reference field', 
+                        ha='center', va='center', fontsize=12, 
+                        transform=axes[3].transAxes, style='italic', color='gray')
+
+        # Add snapshot info to title
+        fig_analysis.suptitle(f'{title} - {quantity} Analysis - z = {snap_z:.2f}, R = {snap_rad} Mpc', 
+                                fontsize=14, fontweight='bold')
+        fig_analysis.tight_layout(rect=[0, 0, 1, 0.97])
+
+        figures_analysis.append(fig_analysis)
+
+        # ========== FIGURE 2: PROJECTION PLOTS (2 subplots) ==========
+        if is_patches:
+            fig_proj = None
+            figures_projections.append(None)
+            if verbose:
+                print(f'Plotting... Distribution check for snapshot {snap_i} (z={snap_z:.2f}) plotted [AMR mode, projections skipped]')
+        else:
+            fig_proj, axes_proj = plt.subplots(1, 2, figsize=(14, 6), dpi=DPI)
+            plt.subplots_adjust(wspace=0.25)
+
+            # Max projections along axes
+            proj_xy = np.max(arr_use, axis=2)
+            proj_xz = np.max(arr_use, axis=1)
+
+            im1 = axes_proj[0].imshow(proj_xy, origin='lower', cmap='viridis')
+            axes_proj[0].set_title('Max projection (XY)', fontsize=12, fontweight='bold')
+            axes_proj[0].set_xlabel('X', fontsize=11)
+            axes_proj[0].set_ylabel('Y', fontsize=11)
+            cbar1 = fig_proj.colorbar(im1, ax=axes_proj[0], fraction=0.046, pad=0.04)
+            cbar1.set_label(f'{quantity}', fontsize=10)
+
+            im2 = axes_proj[1].imshow(proj_xz, origin='lower', cmap='viridis')
+            axes_proj[1].set_title('Max projection (XZ)', fontsize=12, fontweight='bold')
+            axes_proj[1].set_xlabel('X', fontsize=11)
+            axes_proj[1].set_ylabel('Z', fontsize=11)
+            cbar2 = fig_proj.colorbar(im2, ax=axes_proj[1], fraction=0.046, pad=0.04)
+            cbar2.set_label(f'{quantity}', fontsize=10)
+
+            # Add snapshot info to title
+            fig_proj.suptitle(f'{title} - {quantity} Projections - z = {snap_z:.2f}, R = {snap_rad} Mpc', 
+                                fontsize=14, fontweight='bold')
+            fig_proj.tight_layout(rect=[0, 0, 1, 0.97])
+
+            figures_projections.append(fig_proj)
+
+            if verbose:
+                print(f'Plotting... Distribution check for snapshot {snap_i} (z={snap_z:.2f}) plotted')
+
+        # Save the figures if requested
+        if save:
+            if folder is None:
+                folder = os.getcwd()
+            sim_info = f'{induction_params.get("up_to_level","")}_{induction_params.get("F","")}_{induction_params.get("vir_kind","")}vir_{induction_params.get("rad_kind","")}rad_{induction_params.get("region","")}Region'
+            if is_patches:
+                sim_info += '_AMR'
+            if induction_params.get('buffer', False):
+                buffer_info = f'Buffered_{induction_params.get("interpol","")}'
+            else:
+                buffer_info = 'NoBuffer'
+
+            # Save analysis figure
+            file_name_analysis = f'{folder}/{title.replace(" ","_")}_{quantity}_analysis_{sim_info}_{buffer_info}_{run}_{snap_i}.png'
+            fig_analysis.savefig(file_name_analysis, dpi=DPI)
+            if verbose:
+                print(f'Saved analysis figure: {file_name_analysis}')
+
+            # Save projection figure (only if generated)
+            if not is_patches and fig_proj is not None:
+                file_name_proj = f'{folder}/{title.replace(" ","_")}_{quantity}_projections_{sim_info}_{buffer_info}_{run}_{snap_i}.png'
+                fig_proj.savefig(file_name_proj, dpi=DPI)
+                if verbose:
+                    print(f'Saved projection figure: {file_name_proj}')
+
+    return figures_analysis, figures_projections
+
         
 def plot_3D_volume(arr, axis_values, log = False, subvolume_factor = 1, subsampling_step = 2, axis_step = 10, quantity = ' ', axis_title = ['x', 'y', 'z'], units = ' ', title = ' ', invert = False, verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     

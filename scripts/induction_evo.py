@@ -400,6 +400,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
 
     clus_b2 = [clus_bx[p]**2 + clus_by[p]**2 + clus_bz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_B2 = [clus_Bx[p]**2 + clus_By[p]**2 + clus_Bz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
+    clus_B = [np.sqrt(clus_B2[p]) if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_v2 = [clus_vx[p]**2 + clus_vy[p]**2 + clus_vz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
 
     if verbose == True:
@@ -431,6 +432,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         'clus_Bx': clus_Bx,
         'clus_By': clus_By,
         'clus_Bz': clus_Bz,
+        'clus_B': clus_B,
         'clus_b2': clus_b2,
         'clus_B2': clus_B2,
         'clus_v2': clus_v2,
@@ -446,7 +448,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
 def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
                         clus_vx, clus_vy, clus_vz,
                         clus_kp, grid_npatch, grid_irr,
-                        dx, stencil=5, verbose=False):
+                        dx, stencil=3, verbose=False):
     '''
     Computes the vectorial calculus quantities of interest for the magnetic field and velocity field.
     Only the the necessary quantities are computed based on the components specified in the config "components" dictionary.
@@ -1053,7 +1055,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
                             grid_patchrx, grid_patchry, grid_patchrz,
                             grid_patchnx, grid_patchny, grid_patchnz,
                             it, sims, nmax, size, coords, rmin, rad, 
-                            nbins=25, logbins=True, units=1, debug=False,verbose=False):
+                            nbins=25, logbins=True, units=1, debug=False, verbose=False):
     '''
     Computes the radial profiles of the magnetic energy density and its components, as well as the induced magnetic energy profile.
     This is done according to the derived equation and compared to the actual magnetic energy integrated along the studied profile. The kinetic energy
@@ -1153,10 +1155,10 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         else:
             results[f'{prefix}_profile'] = zero
     
-    if components.get('induction', False):
-        results['post_ind_b2_profile'] = results['MIE_diver_B2_profile'] + results['MIE_compres_B2_profile'] + results['MIE_stretch_B2_profile'] + results['MIE_advec_B2_profile'] + results['MIE_drag_B2_profile']
-    else:
-        results['post_ind_b2_profile'] = zero
+    # if components.get('induction', False):
+    #     results['post_ind_b2_profile'] = results['MIE_diver_B2_profile'] + results['MIE_compres_B2_profile'] + results['MIE_stretch_B2_profile'] + results['MIE_advec_B2_profile'] + results['MIE_drag_B2_profile']
+    # else:
+    #     results['post_ind_b2_profile'] = zero
     
     if induction_energy['kinetic_energy_density']:
         _, profile = utils.radial_profile_vw(field=induction_energy['kinetic_energy_density'], cr0amr=clus_cr0amr,
@@ -1319,13 +1321,13 @@ def uniform_induction(components, induction_equation,
         print('Time for uniform field calculation in snap '+ str(grid_npatch) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_uniform))))
         
     return results
-
+            
 
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
                     stencil=3, buffer=True, interpol='TSC', nghost=1, bitformat=np.float32, mag=False,
-                    energy_evolution=True, profiles=True, projection=True,
+                    energy_evolution=True, profiles=True, projection=True, debug=[False, 0],
                     verbose=False):
     '''
     Processes a single iteration of the cosmological magnetic induction equation calculations.
@@ -1365,6 +1367,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - energy_evolution: boolean to compute energy evolution (default is True)
         - profiles: boolean to compute radial profiles (default is True)
         - projection: boolean to compute uniform projection (default is True)
+        - debug: boolean to print inner progress information (default is False)
         - verbose: boolean to print progress information (default is False)
         
     Returns:
@@ -1482,6 +1485,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         
     elif not energy_evolution:
         induction_energy_integral = None
+        induction_test_energy_integral = None
         if verbose == True:
             print('Energy evolution is set to False, skipping volume integral of the magnetic induction equation.')
             
@@ -1519,11 +1523,61 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         induction_uniform = None
         if verbose == True:
             print('Projection is set to False, skipping uniform projection of the magnetic induction equation.')
+            
+    if debug[0] == True:
+        
+        debug_data = ['clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2']
+        
+        debug_fields = {}
+        
+        for key in debug_data:
+            if key in data.keys():
+                if debug[1] == 0:
+                    debug_fields[key] = utils.unigrid(field=data[key], box_limits=region_coords[1:], up_to_level=up_to_level,
+                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
+                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
+                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
+                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
+                else:
+                    debug_fields[key] = data[key]
+            elif key in vectorial.keys():
+                if debug[1] == 0:
+                    debug_fields[key] = utils.unigrid(field=vectorial[key], box_limits=region_coords[1:], up_to_level=up_to_level,
+                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
+                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
+                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
+                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
+                else:
+                    debug_fields[key] = vectorial[key]
+            elif key in induction.keys():
+                if debug[1] == 0:
+                    debug_fields[key] = utils.unigrid(induction[key], box_limits=region_coords[1:], up_to_level=up_to_level,
+                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
+                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
+                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
+                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
+                else:
+                    debug_fields[key] = induction[key]
+            elif key in induction_energy.keys():
+                if debug[1] == 0:
+                    debug_fields[key] = utils.unigrid(induction_energy[key], box_limits=region_coords[1:], up_to_level=up_to_level,
+                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
+                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
+                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
+                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
+                else:
+                    debug_fields[key] = induction_energy[key]
+        if verbose == True:
+            print('Debug fields computed for iteration '+ str(it) + ' in simulation '+ str(sims))
+                
+    else:
+        debug_fields = None
+        
     
     data = {
         'grid_time': data['grid_time'],
         'grid_zeta': data['grid_zeta'],
-        'rho_b': data['rho_b']
+        'rho_b': data['rho_b'],
     }
             
     end_time_Total = time.time()
@@ -1533,4 +1587,4 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     if verbose == True:
         print(f'Time for processing iteration {it} in simulation {sims}: {strftime("%H:%M:%S", gmtime(total_time_Total))}')
 
-    return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform
+    return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, debug_fields

@@ -5,8 +5,9 @@ from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
 from config import EVO_PLOT_PARAMS as evo_plot_params
 from config import PROFILE_PLOT_PARAMS as prof_plot_params
+from config import DEBUG_PARAMS as debug_params
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
-from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, scan_animation_3D, zoom_animation_3D
+from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, distribution_check, scan_animation_3D, zoom_animation_3D
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
 
@@ -67,6 +68,7 @@ if __name__ == "__main__":
             all_induction_test_energy_integral = {}
             all_induction_energy_profiles = {}
             all_induction_uniform = {}
+            all_debug_fields = {}
 
             # Flag to track first iteration for dictionary initialization
             first_iteration = True
@@ -75,7 +77,7 @@ if __name__ == "__main__":
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 for it, j in zip(out_params["it"], range(len(out_params["it"]))):
                     
-                    data, _, _, _, _, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _ = process_iteration(
+                    data, vectorial, induction, _, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _, debug_fields = process_iteration(
                         ind_params["components"], 
                         out_params["dir_grids"], 
                         out_params["dir_gas"],
@@ -98,6 +100,7 @@ if __name__ == "__main__":
                         energy_evolution=ind_params["energy_evolution"],
                         profiles=ind_params["profiles"],
                         projection=ind_params["projection"],
+                        debug=out_params["debug"],
                         verbose=out_params["verbose"])
                     
                     # Initialize dictionaries on first iteration
@@ -106,18 +109,18 @@ if __name__ == "__main__":
                         for key in data.keys():
                             all_data[key] = []
                         
-                        # for key in vectorial.keys():
-                        #     all_vectorial[key] = []
+                        for key in vectorial.keys():
+                            all_vectorial[key] = []
                         
-                        # for key in induction.keys():
-                        #     all_induction[key] = []
+                        for key in induction.keys():
+                            all_induction[key] = []
                         
                         # if magnitudes is not None:
                         #     for key in magnitudes.keys():
                         #         all_magnitudes[key] = []
                         
-                        # for key in induction_energy.keys():
-                        #     all_induction_energy[key] = []
+                        for key in induction_energy.keys():
+                            all_induction_energy[key] = []
                         
                         if induction_energy_integral is not None:
                             for key in induction_energy_integral.keys():
@@ -135,24 +138,28 @@ if __name__ == "__main__":
                         #     for key in induction_uniform.keys():
                         #         all_induction_uniform[key] = []
                         
+                        if debug_fields is not None:
+                            for key in debug_fields.keys():
+                                all_debug_fields[key] = []
+                        
                         first_iteration = False
                     
                     # Append results from current iteration to accumulated results
                     for key in data.keys():
                         all_data[key].append(data[key])
                     
-                    # for key in vectorial.keys():
-                    #     all_vectorial[key].append(vectorial[key])
+                    for key in vectorial.keys():
+                        all_vectorial[key].append(vectorial[key])
                     
-                    # for key in induction.keys():
-                    #     all_induction[key].append(induction[key])
+                    for key in induction.keys():
+                        all_induction[key].append(induction[key])
                     
                     # if magnitudes is not None:
                     #     for key in magnitudes.keys():
                     #         all_magnitudes[key].append(magnitudes[key])
                     
-                    # for key in induction_energy.keys():
-                    #     all_induction_energy[key].append(induction_energy[key])
+                    for key in induction_energy.keys():
+                        all_induction_energy[key].append(induction_energy[key])
                     
                     if induction_energy_integral is not None:
                         for key in induction_energy_integral.keys():
@@ -169,6 +176,10 @@ if __name__ == "__main__":
                     # if induction_uniform is not None:
                     #     for key in induction_uniform.keys():
                     #         all_induction_uniform[key].append(induction_uniform[key])
+                    
+                    if debug_fields is not None:
+                        for key in debug_fields.keys():
+                            all_debug_fields[key].append(debug_fields[key])
 
             # field = np.abs(np.sqrt(induction_uniform['uniform_MIE_compres_x']**2 + 
             #                 induction_uniform['uniform_MIE_compres_y']**2 + 
@@ -181,33 +192,54 @@ if __name__ == "__main__":
             #         Save=True, DPI=out_params["dpi"], run=out_params["run"] + f'_Level_{ind_params["up_to_level"]}', folder=out_params["image_folder"])
             
             # Actual evolution calculation
-            induction_energy_integral_evo = induction_energy_integral_evolution(
-                ind_params["components"], all_induction_energy_integral,
-                ind_params['evolution_type'], ind_params['derivative'],
-                all_data['rho_b'], all_data['grid_time'], all_data['grid_zeta'],
-                verbose=out_params["verbose"])
-            
-            ind_params["up_to_level"] = ind_params["level"][L]
-            
-            plot_integral_evolution(
-                induction_energy_integral_evo,
-                evo_plot_params, ind_params,
-                all_data['grid_time'], all_data['grid_zeta'],
-                Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
-                folder=out_params['image_folder']
-            )
+            if ind_params["energy_evolution"] == False:
+                print("Energy evolution calculation is disabled in the configuration. Skipping evolution plots.")
+                
+                ind_params["up_to_level"] = ind_params["level"][L]
+                
+            else:
+                induction_energy_integral_evo = induction_energy_integral_evolution(
+                    ind_params["components"], all_induction_energy_integral,
+                    ind_params['evolution_type'], ind_params['derivative'],
+                    all_data['rho_b'], all_data['grid_time'], all_data['grid_zeta'],
+                    verbose=out_params["verbose"])
+                
+                ind_params["up_to_level"] = ind_params["level"][L]
+                
+                plot_integral_evolution(
+                    induction_energy_integral_evo,
+                    evo_plot_params, ind_params,
+                    all_data['grid_time'], all_data['grid_zeta'],
+                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                    folder=out_params['image_folder']
+                )
 
-            print(f"Ploting " + evo_plot_params["title"] + " completed.")
+                print(f"Ploting " + evo_plot_params["title"] + " completed.")
             
-            plot_radial_profiles(
-                all_induction_energy_profiles,
-                prof_plot_params, ind_params,
-                all_data['grid_time'], all_data['grid_zeta'],
-                Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
-                folder=out_params['image_folder']                
-            )
-            
-            print(f"Ploting " + prof_plot_params["title"] + " completed.")
+            if ind_params["profiles"] == False:
+                print("Profiles calculation is disabled in the configuration. Skipping profile plots.")
+            else:
+                plot_radial_profiles(
+                    all_induction_energy_profiles,
+                    prof_plot_params, ind_params,
+                    all_data['grid_time'], all_data['grid_zeta'],
+                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                    folder=out_params['image_folder']                
+                )
+                
+                print(f"Ploting " + prof_plot_params["title"] + " completed.")
+                
+            if out_params["debug"][0] and ind_params["components"]["divergence"]:
+                for field_key, ref_key, quantity in zip(['clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2'],
+                                                        ['clus_B2', 'clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2'],
+                                                        debug_params['quantities']):
+                    distribution_check(all_debug_fields[field_key], quantity, debug_params, ind_params,
+                                    all_data['grid_time'], all_data['grid_zeta'],
+                                    Rad[-1], ref_field=all_debug_fields[ref_key],
+                                    verbose=out_params["verbose"], save=out_params["save"],
+                                    folder=out_params["image_folder"])
+                    print(f"Ploting distribution check for " + quantity + " completed.")
+                    
             
             # Test evolution (using the test parameters)
             # induction_test_energy_integral_evo = induction_energy_integral_evolution(

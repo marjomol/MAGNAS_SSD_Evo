@@ -1315,7 +1315,7 @@ def uniform_grid_zoom_interpolate(field, box_limits, up_to_level, npatch, patchn
         return uniform
 
     uniform=parallelize(uniform_size_x, uniform_size_y, uniform_size_z, fine_coordinates, cell_patch, vertices_patches,
-                        List([f if ki else np.zeros((2,2,2), dtype=field[0].dtype, order='F') for f,ki in zip(field, kept_patches)]),
+                        List([np.ascontiguousarray(f) if ki else np.zeros((2,2,2), dtype=field[0].dtype, order='C') for f,ki in zip(field, kept_patches)]),
                         interpolate,verbose)
 
     if return_coords:
