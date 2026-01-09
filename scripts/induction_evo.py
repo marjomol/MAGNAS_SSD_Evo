@@ -1048,12 +1048,12 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
 
     
 def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rho_b, 
-                            clus_cr0amr, clus_solapst, clus_kp,
-                            grid_irr, grid_npatch,
+                            rho_b, clus_cr0amr, clus_solapst, clus_kp,
+                            grid_irr, grid_npatch, up_to_level,
                             grid_patchrx, grid_patchry, grid_patchrz,
                             grid_patchnx, grid_patchny, grid_patchnz,
                             it, sims, nmax, size, coords, rmin, rad, 
-                            nbins=25, logbins=True, level=100, verbose=False):
+                            nbins=25, logbins=True, units=1, debug=False,verbose=False):
     '''
     Computes the radial profiles of the magnetic energy density and its components, as well as the induced magnetic energy profile.
     This is done according to the derived equation and compared to the actual magnetic energy integrated along the studied profile. The kinetic energy
@@ -1072,11 +1072,13 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
             - kinetic_energy_density: kinetic energy density of the cluster
         - clus_b2: magnetic energy density in the cluster
         - clus_rho_rho_b: density contrast of the cluster
+        - rho_b: desnity contrast of the simulation
         - clus_cr0amr: AMR grid data
         - clus_solapst: overlap data
         - clus_kp: mask for valid patches
         - grid_irr: index of the snapshot
         - grid_npatch: number of patches in the grid
+        - up_tolevel: maximum refinement level to be considered
         - grid_patchrx, grid_patchry, grid_patchrz: patch sizes in the x, y, and z directions
         - grid_patchnx, grid_patchny, grid_patchnz: number of patches in the x, y, and z directions
         - it: index of the snapshot
@@ -1088,7 +1090,8 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         - rad: radius of the region
         - nbins: number of bins for the radial profile (default is 50)
         - logbins: boolean to use logarithmic bins (default is False)
-        - level: level of refinement in the AMR grid (default is 0)
+        - units: factor to convert the units multiplied by the final result (default is 1)
+        - debug: boolean to print the inner progress of the profile computation (default is False)
         - verbose: boolean to print the progress of the computation (default is False)
     
     Returns:
@@ -1117,9 +1120,17 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     ### Preallocate all possible outputs as zeros
     
     n = 1 + np.sum(grid_npatch)
-    zero = [0] * n
+
+    zero = 0.
     
     results = {}
+    
+    main_keys = ["divergence", "compression", "stretching", "advection", "drag"]
+    if all(components.get(k, False) for k in main_keys):
+        components["induction"] = True
+        induction_energy['ind_b2'] = [induction_energy['MIE_compres_B2'][p] + induction_energy['MIE_diver_B2'][p] + induction_energy['MIE_stretch_B2'][p] + induction_energy['MIE_advec_B2'][p] + induction_energy['MIE_drag_B2'][p] for p in range(n)]
+    else:
+        components["induction"] = False
     
     for key, prefix in [
         ('divergence', 'MIE_diver_B2'),
@@ -1127,50 +1138,66 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         ('stretching', 'MIE_stretch_B2'),
         ('advection', 'MIE_advec_B2'),
         ('drag', 'MIE_drag_B2'),
-        ('total', 'MIE_total_B2')
+        ('total', 'MIE_total_B2'),
+        ('induction', 'ind_b2')
     ]:
         if components.get(key, False):
-            clean_field = utils.clean_field(induction_energy[prefix], clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
-            _, results[f'{prefix}_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                            nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                            solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
+            _, profile = utils.radial_profile_vw(field=induction_energy[prefix], cr0amr=clus_cr0amr,
+                                            solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+                                            clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+                                            nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                                            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+            results[f'{prefix}_profile'] = rho_b * profile
             if verbose:
                 print(f'Snap {it} in {sims}: {key} profile done')
         else:
             results[f'{prefix}_profile'] = zero
     
+    if components.get('induction', False):
+        results['post_ind_b2_profile'] = results['MIE_diver_B2_profile'] + results['MIE_compres_B2_profile'] + results['MIE_stretch_B2_profile'] + results['MIE_advec_B2_profile'] + results['MIE_drag_B2_profile']
+    else:
+        results['post_ind_b2_profile'] = zero
+    
     if induction_energy['kinetic_energy_density']:
-        clean_field = utils.clean_field(induction_energy['kinetic_energy_density'], clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
-        _, results['kinetic_energy_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
+        _, profile = utils.radial_profile_vw(field=induction_energy['kinetic_energy_density'], cr0amr=clus_cr0amr,
+                                                solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+                                                clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                                                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+        results['kinetic_energy_profile'] = rho_b * profile
         if verbose:
             print(f'Snap {it} in {sims}: Kinetic profile done')
     else:
         results['kinetic_energy_profile'] = zero
         
     if clus_b2:
-        clean_field = utils.clean_field(clus_b2, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
-        _, results['clus_B2_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
+        _, profile = utils.radial_profile_vw(field=clus_b2, cr0amr=clus_cr0amr,
+                                        solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+                                        clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+                                        nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                                        size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+        results['clus_b2_profile'] = rho_b * profile
         if verbose:
-            print(f'Snap {it} in {sims}: B2 profile done')
+            print(f'Snap {it} in {sims}: b2 profile done')
     else:
-        results['clus_B2_profile'] = zero
+        results['clus_b2_profile'] = zero
     
     if clus_rho_rho_b:
-        clean_field = utils.clean_field(clus_rho_rho_b, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=level)
-        profile_bin_centers, results['clus_rho_rho_b_profile'] = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
+        profile_bin_centers, profile = utils.radial_profile_vw(field=clus_rho_rho_b, cr0amr=clus_cr0amr,
+                                                solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+                                                clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                                                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+        results['clus_rho_rho_b_profile'] = rho_b * profile
         if verbose:
             print(f'Snap {it} in {sims}: Density profile done')
     else:
         results['clus_rho_rho_b_profile'] = zero
-        profile_bin_centers, _ = utils.radial_profile_vw(field=clean_field, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, size=size, nmax=nmax, up_to_level=level)
+        profile_bin_centers, _ = utils.radial_profile_vw(field=clus_rho_rho_b, cr0amr=clus_cr0amr,
+                                                solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+                                                clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                                                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
     
     results['profile_bin_centers'] = profile_bin_centers
     
@@ -1297,7 +1324,7 @@ def uniform_induction(components, induction_equation,
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
-                    stencil=3, buffer=True, nghost=1, bitformat=np.float32, mag=False,
+                    stencil=3, buffer=True, interpol='TSC', nghost=1, bitformat=np.float32, mag=False,
                     energy_evolution=True, profiles=True, projection=True,
                     verbose=False):
     '''
@@ -1331,6 +1358,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - logbins: boolean to use logarithmic bins (default is True)
         - stencil: stencil size for the magnetic induction equation (default is 3)
         - buffer: boolean to add ghost buffer cells before derivatives (default is True)
+        - interpol: interpolation method for the ghost buffer (default is 'TSC')
         - nghost: number of ghost cells to add for the derivatives (default is 1)
         - bitformat: data type for the fields (default is np.float32)
         - mag: boolean to compute magnitudes (default is False)
@@ -1372,7 +1400,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                                                 data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                                                 data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
                                                 data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
-                                                size=size, nmax=nmax, nghost=nghost, kept_patches=data['clus_kp'])
+                                                size=size, nmax=nmax, nghost=nghost, interpol=interpol, kept_patches=data['clus_kp'])
         for i, key in enumerate(['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']):
             data[f'clus_{key}'] = buffered_field[i]
         print('Ghost buffer added to magnetic and velocity fields')
@@ -1462,13 +1490,14 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     
         ## We can calculate the radial profiles of the magnetic energy density in the volume we have considered (usually the virial volume)
         
-        induction_energy_profiles = induction_radial_profiles(components, induction_energy, data['clus_b2'], data['clus_rho_rho_b'],
+        induction_energy_profiles = induction_radial_profiles(components, induction_energy, data['clus_b2'],
+                                    data['clus_rho_rho_b'], data['rho_b'],
                                     data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
-                                    data['grid_irr'], data['grid_npatch'],
+                                    data['grid_irr'], data['grid_npatch'], up_to_level,
                                     data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                                     data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                                     it, sims, nmax, size, coords, rmin, rad,
-                                    nbins=nbins, logbins=logbins, level=level, verbose=verbose)
+                                    nbins=nbins, logbins=logbins, units=1, verbose=verbose)
     elif not profiles:
         induction_energy_profiles = None
         if verbose == True:

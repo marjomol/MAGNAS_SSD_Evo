@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.font_manager import FontProperties
 from matplotlib.colors import LogNorm
+from matplotlib.ticker import FormatStrFormatter
 from scipy import stats
 from scipy import fft
 from scipy.ndimage import gaussian_filter1d
@@ -544,7 +545,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             - interpolation_points: number of points for interpolation (only for 'interpolated' type)
             - interpolation_kind: 'linear', 'cubic', or 'nearest' for interpolation method
             - volume_evolution: bool to plot volume evolution as additional figure
-            - title: title for the plots (default: 'Magnetic Field Evolution')
+            - title: title for the plots (default: 'Integrated Magnetic Energy Evolution and Induction Prediction')
             - dpi: dots per inch for saved plots (default: 300)
             - run: identifier for the run (default: '_')
         - induction_params: dictionary containing simulation parameters:
@@ -782,8 +783,23 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     else:
         label = 'Magnetic Energy Induction'
     ax1.plot(x_data[index_O_plot:index_F_plot], n1_data[index_O_plot:index_F_plot], 
-            linewidth=line1, label=label)
+            linewidth=line1, label=label, color='#1f77b4')
     
+    # Track which components were plotted
+    components_plotted = []
+    
+    # Kinetic energy
+    if should_plot_component(kinetic_work_data):
+        ax1.plot(x_data[index_O_plot:index_F_plot], kinetic_work_data[index_O_plot:index_F_plot], 
+                linewidth=line1, label='Kinetic Energy', color='#17becf')
+        components_plotted.append('kinetic')
+        
+    # Total work (compacted)
+    if should_plot_component(total_work_data):
+        ax1.plot(x_data[index_o_plot:index_f_plot], total_work_data, '--', 
+                linewidth=line1, label='Magnetic Energy \nfrom Induction (Compacted)', color='#d62728')
+        components_plotted.append('total')
+
     # Induction prediction (plot if has data)
     if should_plot_component(n0_data):
         if evolution_type == 'total':
@@ -791,24 +807,15 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         else:
             label = 'Predicted Induction'
         ax1.plot(x_data[index_o_plot:index_f_plot], n0_data, 
-                linewidth=line1, label=label)
-    
-    # Track which components were plotted
-    components_plotted = []
-    
-    # Total work (compacted)
-    if should_plot_component(total_work_data):
-        ax1.plot(x_data[index_o_plot:index_f_plot], total_work_data, '--', 
-                linewidth=line1, label='Magnetic Energy \nfrom Induction (Compacted)')
-        components_plotted.append('total')
-    
+                linewidth=line1, label=label, color='#ff7f0e')
+
     # Individual components with their colors
     component_configs = [
-        (diver_work_data, 'Divergence', 'pink'),
-        (compres_work_data, 'Compression', 'purple'),
-        (stretch_work_data, 'Stretching', 'orange'),
-        (advec_work_data, 'Advection', 'red'),
-        (drag_work_data, 'Cosmic Drag', 'gray')
+        (compres_work_data, 'Compression', '#9467bd'),
+        (stretch_work_data, 'Stretching', '#ff9896'),
+        (advec_work_data, 'Advection', '#e377c2'),
+        (diver_work_data, 'Divergence', '#c5b0d5'),
+        (drag_work_data, 'Cosmic Drag', '#7f7f7f')
     ]
     
     for data, label, color in component_configs:
@@ -816,12 +823,6 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             ax1.plot(x_data[index_o_plot:index_f_plot], data, '--', 
                     linewidth=line2, label=label, color=color)
             components_plotted.append(label.lower())
-    
-    # Kinetic energy
-    if should_plot_component(kinetic_work_data):
-        ax1.plot(x_data[index_O_plot:index_F_plot], kinetic_work_data[index_O_plot:index_F_plot], 
-                linewidth=line1, label='Kinetic Energy', color='#8FBC8F')
-        components_plotted.append('kinetic')
     
     setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font)
     ax1.legend(prop=font_legend)
@@ -882,10 +883,13 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             limit_info = 'cancel_limits'
         else:
             limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
+            
+        if induction_params['buffer'] == True:
+            buffer_info = f'Buffered_{induction_params["interpol"]}'
         
         # Save main plot
         file_title = '_'.join(title.split()[:3])
-        filename1 = f'{folder}/{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}_{run}.png'
+        filename1 = f'{folder}/{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}_{run}.png'
         fig1.savefig(filename1, dpi=dpi)
         
         if verbose:
@@ -893,7 +897,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save volume plot if created
         if volume_evolution:
-            filename2 = f'{folder}/{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{induction_params["stencil"]}_{plotid}_{run}.png'
+            filename2 = f'{folder}/{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}_{run}.png'
             fig2.savefig(filename2, dpi=dpi)
             
             if verbose:
@@ -926,6 +930,415 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                     print(f'Total work (compacted): {total_work_data[min(i+j, len(total_work_data)-1)]}')
                     print(f'Kinetic energy: {kinetic_work_data[min(i+j, len(kinetic_work_data)-1)]}')
     
+    return figures
+
+def plot_radial_profiles(profile_data, plot_params, induction_params,
+                        grid_t, grid_zeta, rad,
+                        verbose=True, save=False, folder=None):
+    """
+    Plot radial profiles of magnetic energy and induction components.
+
+    Args:
+        - profile_data: dictionary with the data from induction_radial_profiles() with keys (each is a list/array over snapshots):
+            'clus_b2_profile',
+            'MIE_diver_B2_profile',
+            'MIE_compres_B2_profile',
+            'MIE_stretch_B2_profile',
+            'MIE_advec_B2_profile',
+            'MIE_drag_B2_profile',
+            'MIE_total_B2_profile',
+            'ind_b2_profile',
+            'kinetic_energy_profile',
+            'clus_rho_rho_b_profile'
+            'profile_bin_centers': radial bin centers array
+        - plot_params: dictionary with plotting parameters:
+            - it_indx: iteration indexes to select snapshots
+            - x_scale: 'lin' or 'log' (radial axis)
+            - y_scale: 'lin' or 'log' (energy axis)
+            - xlim: [xlimo, xlimf] or None
+            - ylim: [ylimo, ylimf] or None
+            - line_widths: [line1, line2]
+            - plot_type: 'raw', 'smoothed', or 'interpolated' to choose plot style
+            - smoothing_sigma: sigma for Gaussian smoothing (only for 'smooth' type)
+            - interpolation_points: number of points for interpolation (only for 'interpolated' type)
+            - interpolation_kind: 'linear', 'cubic', or 'nearest' for interpolation method
+            - title: title for the plots (default: 'Magnetic Field Profile')
+            - dpi: dots per inch for saved plots (default: 300)
+            - run: identifier for filenames
+        - induction_params: dictionary with simulation metadata:
+            - units: energy unit conversion
+            - F: size factor
+            - level: refinement level
+        - grid_t: time grid (in simulation units)
+        - grid_zeta: redshift grid
+        - rad: characteristic radius for normalization
+        - verbose: bool for verbose output
+        - save: bool to save plots
+        - folder: folder to save plots (if None, uses current directory)
+        
+    Returns:
+        - List of figure objects
+        
+    Author: Marco Molina
+    """
+
+    # Validate inputs / defaults
+    assert plot_params.get('x_scale', 'lin') in ['lin', 'log'], "x_scale must be 'lin' or 'log'"
+    assert plot_params.get('y_scale', 'log') in ['lin', 'log'], "y_scale must be 'lin' or 'log'"
+    plot_type = plot_params.get('plot_type', 'raw')
+    assert plot_type in ['raw', 'smoothed', 'interpolated'], "plot_type must be 'raw', 'smoothed', or 'interpolated'"
+    assert plot_params.get('interpolation_kind', 'linear') in ['linear', 'cubic', 'nearest'], "interpolation_kind must be 'linear', 'cubic', or 'nearest'"
+    assert plot_params.get('smoothing_sigma', 1.10) > 0, "smoothing_sigma must be a positive number"
+    assert plot_params.get('it_indx', None) is not None, "it_indx must be provided in plot_params"
+    assert len(plot_params['it_indx']) > 0, "it_indx must contain at least one index"
+
+    # Extract parameters from plot_params
+    it_indx = plot_params['it_indx']
+    x_scale = plot_params.get('x_scale', 'lin')
+    y_scale = plot_params.get('y_scale', 'log')
+    xlim = plot_params.get('xlim', None)
+    ylim = plot_params.get('ylim', None)
+    rylim = plot_params.get('rylim', None)
+    dylim = plot_params.get('dylim', None)
+    figure_size = plot_params.get('figure_size', [12, 8])
+    line_widths = plot_params.get('line_widths', [3, 1.5])
+    title = plot_params.get('title', 'Magnetic Field Radial Profiles')
+    dpi = plot_params.get('dpi', 300)
+    run = plot_params.get('run', '_')
+    y_title = 1.1
+
+    # Parameters specific to plot type
+    if plot_type == 'smoothed':
+        smoothing_sigma = plot_params.get('smoothing_sigma', 1.10)
+    elif plot_type == 'interpolated':
+        interpolation_points = plot_params.get('interpolation_points', 500)
+        interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
+    profile_bin_centers = profile_data.get('profile_bin_centers', None)
+    if profile_bin_centers is None:
+        raise KeyError("profile_bin_centers not found in profile_data")
+    # Pick the first non-empty array
+    if isinstance(profile_bin_centers, (list, tuple, np.ndarray)) and len(profile_bin_centers) > 0 and not isinstance(profile_bin_centers, np.ndarray):
+        pb = None
+        for p in profile_bin_centers:
+            if p is None:
+                continue
+            p_arr = np.asarray(p)
+            if p_arr.size > 0:
+                pb = p_arr
+                break
+        if pb is None:
+            raise ValueError("profile_bin_centers list contains only empty entries")
+        profile_bin_centers = pb
+    else:
+        profile_bin_centers = np.asarray(profile_bin_centers)
+    # Ensure a 1D array
+    profile_bin_centers = profile_bin_centers.flatten()
+    
+    # Extract induction parameters
+    factor_F = induction_params.get('F', 1.0)
+    region = induction_params.get('region', None)
+    units = induction_params.get('units', None)
+    if units is None:
+        units_y_1 = 1.0
+        units_y_2 = 1.0
+        units_y_3 = 1.0
+    elif units == energy_to_erg:
+        units_y_1 = (energy_to_erg / (length_to_mpc)**3) / time_to_s
+        units_y_2 = energy_to_erg / (length_to_mpc)**3
+        units_y_3 = density_to_cgs
+    elif units == energy_to_J:
+        units_y_1 = (energy_to_J / (length_to_mpc)**3) / time_to_s
+        units_y_2 = energy_to_J / (length_to_mpc)**3
+        units_y_3 = density_to_sunMpc3
+    else:
+        units_y_1 = units_y_2 = units_y_3 = 1.0
+        
+        # Set up matplotlib parameters
+    plt.rcParams.update({
+        'font.size': 16,
+        'axes.labelsize': 16,
+        'axes.titlesize': 18,
+        'xtick.labelsize': 14,
+        'ytick.labelsize': 14,
+        'legend.fontsize': 10,
+        'figure.titlesize': 20
+    })
+    
+    # Define font properties
+    font = FontProperties()
+    font.set_style('normal')
+    font.set_weight('normal')
+    font.set_size(12)
+    
+    font_title = FontProperties()
+    font_title.set_style('normal')
+    font_title.set_weight('bold')
+    font_title.set_size(24)
+    
+    font_legend = FontProperties()
+    font_legend.set_style('normal')
+    font_legend.set_weight('normal')
+    font_legend.set_size(12)
+    
+    y_title = 1.05
+    line1, line2 = line_widths
+
+    # Radial axis normalized by R_vir
+    r = np.asarray(profile_bin_centers) / float(rad)
+    nbins = profile_bin_centers.shape[0]
+    
+    t = [grid_t[i] * time_to_yr for i in it_indx]
+    z = np.array([grid_zeta[i] for i in it_indx])
+    if z[-1] < 0:
+        z[-1] = abs(z[-1])
+
+    # Compute plotted arrays with units (each is a list indexed by snapshots)
+    def safe_get(key):
+        return profile_data.get(key, [np.zeros(nbins) for _ in it_indx])
+
+    clus_b2_profile = [units_y_2 * safe_get('clus_b2_profile')[i] for i in it_indx]
+    kinetic_energy_profile = [units_y_2 * safe_get('kinetic_energy_profile')[i] for i in it_indx]
+    clus_rho_rho_b_profile = [units_y_3 * safe_get('clus_rho_rho_b_profile')[i] for i in it_indx]
+    diver_profile = [units_y_1 * safe_get('MIE_diver_B2_profile')[i] for i in it_indx]
+    compres_profile = [units_y_1 * safe_get('MIE_compres_B2_profile')[i] for i in it_indx]
+    stretch_profile = [units_y_1 * safe_get('MIE_stretch_B2_profile')[i] for i in it_indx]
+    advec_profile = [units_y_1 * safe_get('MIE_advec_B2_profile')[i] for i in it_indx]
+    drag_profile = [units_y_1 * safe_get('MIE_drag_B2_profile')[i] for i in it_indx]
+    total_profile = [units_y_1 * safe_get('MIE_total_B2_profile')[i] for i in it_indx]
+    ind_b2_profile = [units_y_1 * safe_get('ind_b2_profile')[i] for i in it_indx]
+    post_ind_b2_profile = [units_y_1 * safe_get('post_ind_b2_profile')[i] for i in it_indx]
+
+    
+    # Prepare data based on plot type
+    if plot_type == 'smoothed':
+        # Apply Gaussian smoothing (operate per snapshot)
+        clus_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in clus_b2_profile]
+        kinetic_energy_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in kinetic_energy_profile]
+        clus_rho_rho_b_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in clus_rho_rho_b_profile]
+        diver_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in diver_profile]
+        compres_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in compres_profile]
+        stretch_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in stretch_profile]
+        advec_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in advec_profile]
+        drag_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in drag_profile]
+        total_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in total_profile]
+        ind_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in ind_b2_profile]
+        post_ind_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in post_ind_b2_profile]
+        
+        r_pro = r
+        plot_suffix = f'_smoothed_sigma_{smoothing_sigma}'
+
+    elif plot_type == 'interpolated':
+        # Create interpolations per snapshot, produce callables
+        r_new = np.linspace(min(r), max(r), num=interpolation_points, endpoint=True)
+        clus_b2_profile = [interp1d(r, clus_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(clus_b2_profile))]
+        kinetic_energy_profile = [interp1d(r, kinetic_energy_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(kinetic_energy_profile))]
+        clus_rho_rho_b_profile = [interp1d(r, clus_rho_rho_b_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(clus_rho_rho_b_profile))]
+        diver_profile = [interp1d(r, diver_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(diver_profile))]
+        compres_profile = [interp1d(r, compres_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(compres_profile))]
+        stretch_profile = [interp1d(r, stretch_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(stretch_profile))]
+        advec_profile = [interp1d(r, advec_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(advec_profile))]
+        drag_profile = [interp1d(r, drag_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(drag_profile))]
+        total_profile = [interp1d(r, total_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(total_profile))]
+        ind_b2_profile = [interp1d(r, ind_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(ind_b2_profile))]
+        post_ind_b2_profile = [interp1d(r, post_ind_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(post_ind_b2_profile))]
+        
+        r_pro = r_new
+        plot_suffix = f'{interpolation_kind}_interpolated_{interpolation_points}_points'
+
+    else:  # raw
+        r_pro = r
+        plot_suffix = '_raw'
+
+    figures = []
+    
+    # Components configuration: (data_list, label, color, lw, linestyle, unit)
+    # components_configs = [
+    #     (clus_b2_profile, 'Magnetic Energy Density', "#184AE1", line1, '-', units_y_2),
+    #     (ind_b2_profile, 'Magnetic Energy \nfrom Induction', "#E08F2B", line1, '-', units_y_1),
+    #     (post_ind_b2_profile, 'Magnetic Energy \nfrom Induction (Post)', "#F1A40E", line1, '-.', units_y_1),
+    #     (total_profile, 'Magnetic Energy \nfrom Induction (Compacted)', "#08AF08", line1, '--', units_y_1),
+    #     (diver_profile, 'Divergence', 'pink', line2, '--', units_y_1),
+    #     (compres_profile, 'Compression', 'purple', line2, '--', units_y_1),
+    #     (stretch_profile, 'Stretching', 'orange', line2, '--', units_y_1),
+    #     (advec_profile, 'Advection', 'red', line2, '--', units_y_1),
+    #     (drag_profile, 'Cosmic Drag', 'gray', line2, '--', units_y_1),
+    #     (kinetic_energy_profile, 'Kinetic Energy Density', '#8FBC8F', line1, '-', units_y_2),
+    #     (clus_rho_rho_b_profile, 'Density Profile', "#0EF1F1", line1, '-', units_y_3)
+    # ]
+    
+    components_configs = [
+        # Energies (units_y_2)
+        (clus_b2_profile, 'Magnetic Energy Density', "#1f77b4", line1, '-', units_y_2),
+        (kinetic_energy_profile, 'Kinetic Energy Density', "#17becf", line1, '-', units_y_2),
+        # Density (units_y_3)
+        (clus_rho_rho_b_profile, 'Density Profile', "#2ca02c", line1, '-', units_y_3),
+        # Induction totals (units_y_1)
+        (total_profile, 'Magnetic Energy from Induction (Compacted)', "#d62728", line1, '--', units_y_1),
+        (ind_b2_profile, 'Magnetic Energy from Induction', "#ff7f0e", line1, '-', units_y_1),
+        (post_ind_b2_profile, 'Magnetic Energy from Induction (Post)', "#ffbb78", line1, '-.', units_y_1),
+        # Individual components (units_y_1)
+        (compres_profile, 'Compression', "#9467bd", line2, ':', units_y_1),
+        (stretch_profile, 'Stretching', "#ff9896", line2, ':', units_y_1),
+        (advec_profile, 'Advection', "#e377c2", line2, ':', units_y_1),
+        (diver_profile, 'Divergence', "#c5b0d5", line2, ':', units_y_1),
+        (drag_profile, 'Cosmic Drag', "#7f7f7f", line2, ':', units_y_1)
+    ]
+
+
+    # Decide which components have data (per snapshot we check existence)
+    def has_nonzero(arr_or_callable, snap_idx):
+        # If callable (interp), assume has values (could be NaN outside range)
+        if callable(arr_or_callable):
+            try:
+                y = arr_or_callable(r_pro)
+                return np.any(~np.isnan(y)) and np.any(np.abs(y) > 0)
+            except Exception:
+                return False
+        # If list-like of arrays
+        try:
+            a = arr_or_callable[snap_idx]
+            return np.any(np.abs(np.asarray(a)) > 0)
+        except Exception:
+            return False
+    
+    for snap_i in range(len(it_indx)):
+        fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
+        ax_right = ax1.twinx()  # Second axis for induction
+        ax_density = ax1.twinx()  # Third axis for density
+        ax_density.spines["right"].set_position(("axes", 1.12))
+        ax_density.set_frame_on(True)
+        ax_density.patch.set_visible(False)
+        for sp in ax_density.spines.values():
+            sp.set_visible(True)
+
+        snap_z = np.abs(np.round(grid_zeta[it_indx[snap_i]], 2))
+        ax1.set_title(f'{title} - z = {snap_z:.2f}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
+
+        lines = []
+        labels = []
+
+        for idx, (data_list, label, color, lw, ls, unit) in enumerate(components_configs):
+            if not has_nonzero(data_list, snap_i):
+                continue
+
+            # obtain y values depending on type
+            if callable(data_list[snap_i]):
+                y = data_list[snap_i](r_pro)
+            else:
+                y = np.asarray(data_list[snap_i])
+                # if interpolation requested but we have raw arrays and r_pro is finer, interpolate on the fly
+                if plot_type == 'interpolated' and y.size == r.size and r_pro.size != r.size:
+                    y = np.interp(r_pro, r, y)
+
+            # Choose axis: left for energy/density (units_y_2), right for induction and density (units_y_1, units_y_3)
+            if unit == units_y_1:
+                ln, = ax_right.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+            elif unit == units_y_3:
+                ln, = ax_density.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+            else:
+                ln, = ax1.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+
+            lines.append(ln)
+            labels.append(label)
+
+        # Axis scales and labels
+        if x_scale == 'log':
+            ax1.set_xscale('log')
+            ax1.set_xlabel('Radial Distance log[r/$R_{Vir}$]')
+        else:
+            ax1.set_xlabel('Radial Distance [r/$R_{Vir}$]')
+
+        if xlim is not None:
+            ax1.set_xlim(xlim[0], xlim[1])
+
+        # y scales
+        if y_scale == 'log':
+            ax1.set_yscale('log')
+            ax_right.set_yscale('log')
+            ax_density.set_yscale('log')
+
+        if units == energy_to_erg:
+            ax1.set_ylabel('Energy Density (erg/$Mpc^{3}$)')
+            ax_right.set_ylabel('Induction Density (erg/$Mpc^{3}$/s)')
+            ax_density.set_ylabel('Density (g/cm³)')
+        elif units == energy_to_J:
+            ax1.set_ylabel('Energy Density (J/$Mpc^{3}$)')
+            ax_right.set_ylabel('Induction Density (J/$Mpc^{3}$/s)')
+            ax_density.set_ylabel('Density (M$_{\odot}$/Mpc³)')
+        else:
+            ax1.set_ylabel('Energy Density (arb. units)')
+            ax_right.set_ylabel('Induction Density (arb. units / s)')
+            ax_density.set_ylabel('Density (arb. units)')
+
+        if ylim is not None:
+            ax1.set_ylim(ylim[0], ylim[1])
+        if rylim is not None:
+            ax_right.set_ylim(rylim[0], rylim[1])
+        if dylim is not None:
+            ax_density.set_ylim(dylim[0], dylim[1])
+            
+        ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+
+        # Gather handles/labels from all axes and keep unique labels in order
+        h1, l1 = ax1.get_legend_handles_labels()
+        h2, l2 = ax_right.get_legend_handles_labels()
+        h3, l3 = ax_density.get_legend_handles_labels()
+        all_handles = h1 + h2 + h3
+        all_labels = l1 + l2 + l3
+        seen = set()
+        unique_handles = []
+        unique_labels = []
+        for hh, ll in zip(all_handles, all_labels):
+            if ll not in seen:
+                seen.add(ll)
+                unique_handles.append(hh)
+                unique_labels.append(ll)
+
+        if unique_handles:
+            # Place a fixed, two-column legend at the top-right of the figure.
+            # bbox_to_anchor is in figure coordinates when bbox_transform=fig1.transFigure.
+            # ncol=2 forces two columns; adjust bbox_to_anchor if you need a different offset.
+            fig1.legend(unique_handles, unique_labels, prop=font_legend,
+                        loc='upper right', bbox_to_anchor=(0.80, 0.89),
+                        bbox_transform=fig1.transFigure, ncol=2, frameon=True)
+            # Slightly adjust subplot to avoid overlapping the legend or title
+            fig1.subplots_adjust(top=0.90, right=0.86)
+
+        fig1.tight_layout()
+        
+        figures.append(fig1)
+        
+    if verbose:
+        # compute plotted labels directly and consistently
+        plotted_labels = [
+            label
+            for (data_list, label, *_)
+            in components_configs
+            if any(has_nonzero(data_list, si) for si in range(len(it_indx)))
+        ]
+        print(f'Plotting... Radial profile plots created')
+        print(f'Components plotted: {", ".join(plotted_labels)}')
+
+    # Save the figures if requested
+    if save:
+        if folder is None:
+            folder = os.getcwd()
+
+        sim_info = f'{induction_params.get("up_to_level","")}_{factor_F}_{induction_params.get("vir_kind","")}vir_{induction_params.get("rad_kind","")}rad_{region}Region'
+        axis_info = f'{x_scale}_{y_scale}'
+        limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
+
+        buffer_info = ''
+        if induction_params.get('buffer', False) == True:
+            buffer_info = f'Buffered_{induction_params.get("interpol","")}'
+
+        for i, fig in enumerate(figures):
+            file_title = '_'.join(title.split()[:3])
+            file_name = f'{folder}/{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get("stencil","")}_{plot_suffix}_{run}_{i}.png'
+            fig.savefig(file_name, dpi=dpi)
+            if verbose:
+                print(f'Saved {i} figure: {file_name}')
+
     return figures
         
 def plot_3D_volume(arr, axis_values, log = False, subvolume_factor = 1, subsampling_step = 2, axis_step = 10, quantity = ' ', axis_title = ['x', 'y', 'z'], units = ' ', title = ' ', invert = False, verbose = True, Save = False, DPI = 300, run = '_', folder = None):

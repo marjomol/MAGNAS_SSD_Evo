@@ -4,8 +4,9 @@ import scripts.utils as utils
 from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
 from config import EVO_PLOT_PARAMS as evo_plot_params
+from config import PROFILE_PLOT_PARAMS as prof_plot_params
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
-from scripts.plot_fields import plot_integral_evolution, scan_animation_3D, zoom_animation_3D
+from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, scan_animation_3D, zoom_animation_3D
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
 
@@ -74,7 +75,7 @@ if __name__ == "__main__":
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 for it, j in zip(out_params["it"], range(len(out_params["it"]))):
                     
-                    data, _, _, _, _, induction_energy_integral, induction_test_energy_integral, _, _ = process_iteration(
+                    data, _, _, _, _, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _ = process_iteration(
                         ind_params["components"], 
                         out_params["dir_grids"], 
                         out_params["dir_gas"],
@@ -90,6 +91,7 @@ if __name__ == "__main__":
                         logbins=ind_params["logbins"],
                         stencil=ind_params["stencil"],
                         buffer=ind_params["buffer"],
+                        interpol=ind_params["interpol"],
                         nghost=ind_params["nghost"],
                         bitformat=out_params["bitformat"],
                         mag=ind_params["mag"],
@@ -125,9 +127,9 @@ if __name__ == "__main__":
                             for key in induction_test_energy_integral.keys():
                                 all_induction_test_energy_integral[key] = []
                         
-                        # if induction_energy_profiles is not None:
-                        #     for key in induction_energy_profiles.keys():
-                        #         all_induction_energy_profiles[key] = []
+                        if induction_energy_profiles is not None:
+                            for key in induction_energy_profiles.keys():
+                                all_induction_energy_profiles[key] = []
                         
                         # if induction_uniform is not None:
                         #     for key in induction_uniform.keys():
@@ -160,9 +162,9 @@ if __name__ == "__main__":
                         for key in induction_test_energy_integral.keys():
                             all_induction_test_energy_integral[key].append(induction_test_energy_integral[key])
                     
-                    # if induction_energy_profiles is not None:
-                    #     for key in induction_energy_profiles.keys():
-                    #         all_induction_energy_profiles[key].append(induction_energy_profiles[key])
+                    if induction_energy_profiles is not None:
+                        for key in induction_energy_profiles.keys():
+                            all_induction_energy_profiles[key].append(induction_energy_profiles[key])
                     
                     # if induction_uniform is not None:
                     #     for key in induction_uniform.keys():
@@ -196,6 +198,16 @@ if __name__ == "__main__":
             )
 
             print(f"Ploting " + evo_plot_params["title"] + " completed.")
+            
+            plot_radial_profiles(
+                all_induction_energy_profiles,
+                prof_plot_params, ind_params,
+                all_data['grid_time'], all_data['grid_zeta'],
+                Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                folder=out_params['image_folder']                
+            )
+            
+            print(f"Ploting " + prof_plot_params["title"] + " completed.")
             
             # Test evolution (using the test parameters)
             # induction_test_energy_integral_evo = induction_energy_integral_evolution(

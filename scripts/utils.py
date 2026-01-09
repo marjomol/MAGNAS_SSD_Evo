@@ -499,41 +499,44 @@ def mask_sphere(R, clusrx, clusry, clusrz, cellsrx, cellsry, cellsrz, kept_patch
     return mask
 
 
-def radial_profile_vw(field, clusrx, clusry, clusrz, rmin, rmax, nbins, logbins, cellsrx, cellsry,
-                    cellsrz, cr0amr, solapst, npatch, size, nmax, up_to_level=1000, verbose=False,
-                    kept_patches=None):
+def radial_profile_vw(field, cr0amr, solapst, npatch, up_to_level,
+                    clusrx, clusry, clusrz, rmin, rmax, nbins, logbins, cellsrx, cellsry,
+                    cellsrz, size, nmax, units=1, kept_patches=None, verbose=False):
     """
-    Computes a (volume-weighted) radial profile of the quantity given in the "field" argument, taking center in
+    Computes a volume-weighted radial profile of the quantity given in the "field" argument, taking center in
     (clusrx, clusry, clusrz).
 
     Args:
-        field: variable (already cleaned) whose profile wants to be got
-        clusrx, clusry, clusrz: comoving coordinates of the center for the profile
-        rmin: starting radius of the profile
-        rmax: final radius of the profile
-        nbins: number of points for the profile
-        logbins: if False, radial shells are spaced linearly. If True, they're spaced logarithmically. Not that, if
-                logbins = True, rmin cannot be 0.
-        cellsrx, cellsry, cellsrz: position fields
-        cr0amr: field containing the refinements of the grid (1: not refined; 0: refined)
-        solapst: field containing the overlaps (1: keep; 0: not keep)
-        npatch: number of patches in each level, starting in l=0
-        size: comoving size of the simulation box
-        nmax: cells at base level
-        up_to_level: maximum AMR level to be considered for the profile
-        verbose: if True, prints the patch being opened at a time
-        kept_patches: 1d boolean array, True if the patch is kept, False if not. If None, all patches are kept.
+        - field: variable whose profile wants to be computed
+        - cr0amr: field containing the refinements of the grid (1: not refined; 0: refined)
+        - solapst: field containing the overlaps (1: keep; 0: not keep)
+        - npatch: number of patches in each level, starting in l=0
+        - up_to_level: maximum AMR level to be considered for the profile
+        - clusrx, clusry, clusrz: comoving coordinates of the center for the profile
+        - rmin: starting radius of the profile
+        - rmax: final radius of the profile
+        - nbins: number of points for the profile
+        - logbins: if False, radial shells are spaced linearly. If True, they're spaced logarithmically.
+            Note that, if logbins = True, rmin cannot be 0.
+        - cellsrx, cellsry, cellsrz: position fields
+        - size: comoving size of the simulation box
+        - nmax: cells at base level
+        - units: change of units factor to be multiplied by the final integral if one wants physical units (default is 1)
+        - kept_patches: 1d boolean array, True if the patch is kept, False if not. If None, all patches are kept.
+        - verbose: if True, prints the patch being opened at a time
 
     Returns:
-        Two lists. One of them contains the center of each radial cell. The other contains the value of the field
+        - Two lists. One of them contains the center of each radial cell. The other contains the value of the field
         averaged across all the cells of the shell.
         
     Author: David Vallés
     """
+    field = clean_field(field, cr0amr, solapst, npatch, up_to_level)
+    
     if kept_patches is None:
         kept_patches = np.ones(len(cellsrx), dtype=bool)
 
-    # getting the bins
+    # Getting the bins
     try:
         assert (rmax > rmin)
     except AssertionError:
@@ -555,7 +558,7 @@ def radial_profile_vw(field, clusrx, clusry, clusrz, rmin, rmax, nbins, logbins,
     # profile = np.zeros(bin_centers.shape)
     profile = []
 
-    # finding the volume-weighted mean
+    # Finding the volume-weighted mean
     levels = create_vector_levels(npatch)
     cell_volume = (size / nmax / 2 ** levels) ** 3
 
@@ -577,7 +580,7 @@ def radial_profile_vw(field, clusrx, clusry, clusrz, rmin, rmax, nbins, logbins,
         sum_field_vw = sum([(fvw * sm).sum() for fvw, sm in zip(field_vw, shell_mask)])
         sum_vw = sum([(sm * cv).sum() for sm, cv in zip(shell_mask, cell_volume)])
 
-        profile.append(sum_field_vw / sum_vw)
+        profile.append(units * sum_field_vw / sum_vw)
 
     return bin_centers, np.asarray(profile)
 
@@ -878,9 +881,12 @@ def magnitude2(field_x, field_y, field_z, kept_patches=None):
     return field
 
 
-def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level, patchrx, patchry, patchrz, patchnx, patchny, patchnz, size, nmax, coords, region_coords, rad, a0=1, units=1, kept_patches=None, vol=False):
+def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level,
+                patchrx, patchry, patchrz, patchnx, patchny, patchnz,
+                size, nmax, coords, region_coords, rad, a0=1, units=1, kept_patches=None, vol=False):
     """
-    Given a scalar field and a region defined with a center (x,y,z) and a radious together with the patch structure, returns the volumetric integral of the field along the volume.
+    Given a scalar field and a region defined with a center (x,y,z) and a radious together with the patch
+    structure, returns the volumetric integral of the field along the volume.
 
     Args:
         - field: scalar field to be integrated

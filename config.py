@@ -40,10 +40,10 @@ IND_PARAMS = {
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
     # "units": 1, # Factor to convert the units of the resulting volume integrals
-    # "level": [0,1,2,3,4,5,6,7], # Max. level of the AMR grid to be read
-    "level": [1,5], # Max. level of the AMR grid to be read
-    # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
-    "up_to_level": [1,5], # AMR level up to which calculate
+    "level": [0,1,2,3,4,5,6,7], # Max. level of the AMR grid to be read
+    # "level": [1,5], # Max. level of the AMR grid to be read
+    "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
+    # "up_to_level": [1,5], # AMR level up to which calculate
     # "level": [0], # Max. level of the AMR grid to be read
     # "up_to_level": [0], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
@@ -59,12 +59,13 @@ IND_PARAMS = {
     "drag": True, # Process the drag induction component
     "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
+    "buffer": True, # Use buffer zones to avoid boundary effects (recommended but slower)
+    "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
+    "interpol": 'TSC', # Interpolation method for the buffer zones ('TSC' or 'SPH')
     "energy_evolution": True, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
-    "derivative": 'implicit', # Derivative to use for the evolution (implicit, central, RK or rate)
-    "stencil": 5, # Stencil to calculate the derivatives (either 3 or 5)
-    "buffer": True, # Use buffer zones to avoid boundary effects (recommended but slower)
-    "profiles": False, # Calculate the profiles of the induction components
+    "derivative": 'central', # Derivative to use for the evolution (implicit, central, RK or rate)
+    "profiles": True, # Calculate the profiles of the induction components
     "projection": False, # Calculate the projection of the induction components
     "A2U": False, # Transform the AMR grid to a uniform grid
     "test_params": {
@@ -84,7 +85,7 @@ OUTPUT_PARAMS = {
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
-    "run": f'MAGNAS_SSD_Evo_test_Buffer_Brother_fast',
+    "run": f'MAGNAS_SSD_Evo_profile_test_4_animation',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [1050], # For different redshift snap iterations analysis
     # "it": [1800, 1850, 1900, 1950, 2000, 2119],
@@ -101,7 +102,8 @@ OUTPUT_PARAMS = {
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
     "ID1": "dynamo/",
-    "ID2": "test",
+    "ID2": "profile_test",
+    # "ID2": "profiles_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
 
@@ -114,17 +116,40 @@ EVO_PLOT_PARAMS = {
     'xlim': [2.5, 0], # None for auto
     # 'xlim': None, # None for auto
     # 'ylim': [1e57, 1e60], # For the test
-    # 'ylim': [1e58, 1e63], # None for auto
-    'ylim': None, # None for auto
+    'ylim': [1e58, 1e63], # None for auto
+    # 'ylim': None, # None for auto
     'cancel_limits': False, # bool to flip the x axis (useful for zeta)
     'figure_size': [12, 8], # [width, height]
     'line_widths': [5, 1.5], # [line1, line2] for main and component lines
     'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
     'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
     'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
-    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method
+    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
     'volume_evolution': True, # bool to plot volume evolution as additional figure
     'title': 'Magnetic Field Evolution Analysis',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
+}
+
+PROFILE_PLOT_PARAMS = {
+    # 'it_indx': [-1], # Index of the iteration to plot (default: last)
+    'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
+    'x_scale': 'log', # 'lin' or 'log'
+    'y_scale': 'log', # 'lin' or 'log'
+    'xlim': None, # None for auto
+    # 'ylim': None, # None for auto
+    # 'rylim': None, # None for auto
+    # 'dylim': None, # None for auto
+    'ylim': [3e53,1e64], # None for auto
+    'rylim': [3e39,1e47], # None for auto
+    'dylim': [0,40e-27], # None for auto
+    'figure_size': [12, 8], # [width, height]
+    'line_widths': [3, 2], # [line1, line2] for main and component lines
+    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
+    'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
+    'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
+    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
+    'title': 'Induction Radial Profile',
     'dpi': 300,
     'run': OUTPUT_PARAMS["run"]
 }
@@ -132,7 +157,6 @@ EVO_PLOT_PARAMS = {
 # ============================
 # Only edit the section above
 # ============================
-
 
 ## The output parameters are used to create the image directories and other formatting parameters
 
