@@ -160,7 +160,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
     return region, region_size
 
 
-def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, verbose=False):
+def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, verbose=False,debug=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -184,8 +184,33 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         - bitformat: data type for the loaded fields (default is np.float32)
         - region: region coordinates to be used (default is None)
         - verbose: boolean to print the data type loaded or not (default is False)
+        - debug: boolean to print debug information or not (default is False)
         
     Returns:
+        - results: dictionary containing the loaded data:
+            - grid_irr: index of the snapshot
+            - grid_time: time of the snapshot
+            - grid_zeta: redshift of the snapshot
+            - grid_npatch: number of patches in the grid
+            - grid_patchnx, grid_patchny, grid_patchnz: number of cells in each patch
+            - grid_patchx, grid_patchy, grid_patchz: position of each patch
+            - grid_patchrx, grid_patchry, grid_patchrz: size of each patch
+            - grid_pare: parent patch of each patch
+            - vector_levels: levels of refinement for each patch
+            - clus_rho_rho_b: density contrast in the cluster
+            - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
+            - clus_cr0amr: cosmic ray energy density in the cluster
+            - clus_solapst: solenoidal fraction in the cluster
+            - clus_kp: mask for valid patches
+            - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
+            - clus_B: magnetic field magnitude in the cluster
+            - clus_b2: normalized magnetic field squared in the cluster
+            - clus_B2: magnetic field squared in the cluster
+            - clus_v2: velocity field squared in the cluster
+            - a: scale factor at the redshift zeta
+            - E: E(z) function at the redshift zeta
+            - H: Hubble parameter at the redshift zeta
+            - rho_b: background density at the redshift zeta
         
     Author: Marco Molina
     '''
@@ -269,9 +294,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             clus_vz,
             clus_cr0amr,
             clus_solapst,
-            clus_bx,
-            clus_by,
-            clus_bz,
+            clus_mbx,
+            clus_mby,
+            clus_mbz,
             *rest
         ) = clus
     else:
@@ -361,9 +386,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         )
         
         (
-            clus_bx,
-            clus_by,
-            clus_bz,
+            clus_mbx,
+            clus_mby,
+            clus_mbz,
             clus_vx,
             clus_vy,
             clus_vz
@@ -378,9 +403,156 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         clus_kp = np.ones(n, dtype=bool)
 
     # Normalize magnetic field components
-    clus_Bx = [clus_bx[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
-    clus_By = [clus_by[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
-    clus_Bz = [clus_bz[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
+    # clus_Bx = [clus_mbx[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
+    # clus_By = [clus_mby[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
+    # clus_Bz = [clus_mbz[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
+    
+    clus_Bx = [clus_mbx[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+    clus_By = [clus_mby[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+    clus_Bz = [clus_mbz[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+    
+    if debug:
+    ###########################################################################################
+    
+        size = float(input("Enter the size of the root domain in Mpc/h: "))
+        cell_size = float(input("Enter the cell size of the root grid: "))
+    
+        dx = size / cell_size
+        
+        div_B_check = diff.divergence(clus_Bx, clus_By, clus_Bz, 
+                                    dx, grid_npatch, clus_kp, stencil=3)
+        div_B_flat = np.concatenate([np.abs(div_B_check[p]).flatten() for p in range(n) if bool(clus_kp[p])])
+        max_div_B = np.max(div_B_flat)
+        
+        print(f'Snap {grid_irr}: Max |∇·B| = {max_div_B:.6e}')
+        print(f'Snap {grid_irr}: Mean |∇·B| = {np.mean(div_B_flat):.6e}')
+        print(f'Snap {grid_irr}: Std |∇·B| = {np.std(div_B_flat):.6e}')
+            
+        B_magnitude_flat = np.concatenate([np.sqrt(clus_Bx[p]**2 + clus_By[p]**2 + clus_Bz[p]**2).flatten() for p in range(n) if bool(clus_kp[p])])
+        mean_B_magnitude = np.mean(B_magnitude_flat)
+        levels = utils.create_vector_levels(grid_npatch)
+        resolution = dx / (2 ** np.array(levels))
+        mean_B_magnitude_per_dx = mean_B_magnitude / np.mean(resolution)
+        
+        if mean_B_magnitude > 0:
+            print(f'Snap {grid_irr} (pipeline method): Mean |∇·B| / |B| = {np.mean(div_B_flat) / mean_B_magnitude_per_dx:.6e}')
+        else:
+            print(f'Snap {grid_irr} (pipeline method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
+            
+        def divergence_B_test(Bx, By, Bz, dx, npatch, kp, stencil=3):
+            
+            levels = utils.create_vector_levels(npatch)
+            resolution = dx / (2 ** np.array(levels))
+            div = []
+            div_x = []
+            div_y = []
+            div_z = []
+            
+            if kp is None:
+                kp = np.ones(npatch.sum() + 1, dtype=bool)
+                
+            for p in range(npatch.sum() + 1):
+                if not bool(kp[p]):
+                    div.append(0)
+                    continue
+                
+                Bx_p = Bx[p]
+                By_p = By[p]
+                Bz_p = Bz[p]
+                res_p = resolution[p]
+                
+                dBx_dx = (np.roll(Bx_p, -1, axis=0) - np.roll(Bx_p, 1, axis=0)) / (2 * res_p)
+                dBy_dy = (np.roll(By_p, -1, axis=1) - np.roll(By_p, 1, axis=1)) / (2 * res_p)
+                dBz_dz = (np.roll(Bz_p, -1, axis=2) - np.roll(Bz_p, 1, axis=2)) / (2 * res_p)
+                
+                div_p = dBx_dx + dBy_dy + dBz_dz
+                div.append(div_p)
+                div_x.append(dBx_dx)
+                div_y.append(dBy_dy)
+                div_z.append(dBz_dz)
+                
+            return div, div_x, div_y, div_z
+        
+        div_B_check2, div_Bx, div_By, div_Bz = divergence_B_test(clus_Bx, clus_By, clus_Bz, 
+                                                                dx, grid_npatch, clus_kp, stencil=3)
+        div_B_flat2 = np.concatenate([np.abs(div_B_check2[p]).flatten() for p in range(n) if bool(clus_kp[p])])
+        max_div_B2 = np.max(div_B_flat2)
+        
+        print(f'Snap {grid_irr} (periodic method): Max |∇·B| = {max_div_B2:.6e}')
+        print(f'Snap {grid_irr} (periodic method): Mean |∇·B| = {np.mean(div_B_flat2):.6e}')
+        print(f'Snap {grid_irr} (periodic method): Std |∇·B| = {np.std(div_B_flat2):.6e}')
+        
+        if mean_B_magnitude > 0:
+            print(f'Snap {grid_irr} (periodic method): Mean |∇·B| / |B| = {np.mean(div_B_flat2) / mean_B_magnitude_per_dx:.6e}')
+        else:
+            print(f'Snap {grid_irr} (periodic method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
+            
+        def divergence_B_test_II(Bx, By, Bz, dx, npatch, kp, stencil=3):
+            
+            levels = utils.create_vector_levels(npatch)
+            resolution = dx / (2 ** np.array(levels))
+            div = []
+            div_x = []
+            div_y = []
+            div_z = []
+            
+            if kp is None:
+                kp = np.ones(npatch.sum() + 1, dtype=bool)
+                
+            for p in range(npatch.sum() + 1):
+                if not bool(kp[p]):
+                    div.append(0)
+                    continue
+                
+                Bx_p = Bx[p]
+                By_p = By[p]
+                Bz_p = Bz[p]
+                res_p = resolution[p]
+                
+                # Diferences cell by cell (central differences)
+                dBx_dx = np.zeros_like(Bx_p)
+                dBy_dy = np.zeros_like(By_p)
+                dBz_dz = np.zeros_like(Bz_p)
+                
+                dBx_dx[1:-1,:,:] = (Bx_p[2:,:,:] - Bx_p[0:-2,:,:]) / (2 * res_p)
+                dBy_dy[:,1:-1,:] = (By_p[:,2:,:] - By_p[:,0:-2,:]) / (2 * res_p)
+                dBz_dz[:,:,1:-1] = (Bz_p[:,:,2:] - Bz_p[:,:,0:-2]) / (2 * res_p)
+                
+                # Second order extrapolation at the boundaries
+                dBx_dx[0,:,:] = (4*Bx_p[1,:,:] - 3*Bx_p[0,:,:] - Bx_p[2,:,:]) / (2 * res_p)
+                dBx_dx[-1,:,:] = (3*Bx_p[-1,:,:] + Bx_p[-3,:,:] - 4*Bx_p[-2,:,:]) / (2 * res_p)
+                dBy_dy[:,0,:] = (4*By_p[:,1,:] - 3*By_p[:,0,:] - By_p[:,2,:]) / (2 * res_p)
+                dBy_dy[:,-1,:] = (3*By_p[:,-1,:] + By_p[:,-3,:] - 4*By_p[:,-2,:]) / (2 * res_p)
+                dBz_dz[:,:,0] = (4*Bz_p[:,:,1] - 3*Bz_p[:,:,0] - Bz_p[:,:,2]) / (2 * res_p)
+                dBz_dz[:,:,-1] = (3*Bz_p[:,:,-1] + Bz_p[:,:,-3] - 4*Bz_p[:,:,-2]) / (2 * res_p)            
+                
+                div_p = dBx_dx + dBy_dy + dBz_dz
+                div.append(div_p)
+                div_x.append(dBx_dx)
+                div_y.append(dBy_dy)
+                div_z.append(dBz_dz)
+                
+            return div, div_x, div_y, div_z
+        
+        div_B_check3, div_Bx3, div_By3, div_Bz3 = divergence_B_test_II(clus_Bx, clus_By, clus_Bz, 
+                                                                dx, grid_npatch, clus_kp, stencil=3)
+        div_B_flat3 = np.concatenate([np.abs(div_B_check3[p]).flatten() for p in range(n) if bool(clus_kp[p])])
+        max_div_B3 = np.max(div_B_flat3)
+        
+        print(f'Snap {grid_irr} (inline method): Max |∇·B| = {max_div_B3:.6e}')
+        print(f'Snap {grid_irr} (inline method): Mean |∇·B| = {np.mean(div_B_flat3):.6e}')
+        print(f'Snap {grid_irr} (inline method): Std |∇·B| = {np.std(div_B_flat3):.6e}')
+        
+        if mean_B_magnitude > 0:
+            print(f'Snap {grid_irr} (inline method): Mean |∇·B| / |B| = {np.mean(div_B_flat3) / mean_B_magnitude_per_dx:.6e}')
+        else:
+            print(f'Snap {grid_irr} (inline method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
+
+    ###########################################################################################
+    
+    clus_bx = [clus_mbx[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
+    clus_by = [clus_mby[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
+    clus_bz = [clus_mbz[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
 
     if verbose == True:
         print('Data type loaded for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype))
@@ -1412,7 +1584,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
 
     ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
     
+    levels = utils.create_vector_levels(data['grid_npatch'])
     dx = size/nmax
+    resolution = dx / (2 ** levels)
     
     vectorial = vectorial_quantities(components, data['clus_Bx'], data['clus_By'], data['clus_Bz'],
                                 data['clus_vx'], data['clus_vy'], data['clus_vz'],
@@ -1578,6 +1752,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         'grid_time': data['grid_time'],
         'grid_zeta': data['grid_zeta'],
         'rho_b': data['rho_b'],
+        'resolution': resolution
     }
             
     end_time_Total = time.time()

@@ -38,14 +38,14 @@ IND_PARAMS = {
     "F": 1.0, # Factor to multiply the viral radius to define the box size
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
-    "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
-    # "units": 1, # Factor to convert the units of the resulting volume integrals
+    # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
+    "units": 1, # Factor to convert the units of the resulting volume integrals
     # "level": [0,1,2,3,4,5,6,7], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
-    "level": [1,5], # Max. level of the AMR grid to be read
-    "up_to_level": [1,5], # AMR level up to which calculate
-    # "level": [0], # Max. level of the AMR grid to be read
-    # "up_to_level": [0], # AMR level up to which calculate
+    # "level": [0,1,5], # Max. level of the AMR grid to be read
+    # "up_to_level": [0,1,5], # AMR level up to which calculate
+    "level": [4], # Max. level of the AMR grid to be read
+    "up_to_level": [4], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
@@ -59,10 +59,10 @@ IND_PARAMS = {
     "drag": True, # Process the drag induction component
     "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
-    "buffer": True, # Use buffer zones to avoid boundary effects (recommended but slower)
+    "buffer": False, # Use buffer zones to avoid boundary effects (recommended but slower)
     "interpol": 'TSC', # Interpolation method for the buffer zones ('TSC' or 'SPH')
     "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
-    "energy_evolution": False, # Calculate the evolution of the energy budget
+    "energy_evolution": True, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
     "derivative": 'central', # Derivative to use for the evolution (implicit, central, RK or rate)
     "profiles": True, # Calculate the profiles of the induction components
@@ -77,19 +77,21 @@ IND_PARAMS = {
 # Directories and Results Parameters #
 
 OUTPUT_PARAMS = {
-    "save": True,
+    "save": False,
+    # "verbose": False,
+    # "save": True,
     "verbose": True,
-    "debug": [True, 0], # [Bool, Grid debugging (0: Uniform, 1: AMR)],
+    "debug": [True, 1], # [Bool, Grid debugging (0: Uniform, 1: AMR)],
     "chunk_factor": 2,
     "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step',
+    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_1',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
-    "it": [1050], # For different redshift snap iterations analysis
-    # "it": [1800, 1850, 1900, 1950, 2000, 2119],
+    # "it": [1050], # For different redshift snap iterations analysis
+    "it": [1800, 2119],
     # "it": list(range(1000, 2001, 50)) + [2119],
     # "it": list(range(250, 2001, 50)) + [2119], # For different redshift snap iterations analysis
     # "it": list(range(0, 2001, 50)) + [2119], # For different redshift snap iterations analysis
@@ -103,7 +105,7 @@ OUTPUT_PARAMS = {
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
     "ID1": "dynamo/",
-    "ID2": "divergence_test_Buffer_Stencil3_Uniform",
+    "ID2": "divergence_test_ref",
     # "ID2": "profiles_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
@@ -117,8 +119,8 @@ EVO_PLOT_PARAMS = {
     'xlim': [2.5, 0], # None for auto
     # 'xlim': None, # None for auto
     # 'ylim': [1e57, 1e60], # For the test
-    'ylim': [1e58, 1e63], # None for auto
-    # 'ylim': None, # None for auto
+    # 'ylim': [1e58, 1e63], # None for auto
+    'ylim': None, # None for auto
     'cancel_limits': False, # bool to flip the x axis (useful for zeta)
     'figure_size': [12, 8], # [width, height]
     'line_widths': [5, 1.5], # [line1, line2] for main and component lines
@@ -133,21 +135,18 @@ EVO_PLOT_PARAMS = {
 }
 
 PROFILE_PLOT_PARAMS = {
-    # 'it_indx': [-1], # Index of the iteration to plot (default: last)
-    'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
+    'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
+    # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
     'x_scale': 'log', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
-    # 'xlim': None, # None for auto
-    # 'ylim': None, # None for auto
-    # 'rylim': None, # None for auto
-    # 'dylim': None, # None for auto
-    # 'ylim': [3e53,1e64], # None for auto
+    'xlim': None, # None for auto
+    'ylim': None, # None for auto
+    'rylim': None, # None for auto
+    'dylim': None, # None for auto
+    # 'xlim': [5e-3,1e0], # None for auto
+    # 'ylim': [3e53,1e65], # None for auto
     # 'rylim': [3e39,3e47], # None for auto
-    # 'dylim': [0,40e-27], # None for auto
-    'xlim': [5e-3,1e0], # None for auto
-    'ylim': [3e53,1e65], # None for auto
-    'rylim': [3e39,3e47], # None for auto
-    'dylim': [1e-28,1e-25], # None for auto
+    # 'dylim': [1e-28,1e-25], # None for auto
     'figure_size': [12, 8], # [width, height]
     'line_widths': [3, 2], # [line1, line2] for main and component lines
     'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
@@ -160,8 +159,8 @@ PROFILE_PLOT_PARAMS = {
 }
 
 DEBUG_PARAMS = {
-    # 'it_indx': [-1], # Index of the iteration to plot (default: last)
-    'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
+    'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
+    # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
     'bins': 100,
     'log_scale': True,
     '%points': 1001,

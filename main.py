@@ -77,7 +77,7 @@ if __name__ == "__main__":
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 for it, j in zip(out_params["it"], range(len(out_params["it"]))):
                     
-                    data, vectorial, induction, _, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _, debug_fields = process_iteration(
+                    data, _, _, _, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _, debug_fields = process_iteration(
                         ind_params["components"], 
                         out_params["dir_grids"], 
                         out_params["dir_gas"],
@@ -98,9 +98,11 @@ if __name__ == "__main__":
                         bitformat=out_params["bitformat"],
                         mag=ind_params["mag"],
                         energy_evolution=ind_params["energy_evolution"],
-                        profiles=ind_params["profiles"],
+                        profiles=ind_params["profiles"] if it in [out_params["it"][k] for k in prof_plot_params["it_indx"]] else False,
+                        # profiles=ind_params["profiles"],
                         projection=ind_params["projection"],
-                        debug=out_params["debug"],
+                        debug=out_params["debug"] if it in [out_params["it"][k] for k in debug_params["it_indx"]] else [False, None],                        
+                        # debug=out_params["debug"]
                         verbose=out_params["verbose"])
                     
                     # Initialize dictionaries on first iteration
@@ -109,18 +111,18 @@ if __name__ == "__main__":
                         for key in data.keys():
                             all_data[key] = []
                         
-                        for key in vectorial.keys():
-                            all_vectorial[key] = []
+                        # for key in vectorial.keys():
+                        #     all_vectorial[key] = []
                         
-                        for key in induction.keys():
-                            all_induction[key] = []
+                        # for key in induction.keys():
+                        #     all_induction[key] = []
                         
                         # if magnitudes is not None:
                         #     for key in magnitudes.keys():
                         #         all_magnitudes[key] = []
                         
-                        for key in induction_energy.keys():
-                            all_induction_energy[key] = []
+                        # for key in induction_energy.keys():
+                        #     all_induction_energy[key] = []
                         
                         if induction_energy_integral is not None:
                             for key in induction_energy_integral.keys():
@@ -148,18 +150,18 @@ if __name__ == "__main__":
                     for key in data.keys():
                         all_data[key].append(data[key])
                     
-                    for key in vectorial.keys():
-                        all_vectorial[key].append(vectorial[key])
+                    # for key in vectorial.keys():
+                    #     all_vectorial[key].append(vectorial[key])
                     
-                    for key in induction.keys():
-                        all_induction[key].append(induction[key])
+                    # for key in induction.keys():
+                    #     all_induction[key].append(induction[key])
                     
                     # if magnitudes is not None:
                     #     for key in magnitudes.keys():
                     #         all_magnitudes[key].append(magnitudes[key])
                     
-                    for key in induction_energy.keys():
-                        all_induction_energy[key].append(induction_energy[key])
+                    # for key in induction_energy.keys():
+                    #     all_induction_energy[key].append(induction_energy[key])
                     
                     if induction_energy_integral is not None:
                         for key in induction_energy_integral.keys():
@@ -230,12 +232,18 @@ if __name__ == "__main__":
                 print(f"Ploting " + prof_plot_params["title"] + " completed.")
                 
             if out_params["debug"][0] and ind_params["components"]["divergence"]:
-                for field_key, ref_key, quantity in zip(['clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2'],
+                
+                inv_resolution = [1.0 / np.array(all_data['resolution'][i]) for i in range(len(all_data['resolution']))]
+                
+                print("DEBUG - inv resolution length:", len(inv_resolution), len(inv_resolution[0]), len(all_data['resolution'][0]), "values:", all_data['resolution'], "inverse values:", inv_resolution)
+                
+                for field_key, ref_key, ref_scale_val, quantity in zip(['clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2'],
                                                         ['clus_B2', 'clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2'],
+                                                        [1.0, inv_resolution, 1.0, 1.0, 1.0, 1.0],
                                                         debug_params['quantities']):
                     distribution_check(all_debug_fields[field_key], quantity, debug_params, ind_params,
                                     all_data['grid_time'], all_data['grid_zeta'],
-                                    Rad[-1], ref_field=all_debug_fields[ref_key],
+                                    Rad[-1], ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
                                     verbose=out_params["verbose"], save=out_params["save"],
                                     folder=out_params["image_folder"])
                     print(f"Ploting distribution check for " + quantity + " completed.")

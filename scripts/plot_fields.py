@@ -1349,8 +1349,8 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                 unique_handles.append(hh)
                 unique_labels.append(ll)
 
-        if unique_handles:
-            # Place a fixed, two-column legend at the top-right of the figure.
+        if unique_handles and xlim is not None and ylim is not None and rylim is not None and dylim is not None:
+            # Place a fixed, two-column legend at the bottom-left of the figure.
             # bbox_to_anchor is in figure coordinates when bbox_transform=fig1.transFigure.
             # ncol=2 forces two columns; adjust bbox_to_anchor if you need a different offset.
             fig1.legend(unique_handles, unique_labels, prop=font_legend,
@@ -1358,6 +1358,8 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                         bbox_transform=fig1.transFigure, ncol=2, frameon=True)
             # Slightly adjust subplot to avoid overlapping the legend or title
             fig1.subplots_adjust(top=0.90, right=0.86)
+        else:
+            fig1.legend(unique_handles, unique_labels, prop=font_legend, ncol=2, frameon=True)
 
         fig1.tight_layout()
         
@@ -1398,7 +1400,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     return figures
 
 def distribution_check(arr, quantity, plot_params, induction_params,
-                    grid_t, grid_z, rad, ref_field=None,
+                    grid_t, grid_z, rad, ref_field=None, ref_scale=1.0,
                     verbose=True, save=False, folder=None):
     '''
     Given a 3D array field (or list of patches per snapshot), generates two separate figures per snapshot:
@@ -1442,6 +1444,7 @@ def distribution_check(arr, quantity, plot_params, induction_params,
         - rad: characteristic radius for normalization
         - ref_field: optional list/array of 3D arrays (same format as arr) for relative plot (cell-wise |arr| / |ref_field|)
                 If ref_field equals arr element-wise, the relative plot will be 1 wherever ref!=0
+        - ref_scale: scaling factor to apply to ref_field values (in case units differ). This can be a single float or an array with a values per patch.
         - verbose: bool for verbose output
         - save: bool to save plots
         - folder: folder to save plots (if None, uses current directory)
@@ -1481,10 +1484,28 @@ def distribution_check(arr, quantity, plot_params, induction_params,
     def _is_patch_snapshot(snapshot):
         return isinstance(snapshot, (list, tuple))
 
-    def _flatten_patches(patches):
+    def _flatten_patches(patches, scales=None):
+        """Flatten patches, optionally scaling each patch by corresponding scale value."""
         if not patches:
             return np.array([])
-        return np.concatenate([np.asarray(p).ravel() for p in patches])
+        if scales is None:
+            return np.concatenate([np.asarray(p).ravel() for p in patches])
+        else:
+            # scales could be array-like with one value per patch
+            if not isinstance(scales, (list, tuple, np.ndarray)):
+                scales = [scales] * len(patches)
+            scales_arr = np.atleast_1d(scales)
+            # Debug: show patch and scale info
+            if verbose:
+                print(f"Debug _flatten_patches: {len(patches)} patches, {len(scales_arr)} scales")
+                for i in range(min(5, len(patches))):  # Show first 5 patches
+                    patch_shape = getattr(np.asarray(patches[i]), 'shape', 'no shape')
+                    print(f"  Patch {i}: shape={patch_shape}, scale={scales_arr[i]}")
+                if len(patches) > 5:
+                    print(f"  ... ({len(patches)-5} more patches)")
+                if len(patches) != len(scales_arr):
+                    raise ValueError(f"Number of patches ({len(patches)}) != number of scales ({len(scales_arr)})")
+            return np.concatenate([np.asarray(patches[i]).ravel() * scales_arr[i] for i in range(len(patches))])
     
     for snap_i in range(len(it_indx)):
         # Get current snapshot data
@@ -1498,6 +1519,13 @@ def distribution_check(arr, quantity, plot_params, induction_params,
                 current_ref_raw = ref_field[it_indx[snap_i]]
             else:
                 current_ref_raw = ref_field
+        
+        current_ref_scale_raw = None
+        if ref_scale is not None:
+            if isinstance(ref_scale, (list, tuple, np.ndarray)):
+                current_ref_scale_raw = ref_scale[it_indx[snap_i]]
+            else:
+                current_ref_scale_raw = ref_scale
 
         # Select central box if requested (only for uniform 3D arrays)
         def central_crop(a):
@@ -1528,11 +1556,13 @@ def distribution_check(arr, quantity, plot_params, induction_params,
         sub_idx = np.random.choice(n_cells, size=sub_n, replace=False)
         sub_vals = np.abs(flat[sub_idx])
 
-        # Relative array if provided (cell-by-cell |field| / |ref|)
+        # Relative array if provided (cell-by-cell |field| / (|ref| * ref_scale))
         rel_vals = None
         if current_ref_raw is not None:
             if is_patches:
-                ref_flat = _flatten_patches(current_ref_raw)
+                # For AMR: ref_scale could be array-like (one per patch)
+                # Apply per-patch scaling before flattening
+                ref_flat = _flatten_patches(current_ref_raw, scales=current_ref_scale_raw)
                 if ref_flat.size == flat.size:
                     ref_sub = np.abs(ref_flat[sub_idx])
                     field_sub = np.abs(flat[sub_idx])
@@ -1545,9 +1575,14 @@ def distribution_check(arr, quantity, plot_params, induction_params,
                 elif verbose:
                     print(f"Warning: ref_field length {ref_flat.size} != field length {flat.size} at snapshot {snap_i}. Skipping relative plot.")
             else:
+                # For uniform grids: ref_scale should be scalar
                 assert current_ref_raw.shape == current_raw.shape, f"ref_field must match arr shape at snapshot {snap_i}"
                 ref_use = central_crop(current_ref_raw)
-                ref_flat = np.abs(ref_use.flatten())
+                if isinstance(current_ref_scale_raw, (list, tuple, np.ndarray)):
+                    ref_scale_scalar = float(np.atleast_1d(current_ref_scale_raw).flat[-1]) # Use last value if array-like
+                else:
+                    ref_scale_scalar = float(current_ref_scale_raw)
+                ref_flat = np.abs(ref_use.flatten()) * ref_scale_scalar
                 ref_sub = ref_flat[sub_idx]
                 field_sub = np.abs(flat[sub_idx])
                 nonzero = ref_sub != 0
