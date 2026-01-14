@@ -160,7 +160,7 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
     return region, region_size
 
 
-def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, verbose=False,debug=False):
+def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, verbose=False, debug=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -439,7 +439,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         else:
             print(f'Snap {grid_irr} (pipeline method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
             
-        def divergence_B_test(Bx, By, Bz, dx, npatch, kp, stencil=3):
+        def divergence_B_test(Bx, By, Bz, dx, npatch, kp):
             
             levels = utils.create_vector_levels(npatch)
             resolution = dx / (2 ** np.array(levels))
@@ -487,7 +487,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         else:
             print(f'Snap {grid_irr} (periodic method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
             
-        def divergence_B_test_II(Bx, By, Bz, dx, npatch, kp, stencil=3):
+        def divergence_B_test_II(Bx, By, Bz, dx, npatch, kp):
             
             levels = utils.create_vector_levels(npatch)
             resolution = dx / (2 ** np.array(levels))
@@ -1385,6 +1385,129 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     return results
 
 
+def compute_percentile_thresholds(field_numerator, field_denominator, scale_factor,
+                                cr0amr, solapst, npatch, up_to_level,
+                                percentiles=(100, 90, 75, 50, 25),
+                                use_abs=True, denom_eps=0.0):
+    '''
+    Compute percentile thresholds of a ratio field in a single snapshot with safeguards and band edges.
+    Applies clean_field to ensure only cells at maximum available resolution are considered.
+
+    Args:
+        - field_numerator: numerator field for the ratio (list of 3D arrays, one per patch)
+        - field_denominator: denominator field for the ratio (list of 3D arrays, one per patch)
+        - scale_factor: factor to multiply the ratio (unit conversion or scaling).
+                       Can be a scalar or an array with one value per patch.
+                       If array, must have length equal to number of patches.
+        - cr0amr: refinement field (1: not refined; 0: refined)
+        - solapst: overlap field (1: keep; 0: discard)
+        - npatch: number of patches per level
+        - up_to_level: maximum refinement level to consider
+        - percentiles: tuple/list of percentiles to compute
+        - use_abs: take absolute value of the ratio before percentiles
+        - denom_eps: minimum absolute value allowed in denominator; smaller values are masked
+
+    Returns:
+        - dict with keys:
+            'percentiles': ndarray with the percentile thresholds (same order as input)
+            'levels': ndarray of the requested percentiles
+            'global_min': minimum finite value of the ratio (after scaling)
+            'global_max': maximum finite value of the ratio (after scaling)
+            'bands': list of (low, high) tuples for each percentile band using sorted levels
+                (e.g., for shading between successive percentiles; includes the 0–min band)
+            Returns None values if no finite data.
+
+    Author: Marco Molina
+    '''
+
+    # Apply clean_field to ensure only cells at maximum resolution are considered
+    clean_numerator = utils.clean_field(field_numerator, cr0amr, solapst, npatch, up_to_level)
+    clean_denominator = utils.clean_field(field_denominator, cr0amr, solapst, npatch, up_to_level)
+
+    # Handle scale_factor: scalar or array with one value per patch
+    if np.isscalar(scale_factor):
+        # Simple scalar multiplication
+        ratio = np.divide(
+            clean_numerator,
+            clean_denominator,
+            out=np.full_like(clean_numerator, np.nan, dtype=float),
+            where=np.abs(clean_denominator) > denom_eps,
+        )
+        if use_abs:
+            ratio = np.abs(ratio)
+        ratio = ratio * scale_factor
+        
+        # Flatten and filter: exclude NaN, Inf, and zero values from clean_field
+        vals = ratio.ravel()
+        vals = vals[np.isfinite(vals) & (vals != 0.0)]
+    else:
+        # scale_factor is an array with one value per patch
+        scale_arr = np.asarray(scale_factor)
+        
+        # field_numerator and field_denominator are lists of 3D arrays (one per patch)
+        if not isinstance(field_numerator, (list, tuple)):
+            raise ValueError("field_numerator must be a list/tuple of arrays (one per patch)")
+        
+        n_patches = len(clean_numerator)
+        if scale_arr.size != n_patches:
+            raise ValueError(f"scale_factor array size ({scale_arr.size}) must match number of patches ({n_patches})")
+        
+        # Process each patch with its corresponding scale factor
+        ratio_patches = []
+        for i, (num_patch, denom_patch) in enumerate(zip(clean_numerator, clean_denominator)):
+            # Compute ratio for this patch
+            ratio_patch = np.divide(
+                num_patch,
+                denom_patch,
+                out=np.full_like(num_patch, np.nan, dtype=float),
+                where=np.abs(denom_patch) > denom_eps,
+            )
+            if use_abs:
+                ratio_patch = np.abs(ratio_patch)
+            
+            # Multiply by the scale factor for this patch
+            ratio_patch = ratio_patch * scale_arr[i]
+            ratio_patches.append(ratio_patch)
+        
+        # Concatenate all patches and filter: exclude NaN, Inf, and zero values from clean_field
+        vals = np.concatenate([np.asarray(p).ravel() for p in ratio_patches])
+        vals = vals[np.isfinite(vals) & (vals != 0.0)]
+
+    if vals.size == 0:
+        return {
+            "percentiles": None,
+            "levels": np.asarray(percentiles),
+            "global_min": None,
+            "global_max": None,
+            "bands": None,
+        }
+
+    levels_arr = np.asarray(percentiles, dtype=float)
+    thresholds = np.percentile(vals, levels_arr)
+
+    gmin = float(np.min(vals))
+    gmax = float(np.max(vals))
+
+    sorted_idx = np.argsort(levels_arr)
+    sorted_levels = levels_arr[sorted_idx]
+    sorted_thresh = thresholds[sorted_idx]
+
+    bands = []
+    prev_edge = gmin
+    for th in sorted_thresh:
+        bands.append((prev_edge, float(th)))
+        prev_edge = float(th)
+    if sorted_levels.size == 0 or sorted_levels[-1] < 100:
+        bands.append((prev_edge, gmax))
+
+    return {
+        "percentiles": thresholds,
+        "levels": levels_arr,
+        "global_min": gmin,
+        "global_max": gmax,
+        "bands": bands,
+    }
+
 def uniform_induction(components, induction_equation,
                     clus_cr0amr, clus_solapst, grid_npatch,
                     grid_patchnx, grid_patchny, grid_patchnz, 
@@ -1493,13 +1616,71 @@ def uniform_induction(components, induction_equation,
         print('Time for uniform field calculation in snap '+ str(grid_npatch) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_uniform))))
         
     return results
-            
+
+def _get_debug_field(key, field_sources, region_coords, data, debug, up_to_level, size, nmax):
+    '''
+    Helper function to retrieve and process debug fields.
+    
+    Args:
+        - key: the key of the field to retrieve
+        - field_sources: list of dictionaries containing possible field sources
+        - region_coords: coordinates defining the region of interest
+        - data: dictionary containing grid parameters
+        - debug: list indicating the debug mode
+        - up_to_level: level of refinement in the AMR grid
+        - size: size of the grid
+        - nmax: maximum number of patches in the grid
+        
+    Returns:
+        - processed field or None if not found
+        
+    Author: Marco Molina
+    '''
+    field = None
+    for source in field_sources:
+        if key in source.keys():
+            field = source[key]
+            break
+    
+    if field is None:
+        return None
+    
+    if debug[1] == 0:  # Uniform grid mode
+        return utils.unigrid(
+            field=field,
+            box_limits=region_coords[1:],
+            up_to_level=up_to_level,
+            npatch=data['grid_npatch'],
+            patchnx=data['grid_patchnx'],
+            patchny=data['grid_patchny'],
+            patchnz=data['grid_patchnz'],
+            patchrx=data['grid_patchrx'],
+            patchry=data['grid_patchry'],
+            patchrz=data['grid_patchrz'],
+            size=size,
+            nmax=nmax,
+            interpolate=True,
+            verbose=False,
+            kept_patches=data['clus_kp'],
+            return_coords=False
+        )
+    elif debug[2]:  # Clean field mode
+        return utils.clean_field(
+            field,
+            data['clus_cr0amr'],
+            data['clus_solapst'],
+            data['grid_npatch'],
+            up_to_level=up_to_level
+        )
+    else:  # Raw field mode
+        return field
 
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
                     stencil=3, buffer=True, interpol='TSC', nghost=1, bitformat=np.float32, mag=False,
-                    energy_evolution=True, profiles=True, projection=True, debug=[False, 0],
+                    energy_evolution=True, profiles=True, projection=True, percentiles=True, 
+                    percentile_levels=(100, 90, 75, 50, 25), debug=[False, 0],
                     verbose=False):
     '''
     Processes a single iteration of the cosmological magnetic induction equation calculations.
@@ -1539,6 +1720,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - energy_evolution: boolean to compute energy evolution (default is True)
         - profiles: boolean to compute radial profiles (default is True)
         - projection: boolean to compute uniform projection (default is True)
+        - percentiles: boolean to compute percentile thresholds (default is True)
+        - percentile_levels: tuple of percentile thresholds to compute (default is (100, 90, 75, 50, 25))
         - debug: boolean to print inner progress information (default is False)
         - verbose: boolean to print progress information (default is False)
         
@@ -1550,6 +1733,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - induction_energy_integral: dictionary containing the volume integrals of the magnetic induction equation in terms of the magnetic energy
         - induction_energy_profiles: dictionary containing the radial profiles of the magnetic induction equation in terms of the magnetic energy
         - induction_uniform: dictionary containing the uniform projection of the magnetic induction equation in terms of the magnetic energy
+        - diver_B_percentiles: dictionary containing percentile thresholds of the magnetic field divergence
+        - debug_fields: dictionary containing debug fields if requested
 
     Author: Marco Molina
     '''
@@ -1566,7 +1751,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, bitformat=bitformat, region=region_coords, verbose=verbose)
+    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, bitformat=bitformat, region=region_coords, verbose=verbose, debug=False)
     
     # Add ghost buffer cells before derivatives
     if buffer == True:
@@ -1698,56 +1883,47 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         if verbose == True:
             print('Projection is set to False, skipping uniform projection of the magnetic induction equation.')
             
+    if percentiles:
+        # Percentile Thresholds of the Magnetic Field Divergence
+        
+        # Scale divergence by resolution to make it comparable to field magnitude
+        # Divergence has units [field/length], multiplying by dx gives [field]
+        diver_B_percentiles = compute_percentile_thresholds(
+            field_numerator=vectorial['diver_B'],
+            field_denominator=data['diver_B'],
+            scale_factor=resolution,
+            cr0amr=data['clus_cr0amr'],
+            solapst=data['clus_solapst'],
+            npatch=data['grid_npatch'],
+            up_to_level=up_to_level,
+            percentiles=percentile_levels,
+            use_abs=True,
+            denom_eps=0.0
+        )
+    elif not percentiles:
+        diver_B_percentiles = None
+        if verbose == True:
+            print('Percentiles is set to False, skipping percentile thresholds of the magnetic field divergence.')
+            
     if debug[0] == True:
         
         debug_data = ['clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2']
         
         debug_fields = {}
-        
-        for key in debug_data:
-            if key in data.keys():
-                if debug[1] == 0:
-                    debug_fields[key] = utils.unigrid(field=data[key], box_limits=region_coords[1:], up_to_level=up_to_level,
-                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
-                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
-                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
-                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
-                else:
-                    debug_fields[key] = data[key]
-            elif key in vectorial.keys():
-                if debug[1] == 0:
-                    debug_fields[key] = utils.unigrid(field=vectorial[key], box_limits=region_coords[1:], up_to_level=up_to_level,
-                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
-                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
-                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
-                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
-                else:
-                    debug_fields[key] = vectorial[key]
-            elif key in induction.keys():
-                if debug[1] == 0:
-                    debug_fields[key] = utils.unigrid(induction[key], box_limits=region_coords[1:], up_to_level=up_to_level,
-                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
-                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
-                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
-                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
-                else:
-                    debug_fields[key] = induction[key]
-            elif key in induction_energy.keys():
-                if debug[1] == 0:
-                    debug_fields[key] = utils.unigrid(induction_energy[key], box_limits=region_coords[1:], up_to_level=up_to_level,
-                                                npatch=data['grid_npatch'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'],
-                                                patchnz=data['grid_patchnz'], patchrx=data['grid_patchrx'], patchry=data['grid_patchry'],
-                                                patchrz=data['grid_patchrz'], size=size, nmax=nmax,
-                                                interpolate=True, verbose=False, kept_patches=data['clus_kp'], return_coords=False)
-                else:
-                    debug_fields[key] = induction_energy[key]
+
+        field_sources = [data, vectorial, induction, induction_energy]
+        debug_fields = {
+            key: _get_debug_field(key, field_sources, region_coords, data, debug, up_to_level, size, nmax)
+            for key in debug_data
+        }
+        debug_fields = {k: v for k, v in debug_fields.items() if v is not None}
+
         if verbose == True:
             print('Debug fields computed for iteration '+ str(it) + ' in simulation '+ str(sims))
                 
     else:
         debug_fields = None
         
-    
     data = {
         'grid_time': data['grid_time'],
         'grid_zeta': data['grid_zeta'],
@@ -1762,4 +1938,4 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     if verbose == True:
         print(f'Time for processing iteration {it} in simulation {sims}: {strftime("%H:%M:%S", gmtime(total_time_Total))}')
 
-    return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, debug_fields
+    return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields

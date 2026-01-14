@@ -6,8 +6,9 @@ from config import OUTPUT_PARAMS as out_params
 from config import EVO_PLOT_PARAMS as evo_plot_params
 from config import PROFILE_PLOT_PARAMS as prof_plot_params
 from config import DEBUG_PARAMS as debug_params
+from config import PERCENTILE_PLOT_PARAMS as percentile_plot_params
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
-from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, distribution_check, scan_animation_3D, zoom_animation_3D
+from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
 
@@ -68,6 +69,7 @@ if __name__ == "__main__":
             all_induction_test_energy_integral = {}
             all_induction_energy_profiles = {}
             all_induction_uniform = {}
+            all_diver_B_percentiles = {}
             all_debug_fields = {}
 
             # Flag to track first iteration for dictionary initialization
@@ -77,7 +79,7 @@ if __name__ == "__main__":
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 for it, j in zip(out_params["it"], range(len(out_params["it"]))):
                     
-                    data, _, _, _, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _, debug_fields = process_iteration(
+                    data, _, _, _, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _, diver_B_percentiles, debug_fields = process_iteration(
                         ind_params["components"], 
                         out_params["dir_grids"], 
                         out_params["dir_gas"],
@@ -101,6 +103,8 @@ if __name__ == "__main__":
                         profiles=ind_params["profiles"] if it in [out_params["it"][k] for k in prof_plot_params["it_indx"]] else False,
                         # profiles=ind_params["profiles"],
                         projection=ind_params["projection"],
+                        percentiles=ind_params["percentiles"],
+                        percentile_levels=ind_params["percentile_levels"],
                         debug=out_params["debug"] if it in [out_params["it"][k] for k in debug_params["it_indx"]] else [False, None],                        
                         # debug=out_params["debug"]
                         verbose=out_params["verbose"])
@@ -135,6 +139,10 @@ if __name__ == "__main__":
                         if induction_energy_profiles is not None:
                             for key in induction_energy_profiles.keys():
                                 all_induction_energy_profiles[key] = []
+                        
+                        if diver_B_percentiles is not None:
+                            for key in diver_B_percentiles.keys():
+                                all_diver_B_percentiles[key] = []
                         
                         # if induction_uniform is not None:
                         #     for key in induction_uniform.keys():
@@ -174,6 +182,10 @@ if __name__ == "__main__":
                     if induction_energy_profiles is not None:
                         for key in induction_energy_profiles.keys():
                             all_induction_energy_profiles[key].append(induction_energy_profiles[key])
+                    
+                    if diver_B_percentiles is not None:
+                        for key in diver_B_percentiles.keys():
+                            all_diver_B_percentiles[key].append(diver_B_percentiles[key])
                     
                     # if induction_uniform is not None:
                     #     for key in induction_uniform.keys():
@@ -230,12 +242,23 @@ if __name__ == "__main__":
                 )
                 
                 print(f"Ploting " + prof_plot_params["title"] + " completed.")
+            
+            if ind_params["percentiles"] == False:
+                print("Percentiles calculation is disabled in the configuration. Skipping percentile evolution plots.")
+            else:
+                plot_percentile_evolution(
+                    all_diver_B_percentiles,
+                    percentile_plot_params, ind_params,
+                    all_data['grid_time'], all_data['grid_zeta'],
+                    verbose=out_params['verbose'], save=out_params['save'],
+                    folder=out_params['image_folder']
+                )
+                
+                print(f"Ploting " + percentile_plot_params["title"] + " completed.")
                 
             if out_params["debug"][0] and ind_params["components"]["divergence"]:
                 
                 inv_resolution = [1.0 / np.array(all_data['resolution'][i]) for i in range(len(all_data['resolution']))]
-                
-                print("DEBUG - inv resolution length:", len(inv_resolution), len(inv_resolution[0]), len(all_data['resolution'][0]), "values:", all_data['resolution'], "inverse values:", inv_resolution)
                 
                 for field_key, ref_key, ref_scale_val, quantity in zip(['clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2'],
                                                         ['clus_B2', 'clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2'],
@@ -244,7 +267,7 @@ if __name__ == "__main__":
                     distribution_check(all_debug_fields[field_key], quantity, debug_params, ind_params,
                                     all_data['grid_time'], all_data['grid_zeta'],
                                     Rad[-1], ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
-                                    verbose=out_params["verbose"], save=out_params["save"],
+                                    clean=out_params["debug"][2], verbose=out_params["verbose"], save=out_params["save"],
                                     folder=out_params["image_folder"])
                     print(f"Ploting distribution check for " + quantity + " completed.")
                     

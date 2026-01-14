@@ -44,8 +44,8 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [4], # Max. level of the AMR grid to be read
-    "up_to_level": [4], # AMR level up to which calculate
+    "level": [2], # Max. level of the AMR grid to be read
+    "up_to_level": [2], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
@@ -62,12 +62,14 @@ IND_PARAMS = {
     "buffer": False, # Use buffer zones to avoid boundary effects (recommended but slower)
     "interpol": 'TSC', # Interpolation method for the buffer zones ('TSC' or 'SPH')
     "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
-    "energy_evolution": True, # Calculate the evolution of the energy budget
+    "energy_evolution": False, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
     "derivative": 'central', # Derivative to use for the evolution (implicit, central, RK or rate)
-    "profiles": True, # Calculate the profiles of the induction components
+    "profiles": False, # Calculate the profiles of the induction components
     "projection": False, # Calculate the projection of the induction components
     "A2U": False, # Transform the AMR grid to a uniform grid
+    "percentiles": True, # Calculate percentile thresholds of the magnetic field divergence
+    "percentile_levels": (100, 90, 75, 50, 25), # Percentile thresholds to compute
     "test_params": {
         "test": False,
         "B0": 2.3e-8
@@ -77,11 +79,12 @@ IND_PARAMS = {
 # Directories and Results Parameters #
 
 OUTPUT_PARAMS = {
-    "save": False,
+    # "save": False,
     # "verbose": False,
-    # "save": True,
+    # "debug": [False, 1],
+    "save": True,
     "verbose": True,
-    "debug": [True, 1], # [Bool, Grid debugging (0: Uniform, 1: AMR)],
+    "debug": [True, 1, True], # [Bool, Grid debugging (0: Uniform, 1: AMR), Clean fields (If AMR)],
     "chunk_factor": 2,
     "bitformat": np.float64,
     "format": "npy",
@@ -105,7 +108,7 @@ OUTPUT_PARAMS = {
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
     "ID1": "dynamo/",
-    "ID2": "divergence_test_ref",
+    "ID2": "divergence_test_percentile_evo",
     # "ID2": "profiles_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
@@ -168,6 +171,20 @@ DEBUG_PARAMS = {
     'central_fraction': 1.0,
     'title': 'Divergence Induction',
     'quantities': ['Magnetic Field Energy', 'Magnetic Field Divergence', 'X-Divergence Induction', 'Y-Divergence Induction', 'Z-Divergence Induction', 'Divergence Induction Energy'],
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
+}
+
+PERCENTILE_PLOT_PARAMS = {
+    'x_axis': 'zeta', # 'zeta' or 'years'
+    'x_scale': 'lin', # 'lin' or 'log'
+    'y_scale': 'log', # 'lin' or 'log'
+    'xlim': None, # None for auto
+    'ylim': None, # None for auto
+    'figure_size': [12, 6], # [width, height]
+    'line_widths': [2.0, 1.5], # [percentile_lines, max_line]
+    'alpha_fill': 0.20, # transparency for shaded bands
+    'title': 'Percentile Threshold Evolution',
     'dpi': 300,
     'run': OUTPUT_PARAMS["run"]
 }

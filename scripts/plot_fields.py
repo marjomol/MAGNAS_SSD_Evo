@@ -29,279 +29,6 @@ from time import strftime
 from time import gmtime
 import sys
 from scripts.units import *
-
-def plot_seed_spectrum(alpha_index, Bx, By, Bz, dx, mode = 1, epsilon = 1e-30, ncores=1, verbose = True, Save = False, DPI = 300, run = '_', folder = None):
-    '''
-    Plots the power spectrum of the magnetic field seed and other interesting quantities to check the generation.
-    
-    Args:
-        - alpha_index: spectral index of the magnetic field
-        - Bx: magnetic field component in Fourier space in the x direction
-        - By: magnetic field component in Fourier space in the y direction
-        - Bz: magnetic field component in Fourier space in the z direction
-        - dx: cell size in Mpc
-        - mode: integer to choose the plot mode
-        - epsilon: small number to avoid division by zero
-        - ncores: number of cores to use for the FFT
-        - verbose: boolean to print the progress of the function
-        - Save: boolean to save the plot or not
-        - DPI: dots per inch in the plot
-        - run: string to identify the run
-        - folder: folder to save the plot
-        
-    Returns:
-        - Plot of the magnetic field seed power spectrum and other comparatives
-        
-    Author: Marco Molina
-    '''
-    nmax, nmay, nmaz = Bx[0].shape
-    
-    klim = 1 # Set axis limits in the power spectrum plot (klim=1 and k0=0 for showing all, ko defines the starting point of the trend line)
-    k0 = 0
-    
-    # Compute the magnetic field magnitude
-    Bmag = np.sqrt(Bx[0]**2 + By[0]**2 + Bz[0]**2)
-    
-    if verbose == True:
-        print(f'Plotting... Magnetic Field Seed Magnitude computed')
-    
-    # Compute the magnetic power spectrum
-    k_bins, P_k = spectral.power_spectrum_vector_field(Bx[0], By[0], Bz[0], dx=dx)
-    P_k = np.where(P_k == 0, epsilon, P_k)
-    k_bins = k_bins * 2 * np.pi
-    
-    # Compute the integral of the power spectrum
-    integral_Pk = np.trapz(P_k, k_bins)
-    
-    if verbose == True:
-        print(f'Plotting... Magnetic Field Seed Power Spectrum computed')
-    
-    ## Calculate the standard deviation of the power spectrum for each bin ##
-    
-    # First we need to compute the FFT, its amplitude square, and normalise it
-    # Bx_fourier_amplitudes = fft.fftn(Bx[0], s=Bx[0].shape, workers=ncores) / np.sqrt(nmax*nmay*nmaz)
-    # By_fourier_amplitudes = fft.fftn(By[0], s=By[0].shape, workers=ncores) / np.sqrt(nmax*nmay*nmaz)
-    # Bz_fourier_amplitudes = fft.fftn(Bz[0], s=Bz[0].shape, workers=ncores) / np.sqrt(nmax*nmay*nmaz)
-    Bx_fourier_amplitudes = fft.fftn(Bx[0], s=Bx[0].shape, norm="ortho", workers=ncores)
-    By_fourier_amplitudes = fft.fftn(By[0], s=By[0].shape, norm="ortho", workers=ncores)
-    Bz_fourier_amplitudes = fft.fftn(Bz[0], s=Bz[0].shape, norm="ortho", workers=ncores)
-
-    Bx_fourier_amplitudes = (np.abs(Bx_fourier_amplitudes)**2).flatten()
-    By_fourier_amplitudes = (np.abs(By_fourier_amplitudes)**2).flatten()
-    Bz_fourier_amplitudes = (np.abs(Bz_fourier_amplitudes)**2).flatten()
-
-    # Next we obtain the frequencies
-    kx = np.fft.fftfreq(nmax, dx) * 2 * np.pi # Es seguro el factor 2*pi?
-    ky = np.fft.fftfreq(nmay, dx) * 2 * np.pi
-    kz = np.fft.fftfreq(nmaz, dx) * 2 * np.pi
-    
-    k_magnitude = np.meshgrid(kx, ky, kz, indexing='ij')
-    k_magnitude = k_magnitude[0]**2 + k_magnitude[1]**2 + k_magnitude[2]**2
-    k_magnitude = np.sqrt(k_magnitude).flatten()
-
-    # Assuming isotropy, we can obtain the P(k) (1-dimensional power spectrum) standard deviation
-    k_stats_bins = np.arange(kx[1]/2, np.abs(kx).max(), kx[1])
-
-    P_k_x_std, _, _ = stats.binned_statistic(k_magnitude, Bx_fourier_amplitudes, statistic='std', bins=k_stats_bins)
-    P_k_y_std, _, _ = stats.binned_statistic(k_magnitude, By_fourier_amplitudes, statistic='std', bins=k_stats_bins)
-    P_k_z_std, _, _ = stats.binned_statistic(k_magnitude, Bz_fourier_amplitudes, statistic='std', bins=k_stats_bins)
-    
-    del Bx_fourier_amplitudes, By_fourier_amplitudes, Bz_fourier_amplitudes, k_magnitude
-    gc.collect()
-    
-    P_k_std = P_k_x_std + P_k_y_std + P_k_z_std
-    
-    del P_k_x_std, P_k_y_std, P_k_z_std
-    gc.collect()
-    
-    per = 100
-    while np.any(P_k[k0:-klim] - P_k_std[k0:-klim] <= 0):
-        P_k_std = P_k_std * per/100
-        per = per - 5
-        if per <= 0:
-            print("Warning: Unable to resolve condition within 100 iterations, standard deviation set to zero.")
-            P_k_std = np.zeros_like(P_k_std)
-            break
-        
-    if verbose == True:
-        print(f'Plotting... Magnetic Field Seed Power Spectrum Standard Deviation computed')
-    
-    # Computes the magnetic field seed divergence
-    diver_B = diff.periodic_divergence(Bx, By, Bz, dx, npatch = np.array([0]), stencil=5, kept_patches=None)
-    
-    if verbose == True:
-        print(f'Plotting... Magnetic Field Seed Divergence computed')
-
-    # Calculate the expected trend lines starting from specifict values of P_k
-    ko = 3
-    trend_line = P_k[k0+ko] * (k_bins[k0+ko:-klim] / k_bins[k0+ko])**(alpha_index)
-        
-    # Plot the magnetic power spectrum
-    if mode == 0:
-        
-        fig, ax = plt.subplots(1, 1, figsize=(16, 6), dpi =DPI)
-        ax = [ax]
-    
-    # Spectrum with the Cumulative Relative Divergence of the Magnetic Field
-    elif mode == 1:
-        
-        fig, ax = plt.subplots(1, 2, gridspec_kw={'width_ratios': [1, 1]}, figsize=(16, 6), dpi=DPI)
-        ax = ax.flatten()
-
-        plt.subplots_adjust(wspace=0.4, hspace=0.4)
-        
-        nmax, nmay, nmaz = Bx[0].shape
-        
-        xxx = np.linspace(0, 100, 1001)
-        if nmax >= 256 or nmay >= 256 or nmaz >= 256:
-            sub_sample = int(0.1 * 256**3)
-        else:
-            sub_sample = int(0.2 * nmax * nmay * nmaz)
-            
-        # Consider only the central part of the box
-        # random_inndex = np.random.choice((nmax-(nmax//2))*(nmay-(nmay//2))*(nmaz-(nmaz//2)), size=int(sub_sample), replace=False)
-        # random_cells = np.abs(diver_B[0][nmax//4:-nmax//4,nmay//4:-nmay//4,nmaz//4:-nmaz//4].flatten()[random_inndex])
-        
-        # Consider the whole box
-        random_inndex = np.random.choice(nmax*nmay*nmaz, size=int(sub_sample), replace=False)
-        random_cells = np.abs(diver_B[0].flatten()[random_inndex])
-        
-        yyy = [np.percentile(random_cells, p) for p in xxx]
-
-        ax[1].clear()
-        ax[1].set_title(f'Cumulative Relative Divergence of the Magnetic Field, $N_c$ = {Bx[0].shape[0]}')
-        ax[1].set_xlabel('Percentage of cells')
-        ax[1].set_ylabel('|∇·B|/B')
-        ax[1].plot(xxx, yyy / np.mean(Bx[0]**2 + By[0]**2 + Bz[0]**2)**0.5 * dx)
-        ax[1].set_xscale('linear')
-        ax[1].set_yscale('log')
-        ax[1].grid()
-        
-        if verbose == True:
-            print(f'Plotting... Magnetic Field Seed Cumulative Relative Divergence plotted')
-    
-    # Spectrum with the Cumulative Absolute Divergence of the Magnetic Field
-    elif mode == 2:
-        
-        fig, ax = plt.subplots(1, 2, gridspec_kw={'width_ratios': [1, 1]}, figsize=(16, 6), dpi=DPI)
-        ax = ax.flatten()
-
-        plt.subplots_adjust(wspace=0.4, hspace=0.4)
-        
-        nmax, nmay, nmaz = Bx[0].shape
-        
-        xxx = np.linspace(0, 100, 1001)
-        if nmax >= 256 or nmay >= 256 or nmaz >= 256:
-            sub_sample = int(0.1 * 256**3)
-        else:
-            sub_sample = int(0.2 * nmax * nmay * nmaz)
-            
-        # Consider only the central part of the box
-        # random_inndex = np.random.choice((nmax-(nmax//2))*(nmay-(nmay//2))*(nmaz-(nmaz//2)), size=int(sub_sample), replace=False)
-        # random_cells = np.abs(diver_B[0][nmax//4:-nmax//4,nmay//4:-nmay//4,nmaz//4:-nmaz//4].flatten()[random_inndex])
-        
-        # Consider the whole box
-        random_inndex = np.random.choice(nmax*nmay*nmaz, size=int(sub_sample), replace=False)
-        random_cells = np.abs(diver_B[0].flatten()[random_inndex])
-        
-        yyy = [np.percentile(random_cells, p) for p in xxx]
-
-        ax[1].clear()
-        ax[1].set_title(f'Cumulative Absolute Divergence of the Magnetic Field, $N_c$ = {Bx[0].shape[0]}')
-        ax[1].set_xlabel('Percentage of cells')
-        ax[1].set_ylabel('|∇·B|')
-        ax[1].plot(xxx, yyy)
-        ax[1].set_xscale('linear')
-        ax[1].set_yscale('log')
-        ax[1].grid()
-        
-        if verbose == True:
-            print(f'Plotting... Magnetic Field Seed Cumulative Absolute Divergence plotted')
-        
-    # Spectrum with the Histograms of the Divergence and the Magnetic Field
-    elif mode == 3:
-        
-        fig, ax = plt.subplots(1, 3, gridspec_kw={'width_ratios': [2, 1, 1]}, figsize=(16, 6), dpi=DPI)
-        ax = ax.flatten()
-
-        plt.subplots_adjust(wspace=0.4, hspace=0.4)
-        
-        # Histogram of the values of the divergence
-        data = np.abs(diver_B[0].flatten())
-        data[data == 0] = epsilon
-        min_val = data[data > 0].min()
-        max_val = data.max()
-        log_bins = np.logspace(np.log10(min_val).real, np.log10(max_val).real, num=5000)
-        
-        ax[2].clear()  
-        ax[2].set_xlabel('|∇·B|')
-        ax[2].set_ylabel('Frequency')
-        ax[2].set_title(f'Histogram of Divergence, $N_c$ = {Bx[0].shape[0]}')
-        ax[2].hist(data, bins=log_bins, alpha=0.75, label='Periodic Divergence', log=True)
-        ax[2].legend()
-        ax[2].set_xscale('log')
-        # ax[2].set_xlim(1e-40, 5e-1)
-        # ax[2].set_ylim(1e-2, 1e6)
-        ax[2].legend(loc='upper right')
-
-        # Histogram of the values of the magnetic field
-        data = Bmag[0].flatten()
-        min_val = data[data > 0].min()
-        max_val = data.max()
-        log_bins = np.logspace(np.log10(min_val).real, np.log10(max_val).real, num=5000)
-        
-        ax[1].clear() 
-        ax[1].set_xlabel('Gauss (G)')
-        ax[1].set_ylabel('Frequency')
-        ax[1].set_title(f'Histogram of Magentic Field Intensity, $N_c$ = {Bx[0].shape[0]}')
-        ax[1].hist(data, bins=log_bins, alpha=1, label='Magentic Field', log=True)
-        ax[1].legend()
-        ax[1].set_xscale('log')
-        # ax[1].set_xlim(1e-40, 5e-1)
-        # ax[1].set_ylim(1e-2, 1e6)
-        ax[1].legend(loc='upper right')
-        
-        if verbose == True:
-            print(f'Plotting... Magnetic Field Seed Histograms plotted')
-
-    ax[0].clear()  
-    ax[0].set_title(f'Random Transverse Projected Magnetic Field Power Spectrum')
-    ax[0].set_xlabel('k')
-    ax[0].set_ylabel('P(k)')
-    ax[0].loglog(
-        k_bins[k0:-klim],
-        P_k[k0:-klim],
-        label=f'Magnetic Power Spectrum\n$\int P(k) dk$ = {integral_Pk:.2e}'
-    )
-    ax[0].fill_between(k_bins[k0:-klim], P_k[k0:-klim] - P_k_std[k0:-klim], P_k[k0:-klim] + P_k_std[k0:-klim], color='gray', alpha=0.25)
-    ax[0].loglog(k_bins[k0+ko:-klim], trend_line, linestyle='dotted', label=f'$k^{{{np.round(alpha_index,2)}}}$')
-    ax[0].legend()
-    # ax[0].set_xlim(0, k_bins[-klim] + 1)
-    # ax[0].set_ylim(1e4, 1e12)
-    ax[0].legend(loc='lower center')
-
-    # Annotate the confidence percentage near the error area
-    ax[0].text(
-        k_bins[k0:-klim][0] + ((k_bins[k0:-klim][1] - k_bins[k0:-klim][0]) / 4),  # x-coordinate
-        P_k[k0:-klim][1] - P_k_std[k0:-klim][1],  # y-coordinate (just above the error area)
-        f"{per}% $\\sigma$",  # Annotation text
-        fontsize=10,  # Font size
-        color="gray",  # Text color
-        ha="center",  # Horizontal alignment
-        va="bottom",  # Vertical alignment
-        # bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray")  # Background box for better visibility
-    )
-    
-    if verbose == True:
-        print(f'Plotting... Magnetic Field Seed Power Spectrum plotted')
-    
-    # Save the plots
-    if Save == True:
-        
-        if folder is None:
-            folder = os.getcwd()
-            
-        fig.savefig(folder + f'/Mag_Field_Power_Spectrum_{run}.png')
         
 def zoom_animation_3D(arr, size, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Zoom', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
@@ -482,7 +209,26 @@ def scan_animation_3D(arr, size, study_box, depth = 2, arrow_scale = 1, units = 
 
 
 def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font):
-        """Helper function to set up axis properties"""
+        '''
+        Helper function to set up axis properties
+        
+        Args:
+            - ax: matplotlib axis object
+            - x_scale: 'lin' or 'log' for x axis scale
+            - y_scale: 'lin' or 'log' for y axis scale
+            - xlim: [xlimo, xlimf] or None for auto
+            - ylim: [ylimo, ylimf] or None for auto
+            - cancel_limits: bool to flip the x axis (useful for zeta)
+            - x_axis: 'zeta' or 'years'
+            - evolution_type: 'total' or 'differential'
+            - font: font properties for labels
+            
+        Returns:
+            - None (modifies ax in place)
+            
+        Author: Marco Molina
+        '''
+
         if x_axis == 'years':
             ax.set_xlabel('Time (yr)', fontproperties=font)
             if evolution_type == 'total':
@@ -516,9 +262,209 @@ def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolutio
                 ax.set_ylabel('Magnetic Energy Induction log[erg/s]', fontproperties=font)
                 
 def should_plot_component(data, threshold=1e-30):
-        """Check if component has any non-zero values worth plotting"""
+        '''
+        Check if component has any non-zero values worth plotting
+        
+        Args:
+            - data: array-like data of the component
+            - threshold: minimum absolute value to consider for plotting
+            
+        Returns:
+            - bool indicating if the component should be plotted
+            
+        Author: Marco Molina
+        '''
         arr = np.asarray(data)
         return np.any(np.abs(arr) > threshold)
+
+
+def plot_percentile_evolution(percentile_data, plot_params, induction_params,
+                            grid_t, grid_zeta,
+                            verbose=True, save=False, folder=None):
+    '''
+    Plot the evolution of precomputed percentile thresholds over time or redshift.
+
+    Args:
+        - percentile_data: dict with accumulated data from multiple snapshots:
+            * 'percentiles': list of 2D arrays (n_levels,) per snapshot
+            * 'levels': list containing the same percentile levels (or single array)
+            * optional 'global_min': list of 1D arrays per snapshot
+            * optional 'global_max': list of 1D arrays per snapshot
+        - plot_params: dict with plotting options:
+            * x_axis: 'zeta' or 'years'
+            * x_scale, y_scale: 'lin' or 'log'
+            * xlim, ylim: [min, max] or None
+            * figure_size: [width, height]
+            * line_widths: [percentile_lines, max_line]
+            * alpha_fill: transparency for shaded bands
+            * title: plot title
+            * dpi: dots per inch
+            * run: identifier for filenames
+        - induction_params: dict with metadata (used for file naming)
+        - grid_t: time grid
+        - grid_zeta: redshift grid
+        - verbose: bool
+        - save: bool
+        - folder: path to save plots
+
+    Returns:
+        - matplotlib Figure or None if no data
+        
+    Author: Marco Molina
+    '''
+
+    # Extract and combine data from list format to array format
+    pct_list = percentile_data.get('percentiles', [])
+    levels_list = percentile_data.get('levels', [])
+    
+    if not pct_list or not levels_list:
+        if verbose:
+            print('Percentile evolution: no percentile data to plot')
+        return None
+    
+    # Convert list of percentile arrays to 2D array (n_snap, n_levels)
+    pct = np.array(pct_list, dtype=float)
+    
+    # Levels should be the same for all snapshots; extract from first
+    if isinstance(levels_list[0], (list, np.ndarray)):
+        levels = np.asarray(levels_list[0], dtype=float)
+    else:
+        levels = np.asarray(levels_list, dtype=float)
+
+    if pct.size == 0 or levels.size == 0:
+        if verbose:
+            print('Percentile evolution: no valid percentile data to plot')
+        return None
+
+    if pct.ndim != 2:
+        raise ValueError(f'percentiles must form a 2D array; got shape {pct.shape}')
+
+    n_snap, n_levels = pct.shape
+    if levels.size != n_levels:
+        raise ValueError(f'levels length ({levels.size}) must match percentile columns ({n_levels})')
+
+    # Prepare x-axis (plots all snapshots like plot_integral_evolution)
+    x_axis = plot_params.get('x_axis', 'zeta')
+    if x_axis == 'years':
+        x = np.array([grid_t[i] * time_to_yr for i in range(n_snap)], dtype=float)
+        xlabel = 'Time (yr)'
+    else:
+        x = np.array([grid_zeta[i] for i in range(n_snap)], dtype=float)
+        if x.size and x[-1] < 0:
+            x[-1] = abs(x[-1])
+        xlabel = 'Redshift (z)'
+
+    # Sort levels ascending for consistent shading
+    sort_idx = np.argsort(levels)
+    levels_sorted = levels[sort_idx]
+    pct_sorted = pct[:, sort_idx]
+
+    # Matplotlib styling
+    plt.rcParams.update({
+        'font.size': 16,
+        'axes.labelsize': 16,
+        'axes.titlesize': 18,
+        'xtick.labelsize': 14,
+        'ytick.labelsize': 14,
+        'legend.fontsize': 14,
+        'figure.titlesize': 20
+    })
+
+    font = FontProperties(); font.set_size(12)
+    font_title = FontProperties(); font_title.set_style('normal'); font_title.set_weight('bold'); font_title.set_size(24)
+    font_legend = FontProperties(); font_legend.set_size(12)
+
+    x_scale = plot_params.get('x_scale', 'lin')
+    y_scale = plot_params.get('y_scale', 'log')
+    xlim = plot_params.get('xlim', None)
+    ylim = plot_params.get('ylim', None)
+    figure_size = plot_params.get('figure_size', [12, 6])
+    dpi = plot_params.get('dpi', 300)
+    run = plot_params.get('run', '_')
+    title = plot_params.get('title', 'Percentile Threshold Evolution')
+    line_widths = plot_params.get('line_widths', [2.0, 1.5])
+    alpha_fill = plot_params.get('alpha_fill', 0.20)
+    
+    lw_pct = line_widths[0]
+    lw_max = line_widths[1] if len(line_widths) > 1 else line_widths[0]
+
+    fig, ax = plt.subplots(figsize=figure_size, dpi=dpi)
+
+    colors = plt.cm.viridis(np.linspace(0.15, 0.85, levels_sorted.size))
+
+    # Shaded bands between successive percentiles
+    for i in range(levels_sorted.size - 1):
+        lower = pct_sorted[:, i]
+        upper = pct_sorted[:, i + 1]
+        ax.fill_between(x, lower, upper, color=colors[i + 1], alpha=alpha_fill, label='_nolegend_')
+
+    # Optional band from min to lowest percentile if provided
+    gmin_list = percentile_data.get('global_min', None)
+    if gmin_list is not None:
+        gmin = np.asarray(gmin_list, dtype=float)
+        if gmin.size == x.size:
+            ax.fill_between(x, gmin, pct_sorted[:, 0], color=colors[0], alpha=alpha_fill, label='_nolegend_')
+
+    # Plot percentile curves
+    for i, lvl in enumerate(levels_sorted):
+        if float(lvl).is_integer():
+            lbl = f'{int(lvl)}th pct'
+        else:
+            lbl = f'{lvl:.1f}th pct'
+        ax.plot(x, pct_sorted[:, i], color=colors[i], linewidth=lw_pct, label=lbl)
+
+    # Optional max curve
+    gmax_list = percentile_data.get('global_max', None)
+    if gmax_list is not None:
+        gmax = np.asarray(gmax_list, dtype=float)
+        if gmax.size == x.size:
+            ax.plot(x, gmax, color='#111111', linewidth=lw_max, linestyle='--', label='Max')
+    
+    if x_scale == 'log':
+        ax.set_xscale('log')
+        ax.set_xlabel(f'{xlabel} log', fontproperties=font)
+    else:
+        ax.set_xlabel(xlabel, fontproperties=font)
+    
+    if y_scale == 'log':
+        ax.set_yscale('log')
+        ax.set_ylabel('Field amplitude log', fontproperties=font)
+    else:
+        ax.set_ylabel('Field amplitude', fontproperties=font)
+    
+    if xlim:
+        ax.set_xlim(xlim[0], xlim[1])
+    if ylim:
+        ax.set_ylim(ylim[0], ylim[1])
+
+    ax.grid(alpha=0.3)
+    ax.legend(prop=font_legend)
+
+    if x_axis == 'zeta':
+        ax.invert_xaxis()
+
+    fig.tight_layout()
+
+    if save:
+        if folder is None:
+            folder = os.getcwd()
+
+        axis_info = f"{x_axis}_{x_scale}_{y_scale}"
+        limit_info = f"{xlim[0] if xlim else 'auto'}_{ylim[0] if ylim else 'auto'}_{ylim[1] if ylim else 'auto'}"
+        sim_info = f"{induction_params.get('up_to_level','')}_{induction_params.get('F','')}_{induction_params.get('vir_kind','')}vir_{induction_params.get('rad_kind','')}rad_{induction_params.get('region','None')}Region"
+        buffer_info = 'Buffered' if induction_params.get('buffer', False) else 'NoBuffer'
+
+        file_title = '_'.join(title.split()[:3])
+        filename = f"{folder}/{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}_{run}.png"
+        fig.savefig(filename, dpi=dpi)
+        if verbose:
+            print(f'Percentile evolution plot saved as: {filename}')
+
+    if verbose:
+        lvl_str = ', '.join([str(l) for l in levels_sorted])
+        print(f'Plotted percentile evolution for levels: {lvl_str}')
+
+    return fig
         
         
 def plot_integral_evolution(evolution_data, plot_params, induction_params,
@@ -1200,8 +1146,8 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     def plot_signed(ax, x, y, lw, ls, color, label, eps=induction_params.get('epsilon', 1e-30)):
         """
         Plot a single continuous line where:
-          - positive intervals use linestyle `ls`
-          - negative intervals use linestyle ':'
+            - positive intervals use linestyle `ls`
+            - negative intervals use linestyle ':'
         No gaps between positive and negative segments.
         Returns a single Line2D handle for legend.
         """
@@ -1354,7 +1300,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
             # bbox_to_anchor is in figure coordinates when bbox_transform=fig1.transFigure.
             # ncol=2 forces two columns; adjust bbox_to_anchor if you need a different offset.
             fig1.legend(unique_handles, unique_labels, prop=font_legend,
-                        loc='upper right', bbox_to_anchor=(0.49, 0.31),
+                        loc='best', bbox_to_anchor=(0.49, 0.31),
                         bbox_transform=fig1.transFigure, ncol=2, frameon=True)
             # Slightly adjust subplot to avoid overlapping the legend or title
             fig1.subplots_adjust(top=0.90, right=0.86)
@@ -1401,7 +1347,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
 
 def distribution_check(arr, quantity, plot_params, induction_params,
                     grid_t, grid_z, rad, ref_field=None, ref_scale=1.0,
-                    verbose=True, save=False, folder=None):
+                    clean=False, verbose=True, save=False, folder=None):
     '''
     Given a 3D array field (or list of patches per snapshot), generates two separate figures per snapshot:
         - Figure 1: Analysis plots (4 subplots)
@@ -1445,6 +1391,7 @@ def distribution_check(arr, quantity, plot_params, induction_params,
         - ref_field: optional list/array of 3D arrays (same format as arr) for relative plot (cell-wise |arr| / |ref_field|)
                 If ref_field equals arr element-wise, the relative plot will be 1 wherever ref!=0
         - ref_scale: scaling factor to apply to ref_field values (in case units differ). This can be a single float or an array with a values per patch.
+        - clean: bool indicating whether clean_field was applied (for AMR grids). When True and working with patches (AMR), cells marked as 0.0 by clean_field are excluded from total count.
         - verbose: bool for verbose output
         - save: bool to save plots
         - folder: folder to save plots (if None, uses current directory)
@@ -1549,31 +1496,13 @@ def distribution_check(arr, quantity, plot_params, induction_params,
             arr_use = central_crop(current_raw)
             flat = arr_use.flatten()
 
-        n_cells = flat.size
-
-        # Subsample for percentile curves
-        sub_n = int(subsample_fraction * n_cells)
-        sub_idx = np.random.choice(n_cells, size=sub_n, replace=False)
-        sub_vals = np.abs(flat[sub_idx])
-
-        # Relative array if provided (cell-by-cell |field| / (|ref| * ref_scale))
-        rel_vals = None
+        # Prepare reference field if provided (must be done before filtering to maintain correspondence)
+        ref_flat = None
         if current_ref_raw is not None:
             if is_patches:
                 # For AMR: ref_scale could be array-like (one per patch)
                 # Apply per-patch scaling before flattening
                 ref_flat = _flatten_patches(current_ref_raw, scales=current_ref_scale_raw)
-                if ref_flat.size == flat.size:
-                    ref_sub = np.abs(ref_flat[sub_idx])
-                    field_sub = np.abs(flat[sub_idx])
-                    nonzero = ref_sub != 0
-                    if np.any(nonzero):
-                        rel_vals = np.zeros_like(field_sub)
-                        rel_vals[nonzero] = field_sub[nonzero] / ref_sub[nonzero]
-                    elif verbose:
-                        print(f"Warning: Reference field is zero everywhere at snapshot {snap_i}. Skipping relative plot.")
-                elif verbose:
-                    print(f"Warning: ref_field length {ref_flat.size} != field length {flat.size} at snapshot {snap_i}. Skipping relative plot.")
             else:
                 # For uniform grids: ref_scale should be scalar
                 assert current_ref_raw.shape == current_raw.shape, f"ref_field must match arr shape at snapshot {snap_i}"
@@ -1583,7 +1512,34 @@ def distribution_check(arr, quantity, plot_params, induction_params,
                 else:
                     ref_scale_scalar = float(current_ref_scale_raw)
                 ref_flat = np.abs(ref_use.flatten()) * ref_scale_scalar
-                ref_sub = ref_flat[sub_idx]
+
+        # Filter out cells marked as 0.0 by clean_field when appropriate
+        # This applies when clean=True and working with patches (AMR)
+        # Important: apply the same mask to both flat and ref_flat to maintain correspondence
+        if clean and is_patches:
+            mask = flat != 0.0
+            n_filtered = np.sum(~mask)
+            flat = flat[mask]
+            if ref_flat is not None:
+                if ref_flat.size == (mask.size):
+                    ref_flat = ref_flat[mask]
+                elif verbose:
+                    print(f"Warning: ref_field size mismatch at snapshot {snap_i} before filtering. Ref: {ref_flat.size}, Field: {mask.size}")
+            if verbose and n_filtered > 0:
+                print(f"Snapshot {snap_i}: Filtered out {n_filtered} cells marked as 0.0 by clean_field. Remaining cells: {flat.size}")
+        
+        n_cells = flat.size
+
+        # Subsample for percentile curves
+        sub_n = int(subsample_fraction * n_cells)
+        sub_idx = np.random.choice(n_cells, size=sub_n, replace=False)
+        sub_vals = np.abs(flat[sub_idx])
+
+        # Relative array if provided (cell-by-cell |field| / (|ref| * ref_scale))
+        rel_vals = None
+        if ref_flat is not None:
+            if ref_flat.size == flat.size:
+                ref_sub = np.abs(ref_flat[sub_idx])
                 field_sub = np.abs(flat[sub_idx])
                 nonzero = ref_sub != 0
                 if np.any(nonzero):
@@ -1591,6 +1547,8 @@ def distribution_check(arr, quantity, plot_params, induction_params,
                     rel_vals[nonzero] = field_sub[nonzero] / ref_sub[nonzero]
                 elif verbose:
                     print(f"Warning: Reference field is zero everywhere at snapshot {snap_i}. Skipping relative plot.")
+            elif verbose:
+                print(f"Warning: ref_field length {ref_flat.size} != field length {flat.size} at snapshot {snap_i}. Skipping relative plot.")
 
         # Percentiles
         p_grid = np.linspace(0, 100, p_points)
