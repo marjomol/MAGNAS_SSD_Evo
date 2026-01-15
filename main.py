@@ -34,11 +34,200 @@ if __name__ == "__main__":
                                             rad_kind=ind_params["rad_kind"], 
                                             verbose=out_params["verbose"])
         # Create the regions of interest in the grid
-        Region = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
-                            F=out_params["F"], reg=ind_params["region"], 
+        Region_Coord, Region_Size = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
+                    F=ind_params["F"], reg=ind_params["region"], 
                             verbose=out_params["verbose"])
         
-        # Process each iteration in parallel
+        # Prepare per-snapshot flags from config indices
+        profile_idx_set = set([out_params["it"][k] for k in prof_plot_params["it_indx"]]) if len(out_params["it"]) else set()
+        debug_idx_set = set([out_params["it"][k] for k in debug_params["it_indx"]]) if len(out_params["it"]) else set()
+
+        # Process all configured levels, one parallel batch per level
+        for L, lvl in enumerate(ind_params["level"]):
+            # Initialize result dictionaries for this level based on what's enabled
+            all_data = {}
+            all_vectorial = {} if ind_params["return_vectorial"] else None
+            all_induction = {} if ind_params["return_induction"] else None
+            all_magnitudes = {} if ind_params["mag"] else None
+            all_induction_energy = {} if ind_params["return_induction_energy"] else None
+            all_induction_energy_integral = {} if ind_params["energy_evolution"] else None
+            all_induction_test_energy_integral = {} if ind_params["energy_evolution"] else None
+            all_induction_energy_profiles = {} if ind_params["profiles"] else None
+            all_induction_uniform = {} if ind_params["projection"] else None
+            all_diver_B_percentiles = {} if ind_params["percentiles"] else None
+            all_debug_fields = {} if out_params["debug"][0] else None
+            first_iteration = True
+
+            from concurrent.futures import ProcessPoolExecutor
+            futures = []
+            with ProcessPoolExecutor(max_workers=out_params["ncores"]) as executor:
+                for i, sims in enumerate(out_params["sims"]):
+                    for j, it in enumerate(out_params["it"]):
+                        profiles_flag = bool(ind_params["profiles"]) and (it in profile_idx_set)
+                        debug_flag = out_params["debug"] if it in debug_idx_set else [False, None]
+
+                        fut = executor.submit(
+                            process_iteration,
+                            ind_params["components"],
+                            out_params["dir_grids"],
+                            out_params["dir_gas"],
+                            out_params["dir_params"][i],
+                            sims,
+                            it,
+                            Coords[i + j],
+                            Region_Coord[i + j],
+                            Rad[i + j],
+                            ind_params["rmin"][i],
+                            lvl,
+                            lvl,
+                            ind_params["nmax"][i],
+                            ind_params["size"][i],
+                            ind_params["H0"],
+                            ind_params["a0"],
+                            test=ind_params["test_params"],
+                            units=ind_params["units"],
+                            nbins=ind_params["nbins"][i],
+                            logbins=ind_params["logbins"],
+                            stencil=ind_params["stencil"],
+                            buffer=ind_params["buffer"],
+                            interpol=ind_params["interpol"],
+                            nghost=ind_params["nghost"],
+                            bitformat=out_params["bitformat"],
+                            mag=ind_params["mag"],
+                            energy_evolution=ind_params["energy_evolution"],
+                            profiles=profiles_flag,
+                            projection=ind_params["projection"],
+                            percentiles=ind_params["percentiles"],
+                            percentile_levels=ind_params["percentile_levels"],
+                            debug=debug_flag,
+                            return_vectorial=ind_params["return_vectorial"],
+                            return_induction=ind_params["return_induction"],
+                            return_induction_energy=ind_params["return_induction_energy"],
+                            verbose=out_params["verbose"],
+                        )
+                        futures.append(fut)
+
+                for fut in futures:
+                    data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields = fut.result()
+
+                    if first_iteration:
+                        for key in data.keys():
+                            all_data[key] = []
+                        if all_vectorial is not None and vectorial is not None:
+                            for key in vectorial.keys():
+                                all_vectorial[key] = []
+                        if all_induction is not None and induction is not None:
+                            for key in induction.keys():
+                                all_induction[key] = []
+                        if all_magnitudes is not None and magnitudes is not None:
+                            for key in magnitudes.keys():
+                                all_magnitudes[key] = []
+                        if all_induction_energy is not None and induction_energy is not None:
+                            for key in induction_energy.keys():
+                                all_induction_energy[key] = []
+                        if all_induction_energy_integral is not None and induction_energy_integral is not None:
+                            for key in induction_energy_integral.keys():
+                                all_induction_energy_integral[key] = []
+                        if all_induction_test_energy_integral is not None and induction_test_energy_integral is not None:
+                            for key in induction_test_energy_integral.keys():
+                                all_induction_test_energy_integral[key] = []
+                        if all_induction_energy_profiles is not None and induction_energy_profiles is not None:
+                            for key in induction_energy_profiles.keys():
+                                all_induction_energy_profiles[key] = []
+                        if all_induction_uniform is not None and induction_uniform is not None:
+                            for key in induction_uniform.keys():
+                                all_induction_uniform[key] = []
+                        if all_diver_B_percentiles is not None and diver_B_percentiles is not None:
+                            for key in diver_B_percentiles.keys():
+                                all_diver_B_percentiles[key] = []
+                        if all_debug_fields is not None and debug_fields is not None:
+                            for key in debug_fields.keys():
+                                all_debug_fields[key] = []
+                        first_iteration = False
+
+                    for key in data.keys():
+                        all_data[key].append(data[key])
+                    if all_vectorial is not None and vectorial is not None:
+                        for key in vectorial.keys():
+                            all_vectorial[key].append(vectorial[key])
+                    if all_induction is not None and induction is not None:
+                        for key in induction.keys():
+                            all_induction[key].append(induction[key])
+                    if all_magnitudes is not None and magnitudes is not None:
+                        for key in magnitudes.keys():
+                            all_magnitudes[key].append(magnitudes[key])
+                    if all_induction_energy is not None and induction_energy is not None:
+                        for key in induction_energy.keys():
+                            all_induction_energy[key].append(induction_energy[key])
+                    if all_induction_energy_integral is not None and induction_energy_integral is not None:
+                        for key in induction_energy_integral.keys():
+                            all_induction_energy_integral[key].append(induction_energy_integral[key])
+                    if all_induction_test_energy_integral is not None and induction_test_energy_integral is not None:
+                        for key in induction_test_energy_integral.keys():
+                            all_induction_test_energy_integral[key].append(induction_test_energy_integral[key])
+                    if all_induction_energy_profiles is not None and induction_energy_profiles is not None:
+                        for key in induction_energy_profiles.keys():
+                            all_induction_energy_profiles[key].append(induction_energy_profiles[key])
+                    if all_induction_uniform is not None and induction_uniform is not None:
+                        for key in induction_uniform.keys():
+                            all_induction_uniform[key].append(induction_uniform[key])
+                    if all_diver_B_percentiles is not None and diver_B_percentiles is not None:
+                        for key in diver_B_percentiles.keys():
+                            all_diver_B_percentiles[key].append(diver_B_percentiles[key])
+                    if all_debug_fields is not None and debug_fields is not None:
+                        for key in debug_fields.keys():
+                            all_debug_fields[key].append(debug_fields[key])
+
+            # Plotting and post-processing driven by config for this level
+            if ind_params["energy_evolution"] and all_induction_energy_integral is not None:
+                induction_energy_integral_evo = induction_energy_integral_evolution(
+                    ind_params["components"], all_induction_energy_integral,
+                    ind_params['evolution_type'], ind_params['derivative'],
+                    all_data['rho_b'], all_data['grid_time'], all_data['grid_zeta'],
+                    verbose=out_params["verbose"])
+                ind_params["up_to_level"] = lvl
+                plot_integral_evolution(
+                    induction_energy_integral_evo,
+                    evo_plot_params, ind_params,
+                    all_data['grid_time'], all_data['grid_zeta'],
+                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                    folder=out_params['image_folder']
+                )
+                print(f"Ploting " + evo_plot_params["title"] + f" completed (level {lvl}).")
+
+            if ind_params["profiles"] and all_induction_energy_profiles is not None:
+                ind_params["up_to_level"] = lvl
+                plot_radial_profiles(
+                    all_induction_energy_profiles,
+                    prof_plot_params, ind_params,
+                    all_data['grid_time'], all_data['grid_zeta'],
+                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                    folder=out_params['image_folder']                
+                )
+                print(f"Ploting " + prof_plot_params["title"] + f" completed (level {lvl}).")
+
+            if ind_params["percentiles"] and all_diver_B_percentiles is not None:
+                plot_percentile_evolution(
+                    all_diver_B_percentiles,
+                    percentile_plot_params, ind_params,
+                    all_data['grid_time'], all_data['grid_zeta'],
+                    verbose=out_params['verbose'], save=out_params['save'],
+                    folder=out_params['image_folder']
+                )
+                print(f"Ploting " + percentile_plot_params["title"] + f" completed (level {lvl}).")
+
+            if out_params["debug"][0] and ind_params["components"]["divergence"] and all_debug_fields:
+                inv_resolution = [1.0 / np.array(all_data['resolution'][i]) for i in range(len(all_data['resolution']))]
+                for field_key, ref_key, ref_scale_val, quantity in zip(['clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2'],
+                                                        ['clus_B2', 'clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2'],
+                                                        [1.0, inv_resolution, 1.0, 1.0, 1.0, 1.0],
+                                                        debug_params['quantities']):
+                    distribution_check(all_debug_fields[field_key], quantity, debug_params, ind_params,
+                                    all_data['grid_time'], all_data['grid_zeta'],
+                                    Rad[-1], ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
+                                    clean=out_params["debug"][2], verbose=out_params["verbose"], save=out_params["save"],
+                                    folder=out_params["image_folder"])
+                    print(f"Ploting distribution check for " + quantity + f" completed (level {lvl}).")
 
     else:
         for L in range(len(ind_params["level"])):
@@ -59,18 +248,18 @@ if __name__ == "__main__":
                                 F=ind_params["F"], reg=ind_params["region"], 
                                 verbose=out_params["verbose"])
             
-            # Initialize result dictionaries before the loop
+            # Initialize result dictionaries before the loop (conditional based on config)
             all_data = {}
-            all_vectorial = {}
-            all_induction = {}
-            all_magnitudes = {}
-            all_induction_energy = {}
-            all_induction_energy_integral = {}
-            all_induction_test_energy_integral = {}
-            all_induction_energy_profiles = {}
-            all_induction_uniform = {}
-            all_diver_B_percentiles = {}
-            all_debug_fields = {}
+            all_vectorial = {} if ind_params["return_vectorial"] else None
+            all_induction = {} if ind_params["return_induction"] else None
+            all_magnitudes = {} if ind_params["mag"] else None
+            all_induction_energy = {} if ind_params["return_induction_energy"] else None
+            all_induction_energy_integral = {} if ind_params["energy_evolution"] else None
+            all_induction_test_energy_integral = {} if ind_params["energy_evolution"] else None
+            all_induction_energy_profiles = {} if ind_params["profiles"] else None
+            all_induction_uniform = {} if ind_params["projection"] else None
+            all_diver_B_percentiles = {} if ind_params["percentiles"] else None
+            all_debug_fields = {} if out_params["debug"][0] else None
 
             # Flag to track first iteration for dictionary initialization
             first_iteration = True
@@ -79,7 +268,7 @@ if __name__ == "__main__":
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 for it, j in zip(out_params["it"], range(len(out_params["it"]))):
                     
-                    data, _, _, _, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, _, diver_B_percentiles, debug_fields = process_iteration(
+                    data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields = process_iteration(
                         ind_params["components"], 
                         out_params["dir_grids"], 
                         out_params["dir_gas"],
@@ -101,12 +290,13 @@ if __name__ == "__main__":
                         mag=ind_params["mag"],
                         energy_evolution=ind_params["energy_evolution"],
                         profiles=ind_params["profiles"] if it in [out_params["it"][k] for k in prof_plot_params["it_indx"]] else False,
-                        # profiles=ind_params["profiles"],
                         projection=ind_params["projection"],
                         percentiles=ind_params["percentiles"],
                         percentile_levels=ind_params["percentile_levels"],
-                        debug=out_params["debug"] if it in [out_params["it"][k] for k in debug_params["it_indx"]] else [False, None],                        
-                        # debug=out_params["debug"]
+                        debug=out_params["debug"] if it in [out_params["it"][k] for k in debug_params["it_indx"]] else [False, None],
+                        return_vectorial=ind_params["return_vectorial"],
+                        return_induction=ind_params["return_induction"],
+                        return_induction_energy=ind_params["return_induction_energy"],
                         verbose=out_params["verbose"])
                     
                     # Initialize dictionaries on first iteration
@@ -115,18 +305,21 @@ if __name__ == "__main__":
                         for key in data.keys():
                             all_data[key] = []
                         
-                        # for key in vectorial.keys():
-                        #     all_vectorial[key] = []
+                        if vectorial is not None:
+                            for key in vectorial.keys():
+                                all_vectorial[key] = []
                         
-                        # for key in induction.keys():
-                        #     all_induction[key] = []
+                        if induction is not None:
+                            for key in induction.keys():
+                                all_induction[key] = []
                         
-                        # if magnitudes is not None:
-                        #     for key in magnitudes.keys():
-                        #         all_magnitudes[key] = []
+                        if magnitudes is not None:
+                            for key in magnitudes.keys():
+                                all_magnitudes[key] = []
                         
-                        # for key in induction_energy.keys():
-                        #     all_induction_energy[key] = []
+                        if induction_energy is not None:
+                            for key in induction_energy.keys():
+                                all_induction_energy[key] = []
                         
                         if induction_energy_integral is not None:
                             for key in induction_energy_integral.keys():
@@ -144,9 +337,9 @@ if __name__ == "__main__":
                             for key in diver_B_percentiles.keys():
                                 all_diver_B_percentiles[key] = []
                         
-                        # if induction_uniform is not None:
-                        #     for key in induction_uniform.keys():
-                        #         all_induction_uniform[key] = []
+                        if induction_uniform is not None:
+                            for key in induction_uniform.keys():
+                                all_induction_uniform[key] = []
                         
                         if debug_fields is not None:
                             for key in debug_fields.keys():
@@ -154,22 +347,24 @@ if __name__ == "__main__":
                         
                         first_iteration = False
                     
-                    # Append results from current iteration to accumulated results
                     for key in data.keys():
                         all_data[key].append(data[key])
                     
-                    # for key in vectorial.keys():
-                    #     all_vectorial[key].append(vectorial[key])
+                    if all_vectorial is not None and vectorial is not None:
+                        for key in vectorial.keys():
+                            all_vectorial[key].append(vectorial[key])
                     
-                    # for key in induction.keys():
-                    #     all_induction[key].append(induction[key])
+                    if all_induction is not None and induction is not None:
+                        for key in induction.keys():
+                            all_induction[key].append(induction[key])
                     
-                    # if magnitudes is not None:
-                    #     for key in magnitudes.keys():
-                    #         all_magnitudes[key].append(magnitudes[key])
+                    if all_magnitudes is not None and magnitudes is not None:
+                        for key in magnitudes.keys():
+                            all_magnitudes[key].append(magnitudes[key])
                     
-                    # for key in induction_energy.keys():
-                    #     all_induction_energy[key].append(induction_energy[key])
+                    if all_induction_energy is not None and induction_energy is not None:
+                        for key in induction_energy.keys():
+                            all_induction_energy[key].append(induction_energy[key])
                     
                     if induction_energy_integral is not None:
                         for key in induction_energy_integral.keys():
@@ -187,9 +382,9 @@ if __name__ == "__main__":
                         for key in diver_B_percentiles.keys():
                             all_diver_B_percentiles[key].append(diver_B_percentiles[key])
                     
-                    # if induction_uniform is not None:
-                    #     for key in induction_uniform.keys():
-                    #         all_induction_uniform[key].append(induction_uniform[key])
+                    if induction_uniform is not None:
+                        for key in induction_uniform.keys():
+                            all_induction_uniform[key].append(induction_uniform[key])
                     
                     if debug_fields is not None:
                         for key in debug_fields.keys():
@@ -210,7 +405,6 @@ if __name__ == "__main__":
                 print("Energy evolution calculation is disabled in the configuration. Skipping evolution plots.")
                 
                 ind_params["up_to_level"] = ind_params["level"][L]
-                
             else:
                 induction_energy_integral_evo = induction_energy_integral_evolution(
                     ind_params["components"], all_induction_energy_integral,

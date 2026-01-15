@@ -44,8 +44,8 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [2], # Max. level of the AMR grid to be read
-    "up_to_level": [2], # AMR level up to which calculate
+    "level": [7], # Max. level of the AMR grid to be read
+    "up_to_level": [7], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
@@ -59,8 +59,8 @@ IND_PARAMS = {
     "drag": True, # Process the drag induction component
     "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
-    "buffer": False, # Use buffer zones to avoid boundary effects (recommended but slower)
-    "interpol": 'TSC', # Interpolation method for the buffer zones ('TSC' or 'SPH')
+    "buffer": True, # Use buffer zones to avoid boundary effects (recommended but slower)
+    "interpol": 'NEAREST', # Interpolation method for the buffer zones ('TSC', 'SPH', 'LINEAR', 'NEAREST')
     "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
     "energy_evolution": False, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
@@ -69,7 +69,10 @@ IND_PARAMS = {
     "projection": False, # Calculate the projection of the induction components
     "A2U": False, # Transform the AMR grid to a uniform grid
     "percentiles": True, # Calculate percentile thresholds of the magnetic field divergence
-    "percentile_levels": (100, 90, 75, 50, 25), # Percentile thresholds to compute
+    "percentile_levels": (95, 90, 75, 50, 25), # Percentile thresholds to compute
+    "return_vectorial": False, # Return the vectorial components of the induction terms
+    "return_induction": False, # Return the induction terms arrays
+    "return_induction_energy": False, # Return the induction energy terms arrays
     "test_params": {
         "test": False,
         "B0": 2.3e-8
@@ -81,22 +84,23 @@ IND_PARAMS = {
 OUTPUT_PARAMS = {
     # "save": False,
     # "verbose": False,
-    # "debug": [False, 1],
+    "debug": [False, 1, True],
     "save": True,
     "verbose": True,
-    "debug": [True, 1, True], # [Bool, Grid debugging (0: Uniform, 1: AMR), Clean fields (If AMR)],
+    # "debug": [True, 1, True], # [Bool, Grid debugging (0: Uniform, 1: AMR), Clean fields (If AMR)],
     "chunk_factor": 2,
     "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
-    "Save_Cores": 8, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
+    "Save_Cores": 4, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_1',
+    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_10_nearest_buffer',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [1050], # For different redshift snap iterations analysis
-    "it": [1800, 2119],
+    # "it": [1800, 2119],
     # "it": list(range(1000, 2001, 50)) + [2119],
     # "it": list(range(250, 2001, 50)) + [2119], # For different redshift snap iterations analysis
+    "it": list(range(300, 2001, 50)) + [2119], # For different redshift snap iterations analysis
     # "it": list(range(0, 2001, 50)) + [2119], # For different redshift snap iterations analysis
     "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
@@ -176,7 +180,7 @@ DEBUG_PARAMS = {
 }
 
 PERCENTILE_PLOT_PARAMS = {
-    'x_axis': 'zeta', # 'zeta' or 'years'
+    'x_axis': 'years', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
     'xlim': None, # None for auto
@@ -184,7 +188,8 @@ PERCENTILE_PLOT_PARAMS = {
     'figure_size': [12, 6], # [width, height]
     'line_widths': [2.0, 1.5], # [percentile_lines, max_line]
     'alpha_fill': 0.20, # transparency for shaded bands
-    'title': 'Percentile Threshold Evolution',
+    'title': 'Divergence Relative Error',
+    # 'title': ' Percentile Threshold Evolution',
     'dpi': 300,
     'run': OUTPUT_PARAMS["run"]
 }
@@ -313,52 +318,125 @@ IND_PARAMS["components"] = {
     "total": IND_PARAMS["total"]
 }
 
-## Check if the arrays can fit in memory or if an alternative memory handeling method is needed
+## Parallelization configuration based on available resources
 
-# Get the total RAM capacity in bytes
-ram_capacity = psutil.virtual_memory().total
+# Get system information
+ram_capacity = psutil.virtual_memory().total  # Total RAM in bytes
+ram_capacity_gb = ram_capacity / (1024 ** 3)  # Convert to GB
+cpu_count = psutil.cpu_count(logical=True)    # Total CPU cores (including hyperthreading)
+cpu_physical = psutil.cpu_count(logical=False) # Physical cores only
 
-# Convert the RAM capacity to gigabytes
-ram_capacity_gb = ram_capacity / (1024 ** 3)
+print(f"\n{'='*60}")
+print(f"SYSTEM RESOURCES")
+print(f"{'='*60}")
+print(f"Total RAM: {ram_capacity_gb:.2f} GB")
+print(f"CPU cores: {cpu_physical} physical, {cpu_count} logical")
 
-print(f"Total RAM capacity: {ram_capacity_gb:.2f} GB")
-
+# Calculate expected memory usage
 max_nmax_index = int(np.argmax(IND_PARAMS["nmax"]))
 max_nmay_index = int(np.argmax(IND_PARAMS["nmay"]))
 max_nmaz_index = int(np.argmax(IND_PARAMS["nmaz"]))
 
-# Calculate the size of the arrays in bytes
-array_size = IND_PARAMS["nmax"][max_nmax_index] * IND_PARAMS["nmay"][max_nmay_index] * IND_PARAMS["nmaz"][max_nmaz_index]
-array_size_bytes =  array_size * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
+# Base grid size
+base_cells = IND_PARAMS["nmax"][max_nmax_index] * IND_PARAMS["nmay"][max_nmay_index] * IND_PARAMS["nmaz"][max_nmaz_index]
+array_size_bytes = base_cells * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
 
-print(f"Maximum size of the arrays involved: {array_size_bytes / (1024 ** 3):.2f} GB")
+# Estimate total memory footprint (considering multiple fields: Bx, By, Bz, vx, vy, vz, derivatives, etc.)
+# Typical run uses ~6 fields for input + ~10 for derivatives/outputs = ~16 arrays
+estimated_arrays_count = 16
+estimated_memory_gb = (array_size_bytes * estimated_arrays_count) / (1024 ** 3)
 
-# Check if the arrays will use more than 1/4 of the total RAM
-if array_size_bytes > (ram_capacity / 4):
-    mem = True
-    para = True
-    print("The arrays are too large to fit in memory:")
-    print(" - Parallel chunking will be used")
-    print(" - Arrays will be saved in the raw data folder, NOT as variables")
+print(f"\n{'='*60}")
+print(f"MEMORY ESTIMATION")
+print(f"{'='*60}")
+print(f"Base grid size: {IND_PARAMS['nmax'][max_nmax_index]} x {IND_PARAMS['nmay'][max_nmay_index]} x {IND_PARAMS['nmaz'][max_nmaz_index]}")
+print(f"Single array size: {array_size_bytes / (1024 ** 3):.3f} GB")
+print(f"Estimated total memory usage: {estimated_memory_gb:.2f} GB")
+print(f"Memory usage ratio: {100 * estimated_memory_gb / ram_capacity_gb:.1f}% of total RAM")
+
+# Decide on parallelization strategy
+print(f"\n{'='*60}")
+print(f"PARALLELIZATION CONFIGURATION")
+print(f"{'='*60}")
+
+# Automatic recommendation based on memory and CPU availability
+recommended_parallel = False
+recommended_ncores = OUTPUT_PARAMS["ncores"]  # Default from config
+
+# High memory usage (>40% RAM): recommend parallelization to distribute load across iterations
+if estimated_memory_gb > (0.4 * ram_capacity_gb):
+    print(f"⚠️  High memory usage detected ({estimated_memory_gb:.2f} GB > 40% of {ram_capacity_gb:.2f} GB)")
+    print(f"   Recommendation: Use parallel processing to handle multiple iterations efficiently")
+    recommended_parallel = True
+    # Use physical cores minus Save_Cores, leaving headroom for system
+    available_cores = max(1, cpu_physical - OUTPUT_PARAMS["Save_Cores"])
+    recommended_ncores = min(available_cores, len(OUTPUT_PARAMS["it"]))  # Don't exceed number of iterations
+    print(f"   Recommended cores: {recommended_ncores} (physical cores: {cpu_physical}, reserved: {OUTPUT_PARAMS['Save_Cores']})")
+    
+# Low memory, multiple iterations: can benefit from parallelization
+elif len(OUTPUT_PARAMS["it"]) > 1:
+    print(f"✓ Memory usage is manageable ({estimated_memory_gb:.2f} GB < 40% of {ram_capacity_gb:.2f} GB)")
+    print(f"  {len(OUTPUT_PARAMS['it'])} iterations to process")
+    available_cores = max(1, cpu_physical - OUTPUT_PARAMS["Save_Cores"])
+    recommended_ncores = min(available_cores, len(OUTPUT_PARAMS["it"]))
+    if recommended_ncores > 1:
+        print(f"  Recommendation: Parallel processing can speed up execution")
+        print(f"  Recommended cores: {recommended_ncores}")
+        recommended_parallel = True
+    else:
+        print(f"  Single core available after reserving {OUTPUT_PARAMS['Save_Cores']} for system")
+        recommended_parallel = False
+        
+# Single iteration: parallelization doesn't help
 else:
-    print("The arrays can fit in memory:")
-    ask = input("Do you want to use chunking? (y/n): ")
-    if ask.lower() == 'y':
-        mem = True
-        print(" - Chunking will be used")
-        ask2 = input("Do you want to use parallel chunking? (y/n): ")
-        if ask2.lower() == 'y':
-            para = True
-            print(" - Parallel chunking will be used")
-    else:
-        mem = False
-        para = False
-        print(" - Chunking will NOT be used")
-            
-    if OUTPUT_PARAMS["save"]:
-        print(" - Arrays will be saved in the raw data folder, NOT as variables")
-    else:
-        print(" - Arrays will be saved as variables")
+    print(f"✓ Single iteration mode - parallel processing not beneficial")
+    recommended_parallel = False
 
-OUTPUT_PARAMS["memory"] = mem
-OUTPUT_PARAMS["parallel"] = para
+# Interactive configuration
+if recommended_parallel:
+    ask = input(f"\nUse parallel processing with {recommended_ncores} cores? (y/n) [recommended]: ").strip().lower()
+    if ask == 'y' or ask == '':  # Default to yes
+        OUTPUT_PARAMS["parallel"] = True
+        OUTPUT_PARAMS["ncores"] = recommended_ncores
+        print(f"✓ Parallel processing ENABLED with {recommended_ncores} cores")
+    else:
+        OUTPUT_PARAMS["parallel"] = False
+        OUTPUT_PARAMS["ncores"] = 1
+        print(f"✓ Serial processing mode (1 core)")
+        ask_custom = input("  Do you want to manually set number of cores? (y/n): ").strip().lower()
+        if ask_custom == 'y':
+            try:
+                custom_ncores = int(input(f"  Enter number of cores (1-{cpu_count}): "))
+                if 1 <= custom_ncores <= cpu_count:
+                    OUTPUT_PARAMS["parallel"] = custom_ncores > 1
+                    OUTPUT_PARAMS["ncores"] = custom_ncores
+                    print(f"✓ Set to {custom_ncores} core(s)")
+                else:
+                    print(f"⚠️  Invalid input, keeping default: 1 core")
+            except ValueError:
+                print(f"⚠️  Invalid input, keeping default: 1 core")
+else:
+    # Serial mode by default
+    ask = input(f"\nParallelization not recommended for this configuration. Proceed in serial mode? (y/n) [yes]: ").strip().lower()
+    if ask == 'n':
+        # User wants to override
+        try:
+            custom_ncores = int(input(f"Enter number of cores to use (1-{cpu_count}): "))
+            if 1 <= custom_ncores <= cpu_count:
+                OUTPUT_PARAMS["parallel"] = custom_ncores > 1
+                OUTPUT_PARAMS["ncores"] = custom_ncores
+                print(f"✓ Override: using {custom_ncores} core(s)")
+            else:
+                print(f"⚠️  Invalid input, using serial mode")
+                OUTPUT_PARAMS["parallel"] = False
+                OUTPUT_PARAMS["ncores"] = 1
+        except ValueError:
+            print(f"⚠️  Invalid input, using serial mode")
+            OUTPUT_PARAMS["parallel"] = False
+            OUTPUT_PARAMS["ncores"] = 1
+    else:
+        OUTPUT_PARAMS["parallel"] = False
+        OUTPUT_PARAMS["ncores"] = 1
+        print(f"✓ Serial mode (1 core)")
+
+print(f"{'='*60}\n")

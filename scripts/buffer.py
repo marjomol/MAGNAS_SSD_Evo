@@ -63,6 +63,197 @@ def SPH_kernel(r, h):
         return 0.0
 
 @njit(fastmath=True)
+def nearest_interpolation(ipatch, i_patch, j_patch, k_patch,
+                        x, y, z,
+                        pres, nmax,
+                        patch_nx, patch_ny, patch_nz,
+                        patch_field, level_res,
+                        patches_pare, patches_nx, patches_ny, patches_nz,
+                        patches_x, patches_y, patches_z,
+                        patches_rx, patches_ry, patches_rz, patches_levels,
+                        coarse_field, arr_fields):
+    """
+    Nearest-neighbor interpolation: finds closest parent cell and copies its value.
+    Simple and conservative method that avoids introducing gradients.
+    
+    Author: Marco Molina
+    """
+    l0 = patches_levels[ipatch]
+    ipatch2 = ipatch
+    ii2 = i_patch
+    jj2 = j_patch
+    kk2 = k_patch
+
+    proper_bounds = False
+    while not proper_bounds:
+        ipare = patches_pare[ipatch2]
+        pare_l = patches_levels[ipare]
+        
+        if pare_l > 0:
+            pare_nx = patches_nx[ipare]
+            pare_ny = patches_ny[ipare]
+            pare_nz = patches_nz[ipare]
+            pare_field = arr_fields[ipare]
+        else:
+            pare_nx = nmax
+            pare_ny = nmax
+            pare_nz = nmax
+            pare_field = coarse_field
+
+        imin_pare = patches_x[ipatch2]
+        jmin_pare = patches_y[ipatch2]
+        kmin_pare = patches_z[ipatch2]
+
+        ii_pare = imin_pare + ii2 // 2
+        jj_pare = jmin_pare + jj2 // 2
+        kk_pare = kmin_pare + kk2 // 2
+        
+        if (ii_pare < pare_nx and ii_pare >= 0 and
+            jj_pare < pare_ny and jj_pare >= 0 and 
+            kk_pare < pare_nz and kk_pare >= 0):
+            proper_bounds = True
+
+        if ipare == 0 or proper_bounds:
+            break
+        else:
+            ipatch2 = ipare
+            ii2 = ii_pare
+            jj2 = jj_pare
+            kk2 = kk_pare
+    
+    # Clamp to valid range
+    if ii_pare < 0: ii_pare = 0
+    if ii_pare >= pare_nx: ii_pare = pare_nx - 1
+    if jj_pare < 0: jj_pare = 0
+    if jj_pare >= pare_ny: jj_pare = pare_ny - 1
+    if kk_pare < 0: kk_pare = 0
+    if kk_pare >= pare_nz: kk_pare = pare_nz - 1
+    
+    return float(pare_field[ii_pare, jj_pare, kk_pare])
+
+@njit(fastmath=True)
+def linear_interpolation(ipatch, i_patch, j_patch, k_patch,
+                        x, y, z,
+                        pres, nmax,
+                        patch_nx, patch_ny, patch_nz,
+                        patch_field, level_res,
+                        patches_pare, patches_nx, patches_ny, patches_nz,
+                        patches_x, patches_y, patches_z,
+                        patches_rx, patches_ry, patches_rz, patches_levels,
+                        coarse_field, arr_fields):
+    """
+    Linear extrapolation from nearest two parent cells in each direction.
+    More conservative than TSC but smoother than nearest-neighbor.
+    
+    Author: Marco Molina
+    """
+    l0 = patches_levels[ipatch]
+    ipatch2 = ipatch
+    ii2 = i_patch
+    jj2 = j_patch
+    kk2 = k_patch
+
+    proper_bounds = False
+    while not proper_bounds:
+        ipare = patches_pare[ipatch2]
+        pare_l = patches_levels[ipare]
+        
+        if pare_l > 0:
+            pare_nx = patches_nx[ipare]
+            pare_ny = patches_ny[ipare]
+            pare_nz = patches_nz[ipare]
+            pare_field = arr_fields[ipare]
+        else:
+            pare_nx = nmax
+            pare_ny = nmax
+            pare_nz = nmax
+            pare_field = coarse_field
+
+        imin_pare = patches_x[ipatch2]
+        jmin_pare = patches_y[ipatch2]
+        kmin_pare = patches_z[ipatch2]
+
+        ii_pare = imin_pare + ii2 // 2
+        jj_pare = jmin_pare + jj2 // 2
+        kk_pare = kmin_pare + kk2 // 2
+        
+        # For linear, need 2 cells in each direction for interpolation
+        if (ii_pare < pare_nx - 1 and ii_pare > 0 and
+            jj_pare < pare_ny - 1 and jj_pare > 0 and 
+            kk_pare < pare_nz - 1 and kk_pare > 0):
+            proper_bounds = True
+
+        if ipare == 0 or proper_bounds:
+            break
+        else:
+            ipatch2 = ipare
+            ii2 = ii_pare
+            jj2 = jj_pare
+            kk2 = kk_pare
+    
+    hx = level_res[pare_l]
+    
+    # Center of parent cell
+    x0_pare = patches_rx[ipare] + (ii_pare - 0.5) * hx
+    y0_pare = patches_ry[ipare] + (jj_pare - 0.5) * hx
+    z0_pare = patches_rz[ipare] + (kk_pare - 0.5) * hx
+
+    # Linear interpolation in each direction separately
+    # x-direction
+    if x < x0_pare:
+        v0 = pare_field[max(0, ii_pare - 1), jj_pare, kk_pare]
+        v1 = pare_field[ii_pare, jj_pare, kk_pare]
+        x0 = x0_pare - hx
+        x1 = x0_pare
+    else:
+        v0 = pare_field[ii_pare, jj_pare, kk_pare]
+        v1 = pare_field[min(pare_nx - 1, ii_pare + 1), jj_pare, kk_pare]
+        x0 = x0_pare
+        x1 = x0_pare + hx
+    
+    if abs(x1 - x0) > 1e-10:
+        val_x = v0 + (v1 - v0) * (x - x0) / (x1 - x0)
+    else:
+        val_x = v0
+    
+    # y-direction
+    if y < y0_pare:
+        v0 = pare_field[ii_pare, max(0, jj_pare - 1), kk_pare]
+        v1 = pare_field[ii_pare, jj_pare, kk_pare]
+        y0 = y0_pare - hx
+        y1 = y0_pare
+    else:
+        v0 = pare_field[ii_pare, jj_pare, kk_pare]
+        v1 = pare_field[ii_pare, min(pare_ny - 1, jj_pare + 1), kk_pare]
+        y0 = y0_pare
+        y1 = y0_pare + hx
+    
+    if abs(y1 - y0) > 1e-10:
+        val_y = v0 + (v1 - v0) * (y - y0) / (y1 - y0)
+    else:
+        val_y = v0
+    
+    # z-direction
+    if z < z0_pare:
+        v0 = pare_field[ii_pare, jj_pare, max(0, kk_pare - 1)]
+        v1 = pare_field[ii_pare, jj_pare, kk_pare]
+        z0 = z0_pare - hx
+        z1 = z0_pare
+    else:
+        v0 = pare_field[ii_pare, jj_pare, kk_pare]
+        v1 = pare_field[ii_pare, jj_pare, min(pare_nz - 1, kk_pare + 1)]
+        z0 = z0_pare
+        z1 = z0_pare + hx
+    
+    if abs(z1 - z0) > 1e-10:
+        val_z = v0 + (v1 - v0) * (z - z0) / (z1 - z0)
+    else:
+        val_z = v0
+    
+    # Average the three directional interpolations
+    return (val_x + val_y + val_z) / 3.0
+
+@njit(fastmath=True)
 def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
                     x, y, z,
                     pres,nmax,
@@ -304,7 +495,7 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                     patchpare, levels, level_res,
                     fields, nmax, interpol='TSC'):
     """
-    Fills ghost cells of a single patch using TSC interpolation from parent patches.
+    Fills ghost cells of a single patch using interpolation from parent patches.
     If the ghost cell lies inside a brother patch (same refinement level), copy the
     value directly from that brother instead of using parent interpolation.
 
@@ -320,7 +511,7 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
         level_res: cell sizes for each level
         fields: list of lists of all fields patches
         nmax: base level grid size
-        interpol: interpolation method ('TSC' or 'SPH')
+        interpol: interpolation method - 'TSC', 'SPH', 'LINEAR', or 'NEAREST'
         
     Returns:
         buffered_patches: list of list of arrays with ghost cells filled
@@ -485,8 +676,30 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                             patchx, patchy, patchz,
                             patchrx, patchry, patchrz, levels,
                             fields[f][0], fields[f])
-                    else:
+                    elif interpol == 'SPH':
                         buffered_patches[f][i, j, k] = SPH_interpolation(
+                            ipatch, i_local, j_local, k_local,
+                            x_ghost, y_ghost, z_ghost,
+                            pres, nmax,
+                            nx, ny, nz,
+                            fields[f][ipatch], level_res,
+                            patchpare, patchnx, patchny, patchnz,
+                            patchx, patchy, patchz,
+                            patchrx, patchry, patchrz, levels,
+                            fields[f][0], fields[f])
+                    elif interpol == 'LINEAR':
+                        buffered_patches[f][i, j, k] = linear_interpolation(
+                            ipatch, i_local, j_local, k_local,
+                            x_ghost, y_ghost, z_ghost,
+                            pres, nmax,
+                            nx, ny, nz,
+                            fields[f][ipatch], level_res,
+                            patchpare, patchnx, patchny, patchnz,
+                            patchx, patchy, patchz,
+                            patchrx, patchry, patchrz, levels,
+                            fields[f][0], fields[f])
+                    elif interpol == 'NEAREST':
+                        buffered_patches[f][i, j, k] = nearest_interpolation(
                             ipatch, i_local, j_local, k_local,
                             x_ghost, y_ghost, z_ghost,
                             pres, nmax,
@@ -506,10 +719,8 @@ def add_ghost_buffer(fields, npatch,
                     patchrx, patchry, patchrz, patchpare,
                     size, nmax, nghost=1, interpol='TSC', bitformat=np.float32, kept_patches=None):
     """
-    Adds ghost buffer cells to all patches in an AMR field using TSC interpolation.
-    Accepts `fields` as a list of fields (each field is a list of per-patch arrays).
-    Converts each field to a numba.typed.List of arrays (placeholders for missing patches)
-    so njit functions receive homogeneous typed lists.
+    Adds ghost buffer cells to all patches in an AMR field using interpolation from parent patches.
+    If the ghost cell lies inside a brother patch (same refinement level), copies directly instead of interpolating.
     
     Args:
         fields: list of list of numpy arrays, each containing fields with each array being a patch of the AMR field
@@ -521,7 +732,10 @@ def add_ghost_buffer(fields, npatch,
         size: simulation box size
         nmax: number of cells at base level
         nghost: number of ghost cells to add on each side (default: 1)
-        interpol: interpolation method ('TSC' or 'SPH')
+        interpol: interpolation method - 'TSC' (Triangular-Shaped Cloud, high order),
+                'SPH' (smoothed particle hydrodynamics, high order),
+                'LINEAR' (linear extrapolation, conservative),
+                'NEAREST' (nearest-neighbor copy, most conservative)
         bitformat: data type for the fields (default is np.float32)
         kept_patches: boolean array indicating which patches to process
         
@@ -531,8 +745,8 @@ def add_ghost_buffer(fields, npatch,
     Author: Marco Molina
     """
     
-    if interpol not in ['TSC', 'SPH']:
-        raise ValueError("Interpolation method must be 'TSC' or 'SPH'")
+    if interpol not in ['TSC', 'SPH', 'LINEAR', 'NEAREST']:
+        raise ValueError("Interpolation method must be 'TSC', 'SPH', 'LINEAR', or 'NEAREST'")
     
     levels = tools.create_vector_levels(npatch)
     level_res = size / nmax / (2.0 ** levels)

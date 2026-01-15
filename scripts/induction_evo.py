@@ -659,6 +659,9 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     n = 1 + np.sum(grid_npatch)
     zero = [0] * n
     
+    if clus_kp is None:
+        clus_kp = np.ones(n, dtype=bool)
+    
     results = {}
     
     if components.get('divergence', False):
@@ -771,6 +774,9 @@ def induction_equation(components, vectorial_quantities,
     
     n = 1 + np.sum(grid_npatch)
     zero = [0] * n
+    
+    if clus_kp is None:
+        clus_kp = np.ones(n, dtype=bool)
     
     results = {}
     
@@ -926,6 +932,9 @@ def induction_equation_energy(components, induction_equation,
     
     n = 1 + np.sum(grid_npatch)
     zero = [0] * n
+    
+    if clus_kp is None:
+        clus_kp = np.ones(n, dtype=bool)
     
     results = {}
     
@@ -1388,7 +1397,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
 def compute_percentile_thresholds(field_numerator, field_denominator, scale_factor,
                                 cr0amr, solapst, npatch, up_to_level,
                                 percentiles=(100, 90, 75, 50, 25),
-                                use_abs=True, denom_eps=0.0):
+                                use_abs=True, denom_eps=0.0, verbose=False):
     '''
     Compute percentile thresholds of a ratio field in a single snapshot with safeguards and band edges.
     Applies clean_field to ensure only cells at maximum available resolution are considered.
@@ -1397,8 +1406,8 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
         - field_numerator: numerator field for the ratio (list of 3D arrays, one per patch)
         - field_denominator: denominator field for the ratio (list of 3D arrays, one per patch)
         - scale_factor: factor to multiply the ratio (unit conversion or scaling).
-                       Can be a scalar or an array with one value per patch.
-                       If array, must have length equal to number of patches.
+                    Can be a scalar or an array with one value per patch.
+                    If array, must have length equal to number of patches.
         - cr0amr: refinement field (1: not refined; 0: refined)
         - solapst: overlap field (1: keep; 0: discard)
         - npatch: number of patches per level
@@ -1406,11 +1415,14 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
         - percentiles: tuple/list of percentiles to compute
         - use_abs: take absolute value of the ratio before percentiles
         - denom_eps: minimum absolute value allowed in denominator; smaller values are masked
+        - verbose: whether to print timing information
 
     Returns:
         - dict with keys:
             'percentiles': ndarray with the percentile thresholds (same order as input)
             'levels': ndarray of the requested percentiles
+            'percentiles_plus': ndarray with percentile+1% thresholds (for error band upper limit)
+            'percentiles_minus': ndarray with percentile-1% thresholds (for error band lower limit)
             'global_min': minimum finite value of the ratio (after scaling)
             'global_max': maximum finite value of the ratio (after scaling)
             'bands': list of (low, high) tuples for each percentile band using sorted levels
@@ -1419,6 +1431,8 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
 
     Author: Marco Molina
     '''
+
+    start_time_percentiles = time.time()
 
     # Apply clean_field to ensure only cells at maximum resolution are considered
     clean_numerator = utils.clean_field(field_numerator, cr0amr, solapst, npatch, up_to_level)
@@ -1477,6 +1491,8 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
         return {
             "percentiles": None,
             "levels": np.asarray(percentiles),
+            "percentiles_plus": None,
+            "percentiles_minus": None,
             "global_min": None,
             "global_max": None,
             "bands": None,
@@ -1484,6 +1500,10 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
 
     levels_arr = np.asarray(percentiles, dtype=float)
     thresholds = np.percentile(vals, levels_arr)
+    
+    # Compute ±1% error bands for each percentile
+    percentiles_plus = np.percentile(vals, np.clip(levels_arr + 1, 0, 100))
+    percentiles_minus = np.percentile(vals, np.clip(levels_arr - 1, 0, 100))
 
     gmin = float(np.min(vals))
     gmax = float(np.max(vals))
@@ -1500,9 +1520,18 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
     if sorted_levels.size == 0 or sorted_levels[-1] < 100:
         bands.append((prev_edge, gmax))
 
+    end_time_percentiles = time.time()
+    
+    total_time_percentiles = end_time_percentiles - start_time_percentiles
+    
+    if verbose:
+        print('Time for percentile thresholds computation: ' + str(strftime("%H:%M:%S", gmtime(total_time_percentiles))))
+
     return {
         "percentiles": thresholds,
         "levels": levels_arr,
+        "percentiles_plus": percentiles_plus,
+        "percentiles_minus": percentiles_minus,
         "global_min": gmin,
         "global_max": gmax,
         "bands": bands,
@@ -1681,6 +1710,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                     stencil=3, buffer=True, interpol='TSC', nghost=1, bitformat=np.float32, mag=False,
                     energy_evolution=True, profiles=True, projection=True, percentiles=True, 
                     percentile_levels=(100, 90, 75, 50, 25), debug=[False, 0],
+                    return_vectorial=False, return_induction=False, return_induction_energy=False,
                     verbose=False):
     '''
     Processes a single iteration of the cosmological magnetic induction equation calculations.
@@ -1723,6 +1753,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - percentiles: boolean to compute percentile thresholds (default is True)
         - percentile_levels: tuple of percentile thresholds to compute (default is (100, 90, 75, 50, 25))
         - debug: boolean to print inner progress information (default is False)
+        - return_vectorial: boolean to return vectorial quantities dictionary (default is False)
+        - return_induction: boolean to return induction equation dictionary (default is False)
+        - return_induction_energy: boolean to return induction energy dictionary (default is False)
         - verbose: boolean to print progress information (default is False)
         
     Returns:
@@ -1752,6 +1785,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## We read the information for each snap and divide it in the different fields
     
     data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, bitformat=bitformat, region=region_coords, verbose=verbose, debug=False)
+    levels = utils.create_vector_levels(data['grid_npatch'])
+    dx = size/nmax
+    resolution = dx / (2 ** levels)
     
     # Add ghost buffer cells before derivatives
     if buffer == True:
@@ -1766,13 +1802,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         print('Ghost buffer added to magnetic and velocity fields')
 
     # Vectorial calculus
-
     ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
-    
-    levels = utils.create_vector_levels(data['grid_npatch'])
-    dx = size/nmax
-    resolution = dx / (2 ** levels)
-    
     vectorial = vectorial_quantities(components, data['clus_Bx'], data['clus_By'], data['clus_Bz'],
                                 data['clus_vx'], data['clus_vy'], data['clus_vz'],
                                 data['clus_kp'], data['grid_npatch'], data['grid_irr'],
@@ -1796,24 +1826,43 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
     ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
     
-    induction, magnitudes = induction_equation(components, vectorial,
-                        data['clus_Bx'], data['clus_By'], data['clus_Bz'],
-                        data['clus_vx'], data['clus_vy'], data['clus_vz'],
-                        data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                        data['H'], data['a'], mag=mag, verbose=verbose)
+    # Determine if induction needs to be calculated based on downstream dependencies
+    compute_induction = return_induction or energy_evolution or profiles or projection or mag or percentiles
+    
+    if compute_induction:
+        induction, magnitudes = induction_equation(components, vectorial,
+                            data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                            data['clus_vx'], data['clus_vy'], data['clus_vz'],
+                            data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+                            data['H'], data['a'], mag=mag, verbose=verbose)
+    else:
+        induction = None
+        magnitudes = None
+        if verbose:
+            print('Induction equation skipped (not required by any enabled output).')
     
     # Magnetic Induction Equation in Terms of the Magnetic Energy
     
     ## In this section we are going to compute the cosmological induction equation in terms of the magnetic energy and its components, calculating them with the results obtained before.
     ## This will be usefull to calculate volumetric integrals and energy budgets as the quantities involved are scalars.
     
-    induction_energy = induction_equation_energy(components, induction,
-                            data['clus_Bx'], data['clus_By'], data['clus_Bz'],
-                            data['clus_rho_rho_b'], data['clus_v2'],
-                            data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                            verbose=verbose)
+    # Determine if induction_energy needs to be calculated
+    compute_induction_energy = return_induction_energy or energy_evolution or profiles
     
-    if energy_evolution:
+    if compute_induction_energy and induction is not None:
+        induction_energy = induction_equation_energy(components, induction,
+                                data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                                data['clus_rho_rho_b'], data['clus_v2'],
+                                data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+                                verbose=verbose)
+    else:
+        induction_energy = None
+        if verbose and compute_induction_energy and induction is None:
+            print('Induction energy skipped (induction not available).')
+        elif verbose and not compute_induction_energy:
+            print('Induction energy skipped (not required by any enabled output).')
+    
+    if energy_evolution and induction_energy is not None:
         # Volume Integral of the Magnetic Induction Equation
     
         ## Here we compute the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
@@ -1842,13 +1891,16 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         else:
             induction_test_energy_integral = None
         
-    elif not energy_evolution:
+    else:
         induction_energy_integral = None
         induction_test_energy_integral = None
         if verbose == True:
-            print('Energy evolution is set to False, skipping volume integral of the magnetic induction equation.')
+            if not energy_evolution:
+                print('Energy evolution is set to False, skipping volume integral of the magnetic induction equation.')
+            elif induction_energy is None:
+                print('Energy evolution skipped (induction_energy not available).')
             
-    if profiles:
+    if profiles and induction_energy is not None:
         # Radial Profiles of the Magnetic Induction Equation
     
         ## We can calculate the radial profiles of the magnetic energy density in the volume we have considered (usually the virial volume)
@@ -1861,12 +1913,15 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                                     data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                                     it, sims, nmax, size, coords, rmin, rad,
                                     nbins=nbins, logbins=logbins, units=1, verbose=verbose)
-    elif not profiles:
+    else:
         induction_energy_profiles = None
         if verbose == True:
-            print('Profiles are set to False, skipping radial profiles of the magnetic induction equation.')
+            if not profiles:
+                print('Profiles are set to False, skipping radial profiles of the magnetic induction equation.')
+            elif induction_energy is None:
+                print('Radial profiles skipped (induction_energy not available).')
             
-    if projection:
+    if projection and induction is not None:
         # Uniform Projection of the Magnetic Induction Equation
     
         ## We clean and compute the uniform section of the magnetic induction energy and its components for the given AMR grid for its further projection.
@@ -1878,10 +1933,13 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                             it, sims, nmax, size, region_coords,
                             up_to_level=up_to_level, ncores=1, clus_kp=data['clus_kp'],
                             verbose=verbose)
-    elif not projection:
+    else:
         induction_uniform = None
         if verbose == True:
-            print('Projection is set to False, skipping uniform projection of the magnetic induction equation.')
+            if not projection:
+                print('Projection is set to False, skipping uniform projection of the magnetic induction equation.')
+            elif induction is None:
+                print('Uniform projection skipped (induction not available).')
             
     if percentiles:
         # Percentile Thresholds of the Magnetic Field Divergence
@@ -1890,7 +1948,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         # Divergence has units [field/length], multiplying by dx gives [field]
         diver_B_percentiles = compute_percentile_thresholds(
             field_numerator=vectorial['diver_B'],
-            field_denominator=data['diver_B'],
+            field_denominator=data['clus_B'],
             scale_factor=resolution,
             cr0amr=data['clus_cr0amr'],
             solapst=data['clus_solapst'],
@@ -1898,7 +1956,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             up_to_level=up_to_level,
             percentiles=percentile_levels,
             use_abs=True,
-            denom_eps=0.0
+            denom_eps=0.0,
+            verbose=verbose
         )
     elif not percentiles:
         diver_B_percentiles = None
@@ -1930,6 +1989,14 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         'rho_b': data['rho_b'],
         'resolution': resolution
     }
+    
+    # Apply return flags to filter outputs
+    if not return_vectorial:
+        vectorial = None
+    if not return_induction:
+        induction = None
+    if not return_induction_energy:
+        induction_energy = None
             
     end_time_Total = time.time()
     

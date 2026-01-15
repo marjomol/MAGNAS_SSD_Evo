@@ -106,7 +106,7 @@ def zoom_animation_3D(arr, size, arrow_scale = 1, units = 'Mpc', title = 'Magnet
             folder = os.getcwd()
     
         file_title = ' '.join(title.split()[:4])
-        ani.save(folder + f'/{file_title}_{run}_zoom.gif', writer='pillow', dpi = DPI)
+        ani.save(folder + f'/{run}_{file_title}_zoom.gif', writer='pillow', dpi = DPI)
         
     return ani
         
@@ -203,7 +203,7 @@ def scan_animation_3D(arr, size, study_box, depth = 2, arrow_scale = 1, units = 
             folder = os.getcwd()
     
         file_title = ' '.join(title.split()[:4])
-        ani.save(folder + f'/{file_title}_{run}_scan.gif', writer='pillow', dpi = DPI)
+        ani.save(folder + f'/{run}_{file_title}_scan.gif', writer='pillow', dpi = DPI)
         
     return ani
 
@@ -316,20 +316,80 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     # Extract and combine data from list format to array format
     pct_list = percentile_data.get('percentiles', [])
     levels_list = percentile_data.get('levels', [])
+    pct_plus_list = percentile_data.get('percentiles_plus', [])
+    pct_minus_list = percentile_data.get('percentiles_minus', [])
     
     if not pct_list or not levels_list:
         if verbose:
             print('Percentile evolution: no percentile data to plot')
         return None
     
-    # Convert list of percentile arrays to 2D array (n_snap, n_levels)
-    pct = np.array(pct_list, dtype=float)
-    
-    # Levels should be the same for all snapshots; extract from first
-    if isinstance(levels_list[0], (list, np.ndarray)):
-        levels = np.asarray(levels_list[0], dtype=float)
-    else:
-        levels = np.asarray(levels_list, dtype=float)
+    # Determine reference levels from first non-empty entry
+    ref_levels = None
+    for lv in (levels_list if isinstance(levels_list, (list, tuple)) else [levels_list]):
+        if isinstance(lv, (list, np.ndarray)) and len(lv) > 0:
+            ref_levels = np.asarray(lv, dtype=float)
+            break
+    if ref_levels is None:
+        if verbose:
+            print('Percentile evolution: no valid levels found')
+        return None
+
+    # Build a list of valid indices where percentiles exist and align their order to ref_levels when possible
+    valid_indices = []
+    aligned_pct = []
+    aligned_plus = [] if pct_plus_list else None
+    aligned_minus = [] if pct_minus_list else None
+
+    # Helper to align order based on provided per-snapshot levels
+    def align_to_ref(values, snap_levels):
+        vals = np.asarray(values, dtype=float)
+        if snap_levels is None:
+            return vals
+        sl = np.asarray(snap_levels, dtype=float)
+        # If identical order/values, return fast
+        if vals.size == ref_levels.size and np.array_equal(sl, ref_levels):
+            return vals
+        # Map snapshot levels to ref order
+        order = []
+        for r in ref_levels:
+            # find index of r in sl
+            idx = np.where(sl == r)[0]
+            if idx.size == 0:
+                return None  # cannot align
+            order.append(int(idx[0]))
+        return vals[order]
+
+    for k in range(len(pct_list)):
+        p = pct_list[k]
+        if p is None:
+            continue
+        # Determine snapshot levels for potential reordering
+        snap_levels = None
+        if isinstance(levels_list, (list, tuple)) and k < len(levels_list) and isinstance(levels_list[k], (list, np.ndarray)):
+            snap_levels = levels_list[k]
+        p_aligned = align_to_ref(p, snap_levels)
+        if p_aligned is None or p_aligned.size != ref_levels.size:
+            continue
+        valid_indices.append(k)
+        aligned_pct.append(p_aligned)
+        if aligned_plus is not None and k < len(pct_plus_list) and pct_plus_list[k] is not None:
+            plus_aligned = align_to_ref(pct_plus_list[k], snap_levels)
+            aligned_plus.append(plus_aligned if plus_aligned is not None else np.full_like(p_aligned, np.nan))
+        if aligned_minus is not None and k < len(pct_minus_list) and pct_minus_list[k] is not None:
+            minus_aligned = align_to_ref(pct_minus_list[k], snap_levels)
+            aligned_minus.append(minus_aligned if minus_aligned is not None else np.full_like(p_aligned, np.nan))
+
+    if not aligned_pct:
+        if verbose:
+            print('Percentile evolution: no valid percentile rows to plot')
+        return None
+
+    # Stack to 2D arrays (n_snap_valid, n_levels)
+    pct = np.vstack(aligned_pct)
+    pct_plus = np.vstack(aligned_plus) if aligned_plus is not None and len(aligned_plus) == len(aligned_pct) else None
+    pct_minus = np.vstack(aligned_minus) if aligned_minus is not None and len(aligned_minus) == len(aligned_pct) else None
+    levels = ref_levels
 
     if pct.size == 0 or levels.size == 0:
         if verbose:
@@ -346,10 +406,10 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     # Prepare x-axis (plots all snapshots like plot_integral_evolution)
     x_axis = plot_params.get('x_axis', 'zeta')
     if x_axis == 'years':
-        x = np.array([grid_t[i] * time_to_yr for i in range(n_snap)], dtype=float)
+        x = np.array([grid_t[i] * time_to_yr for i in valid_indices], dtype=float)
         xlabel = 'Time (yr)'
     else:
-        x = np.array([grid_zeta[i] for i in range(n_snap)], dtype=float)
+        x = np.array([grid_zeta[i] for i in valid_indices], dtype=float)
         if x.size and x[-1] < 0:
             x[-1] = abs(x[-1])
         xlabel = 'Redshift (z)'
@@ -358,6 +418,16 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     sort_idx = np.argsort(levels)
     levels_sorted = levels[sort_idx]
     pct_sorted = pct[:, sort_idx]
+    
+    # Sort error band arrays using the same indices
+    if pct_plus is not None:
+        pct_plus_sorted = pct_plus[:, sort_idx]
+    else:
+        pct_plus_sorted = None
+    if pct_minus is not None:
+        pct_minus_sorted = pct_minus[:, sort_idx]
+    else:
+        pct_minus_sorted = None
 
     # Matplotlib styling
     plt.rcParams.update({
@@ -367,11 +437,11 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         'xtick.labelsize': 14,
         'ytick.labelsize': 14,
         'legend.fontsize': 14,
-        'figure.titlesize': 20
+        'figure.titlesize': 18
     })
 
     font = FontProperties(); font.set_size(12)
-    font_title = FontProperties(); font_title.set_style('normal'); font_title.set_weight('bold'); font_title.set_size(24)
+    font_title = FontProperties(); font_title.set_style('normal'); font_title.set_weight('bold'); font_title.set_size(18)
     font_legend = FontProperties(); font_legend.set_size(12)
 
     x_scale = plot_params.get('x_scale', 'lin')
@@ -392,33 +462,40 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
 
     colors = plt.cm.viridis(np.linspace(0.15, 0.85, levels_sorted.size))
 
-    # Shaded bands between successive percentiles
-    for i in range(levels_sorted.size - 1):
-        lower = pct_sorted[:, i]
-        upper = pct_sorted[:, i + 1]
-        ax.fill_between(x, lower, upper, color=colors[i + 1], alpha=alpha_fill, label='_nolegend_')
-
-    # Optional band from min to lowest percentile if provided
-    gmin_list = percentile_data.get('global_min', None)
-    if gmin_list is not None:
-        gmin = np.asarray(gmin_list, dtype=float)
-        if gmin.size == x.size:
-            ax.fill_between(x, gmin, pct_sorted[:, 0], color=colors[0], alpha=alpha_fill, label='_nolegend_')
+    # Shaded bands: ±1% error bands around each percentile (if available)
+    if pct_plus_sorted is not None and pct_minus_sorted is not None:
+        for i in range(levels_sorted.size):
+            lower = pct_minus_sorted[:, i]
+            upper = pct_plus_sorted[:, i]
+            ax.fill_between(x, lower, upper, color=colors[i], alpha=alpha_fill, label='_nolegend_')
 
     # Plot percentile curves
     for i, lvl in enumerate(levels_sorted):
         if float(lvl).is_integer():
-            lbl = f'{int(lvl)}th pct'
+            lbl = f'{int(lvl)}%'
         else:
-            lbl = f'{lvl:.1f}th pct'
-        ax.plot(x, pct_sorted[:, i], color=colors[i], linewidth=lw_pct, label=lbl)
+            lbl = f'{lvl:.1f}%'
+        ax.plot(x, pct_sorted[:, i], color=colors[i], linewidth=lw_pct, label='_nolegend_')
+        
+        # Add label at the end of each curve
+        x_end = x[-1]
+        y_end = pct_sorted[-1, i]
+        ax.text(x_end, y_end, f'  {lbl}', fontsize=10, color=colors[i], 
+                verticalalignment='center', fontweight='bold')
 
     # Optional max curve
     gmax_list = percentile_data.get('global_max', None)
     if gmax_list is not None:
-        gmax = np.asarray(gmax_list, dtype=float)
-        if gmax.size == x.size:
-            ax.plot(x, gmax, color='#111111', linewidth=lw_max, linestyle='--', label='Max')
+        # Select only valid indices if possible
+        try:
+            gmax = np.asarray([gmax_list[i] for i in valid_indices], dtype=float)
+        except Exception:
+            gmax = None
+        if gmax is not None and gmax.size == x.size:
+            ax.plot(x, gmax, color='#111111', linewidth=lw_max, linestyle='--', label='_nolegend_')
+            # Add Max label
+            ax.text(x[-1], gmax[-1], '  Max', fontsize=10, color='#111111', 
+                    verticalalignment='center', fontweight='bold')
     
     if x_scale == 'log':
         ax.set_xscale('log')
@@ -438,10 +515,11 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         ax.set_ylim(ylim[0], ylim[1])
 
     ax.grid(alpha=0.3)
-    ax.legend(prop=font_legend)
 
     if x_axis == 'zeta':
         ax.invert_xaxis()
+
+    fig.suptitle(title, fontproperties=font_title, y=0.995)
 
     fig.tight_layout()
 
@@ -452,10 +530,13 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         axis_info = f"{x_axis}_{x_scale}_{y_scale}"
         limit_info = f"{xlim[0] if xlim else 'auto'}_{ylim[0] if ylim else 'auto'}_{ylim[1] if ylim else 'auto'}"
         sim_info = f"{induction_params.get('up_to_level','')}_{induction_params.get('F','')}_{induction_params.get('vir_kind','')}vir_{induction_params.get('rad_kind','')}rad_{induction_params.get('region','None')}Region"
-        buffer_info = 'Buffered' if induction_params.get('buffer', False) else 'NoBuffer'
+        if induction_params.get('buffer', False) == True:
+            buffer_info = f'Buffered_{induction_params.get("interpol","")}'
+        else:
+            buffer_info = 'NoBuffer'
 
         file_title = '_'.join(title.split()[:3])
-        filename = f"{folder}/{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}_{run}.png"
+        filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}.png"
         fig.savefig(filename, dpi=dpi)
         if verbose:
             print(f'Percentile evolution plot saved as: {filename}')
@@ -837,7 +918,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save main plot
         file_title = '_'.join(title.split()[:3])
-        filename1 = f'{folder}/{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}_{run}.png'
+        filename1 = f'{folder}/{run}_{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}.png'
         fig1.savefig(filename1, dpi=dpi)
         
         if verbose:
@@ -845,7 +926,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save volume plot if created
         if volume_evolution:
-            filename2 = f'{folder}/{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}_{run}.png'
+            filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}.png'
             fig2.savefig(filename2, dpi=dpi)
             
             if verbose:
@@ -1338,7 +1419,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
 
         for i, fig in enumerate(figures):
             file_title = '_'.join(title.split()[:3])
-            file_name = f'{folder}/{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get("stencil","")}_{plot_suffix}_{run}_{i}.png'
+            file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get("stencil","")}_{plot_suffix}_{i}.png'
             fig.savefig(file_name, dpi=dpi)
             if verbose:
                 print(f'Saved {i} figure: {file_name}')
@@ -1663,14 +1744,14 @@ def distribution_check(arr, quantity, plot_params, induction_params,
                 buffer_info = 'NoBuffer'
 
             # Save analysis figure
-            file_name_analysis = f'{folder}/{title.replace(" ","_")}_{quantity}_analysis_{sim_info}_{buffer_info}_{run}_{snap_i}.png'
+            file_name_analysis = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_analysis_{sim_info}_{buffer_info}_{snap_i}.png'
             fig_analysis.savefig(file_name_analysis, dpi=DPI)
             if verbose:
                 print(f'Saved analysis figure: {file_name_analysis}')
 
             # Save projection figure (only if generated)
             if not is_patches and fig_proj is not None:
-                file_name_proj = f'{folder}/{title.replace(" ","_")}_{quantity}_projections_{sim_info}_{buffer_info}_{run}_{snap_i}.png'
+                file_name_proj = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_projections_{sim_info}_{buffer_info}_{snap_i}.png'
                 fig_proj.savefig(file_name_proj, dpi=DPI)
                 if verbose:
                     print(f'Saved projection figure: {file_name_proj}')
@@ -1850,4 +1931,4 @@ def plot_3D_volume(arr, axis_values, log = False, subvolume_factor = 1, subsampl
             folder = os.getcwd()
             
         file_title = ' '.join(title.split()[:4])
-        fig.write_image(folder + f'/{file_title}_{run}.png', width=900, height=900, scale=2, dpi = DPI)
+        fig.write_image(folder + f'/{run}_{file_title}.png', width=900, height=900, scale=2, dpi = DPI)
