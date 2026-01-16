@@ -9,6 +9,7 @@ from config import DEBUG_PARAMS as debug_params
 from config import PERCENTILE_PLOT_PARAMS as percentile_plot_params
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
 from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
+from scripts.parallel_utils import process_iteration_with_logging
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
 
@@ -67,7 +68,7 @@ if __name__ == "__main__":
                         debug_flag = out_params["debug"] if it in debug_idx_set else [False, None]
 
                         fut = executor.submit(
-                            process_iteration,
+                            process_iteration_with_logging,
                             ind_params["components"],
                             out_params["dir_grids"],
                             out_params["dir_gas"],
@@ -90,7 +91,9 @@ if __name__ == "__main__":
                             logbins=ind_params["logbins"],
                             stencil=ind_params["stencil"],
                             buffer=ind_params["buffer"],
+                            use_siblings=ind_params["use_siblings"],
                             interpol=ind_params["interpol"],
+                            use_parent_diff=ind_params["use_parent_diff"],
                             nghost=ind_params["nghost"],
                             bitformat=out_params["bitformat"],
                             mag=ind_params["mag"],
@@ -108,7 +111,16 @@ if __name__ == "__main__":
                         futures.append(fut)
 
                 for fut in futures:
-                    data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields = fut.result()
+                    # Unpack results with logging information
+                    (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields), log_output, (sim_name, iteration) = fut.result()
+                    
+                    # Print the captured logs with a header showing which iteration this is
+                    if log_output.strip():  # Only print if there's actual output
+                        print(f"\n{'*'*80}")
+                        print(f"Output from Simulation: {sim_name}, Iteration: {iteration}")
+                        print(f"{'*'*80}")
+                        print(log_output, end='')
+                        print(f"{'*'*80}\n")
 
                     if first_iteration:
                         for key in data.keys():
@@ -207,6 +219,7 @@ if __name__ == "__main__":
                 print(f"Ploting " + prof_plot_params["title"] + f" completed (level {lvl}).")
 
             if ind_params["percentiles"] and all_diver_B_percentiles is not None:
+                ind_params["up_to_level"] = lvl
                 plot_percentile_evolution(
                     all_diver_B_percentiles,
                     percentile_plot_params, ind_params,
@@ -218,6 +231,7 @@ if __name__ == "__main__":
 
             if out_params["debug"][0] and ind_params["components"]["divergence"] and all_debug_fields:
                 inv_resolution = [1.0 / np.array(all_data['resolution'][i]) for i in range(len(all_data['resolution']))]
+                ind_params["up_to_level"] = lvl
                 for field_key, ref_key, ref_scale_val, quantity in zip(['clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2'],
                                                         ['clus_B2', 'clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2'],
                                                         [1.0, inv_resolution, 1.0, 1.0, 1.0, 1.0],
@@ -268,7 +282,7 @@ if __name__ == "__main__":
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 for it, j in zip(out_params["it"], range(len(out_params["it"]))):
                     
-                    data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields = process_iteration(
+                    (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields), log_output, _ = process_iteration_with_logging(
                         ind_params["components"], 
                         out_params["dir_grids"], 
                         out_params["dir_gas"],
@@ -284,7 +298,9 @@ if __name__ == "__main__":
                         logbins=ind_params["logbins"],
                         stencil=ind_params["stencil"],
                         buffer=ind_params["buffer"],
+                        use_siblings=ind_params["use_siblings"],
                         interpol=ind_params["interpol"],
+                        use_parent_diff=ind_params["use_parent_diff"],
                         nghost=ind_params["nghost"],
                         bitformat=out_params["bitformat"],
                         mag=ind_params["mag"],
@@ -298,6 +314,14 @@ if __name__ == "__main__":
                         return_induction=ind_params["return_induction"],
                         return_induction_energy=ind_params["return_induction_energy"],
                         verbose=out_params["verbose"])
+                    
+                    # Print the captured logs with a header showing which iteration this is
+                    if log_output.strip():  # Only print if there's actual output
+                        print(f"\n{'*'*80}")
+                        print(f"Output from Simulation: {sims}, Iteration: {it}")
+                        print(f"{'*'*80}")
+                        print(log_output, end='')
+                        print(f"{'*'*80}\n")
                     
                     # Initialize dictionaries on first iteration
                     if first_iteration:
@@ -403,8 +427,6 @@ if __name__ == "__main__":
             # Actual evolution calculation
             if ind_params["energy_evolution"] == False:
                 print("Energy evolution calculation is disabled in the configuration. Skipping evolution plots.")
-                
-                ind_params["up_to_level"] = ind_params["level"][L]
             else:
                 induction_energy_integral_evo = induction_energy_integral_evolution(
                     ind_params["components"], all_induction_energy_integral,
@@ -427,6 +449,7 @@ if __name__ == "__main__":
             if ind_params["profiles"] == False:
                 print("Profiles calculation is disabled in the configuration. Skipping profile plots.")
             else:
+                ind_params["up_to_level"] = ind_params["level"][L]
                 plot_radial_profiles(
                     all_induction_energy_profiles,
                     prof_plot_params, ind_params,
@@ -440,6 +463,7 @@ if __name__ == "__main__":
             if ind_params["percentiles"] == False:
                 print("Percentiles calculation is disabled in the configuration. Skipping percentile evolution plots.")
             else:
+                ind_params["up_to_level"] = ind_params["level"][L]
                 plot_percentile_evolution(
                     all_diver_B_percentiles,
                     percentile_plot_params, ind_params,
@@ -451,7 +475,7 @@ if __name__ == "__main__":
                 print(f"Ploting " + percentile_plot_params["title"] + " completed.")
                 
             if out_params["debug"][0] and ind_params["components"]["divergence"]:
-                
+                ind_params["up_to_level"] = ind_params["level"][L]
                 inv_resolution = [1.0 / np.array(all_data['resolution'][i]) for i in range(len(all_data['resolution']))]
                 
                 for field_key, ref_key, ref_scale_val, quantity in zip(['clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2'],

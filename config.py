@@ -35,7 +35,7 @@ IND_PARAMS = {
     "nbins": [25], # Number of bins for the profiles histograms
     "rmin": [0.01], # Minimum radius to calculate the profiles
     "logbins": True, # Use logarithmic bins
-    "F": 1.0, # Factor to multiply the viral radius to define the box size
+    "F": 1, # Factor to multiply the viral radius to define the box size
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
@@ -52,6 +52,11 @@ IND_PARAMS = {
     "H0": H0_masclet,
     # "H0": H0_isu,
     "epsilon": 1e-30,
+    "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
+    "use_parent_diff": False, # Use parent rescaled derivatives in patch boundaries (Fortran-like approach)
+    "buffer": False, # Use buffer zones to avoid boundary effects (recommended but slower)
+    "use_siblings": True, # Use sibling patches in buffer (if False, only parent interpolation is used)
+    "interpol": 'TSC', # Interpolation method for the buffer zones ('TSC', 'PARENT_DIRECT', 'SPH', 'LINEAR', 'NEAREST')
     "divergence": True, # Process the divergence induction component
     "compression": True, # Process the compression induction component
     "stretching": True, # Process the stretching induction component
@@ -59,9 +64,6 @@ IND_PARAMS = {
     "drag": True, # Process the drag induction component
     "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
-    "buffer": True, # Use buffer zones to avoid boundary effects (recommended but slower)
-    "interpol": 'NEAREST', # Interpolation method for the buffer zones ('TSC', 'SPH', 'LINEAR', 'NEAREST')
-    "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
     "energy_evolution": False, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
     "derivative": 'central', # Derivative to use for the evolution (implicit, central, RK or rate)
@@ -88,13 +90,13 @@ OUTPUT_PARAMS = {
     "save": True,
     "verbose": True,
     # "debug": [True, 1, True], # [Bool, Grid debugging (0: Uniform, 1: AMR), Clean fields (If AMR)],
-    "chunk_factor": 2,
+    # "bitformat": np.float64,
     "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 4, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_10_nearest_buffer',
+    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_2_best',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [1050], # For different redshift snap iterations analysis
     # "it": [1800, 2119],
@@ -112,7 +114,7 @@ OUTPUT_PARAMS = {
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
     "ID1": "dynamo/",
-    "ID2": "divergence_test_percentile_evo",
+    "ID2": "divergence_test_buffer",
     # "ID2": "profiles_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
@@ -325,12 +327,14 @@ ram_capacity = psutil.virtual_memory().total  # Total RAM in bytes
 ram_capacity_gb = ram_capacity / (1024 ** 3)  # Convert to GB
 cpu_count = psutil.cpu_count(logical=True)    # Total CPU cores (including hyperthreading)
 cpu_physical = psutil.cpu_count(logical=False) # Physical cores only
+max_level = max(IND_PARAMS.get("up_to_level", [0]))  # Max AMR level to process
 
 print(f"\n{'='*60}")
 print(f"SYSTEM RESOURCES")
 print(f"{'='*60}")
 print(f"Total RAM: {ram_capacity_gb:.2f} GB")
 print(f"CPU cores: {cpu_physical} physical, {cpu_count} logical")
+print(f"AMR max level: {max_level}")
 
 # Calculate expected memory usage
 max_nmax_index = int(np.argmax(IND_PARAMS["nmax"]))
@@ -344,15 +348,23 @@ array_size_bytes = base_cells * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
 # Estimate total memory footprint (considering multiple fields: Bx, By, Bz, vx, vy, vz, derivatives, etc.)
 # Typical run uses ~6 fields for input + ~10 for derivatives/outputs = ~16 arrays
 estimated_arrays_count = 16
-estimated_memory_gb = (array_size_bytes * estimated_arrays_count) / (1024 ** 3)
+
+# AMR refinement increases peak array sizes locally; we apply a conservative multiplier
+# Note: true AMR does not fill the whole domain at finest level, so we scale by a small coverage factor
+amr_coverage_factor = 0.10  # 10% default coverage at finest levels (safety bias)
+refinement_multiplier = (2 ** (3 * max_level)) * amr_coverage_factor if max_level > 0 else 1.0
+refinement_multiplier = max(refinement_multiplier, 1.0)
+
+estimated_memory_gb = ((array_size_bytes * refinement_multiplier) * estimated_arrays_count) / (1024 ** 3)
 
 print(f"\n{'='*60}")
 print(f"MEMORY ESTIMATION")
 print(f"{'='*60}")
 print(f"Base grid size: {IND_PARAMS['nmax'][max_nmax_index]} x {IND_PARAMS['nmay'][max_nmay_index]} x {IND_PARAMS['nmaz'][max_nmaz_index]}")
 print(f"Single array size: {array_size_bytes / (1024 ** 3):.3f} GB")
-print(f"Estimated total memory usage: {estimated_memory_gb:.2f} GB")
-print(f"Memory usage ratio: {100 * estimated_memory_gb / ram_capacity_gb:.1f}% of total RAM")
+print(f"Estimated total memory usage (AMR-aware): {estimated_memory_gb:.2f} GB")
+mem_ratio = (estimated_memory_gb / ram_capacity_gb)
+print(f"Memory usage ratio: {100 * mem_ratio:.1f}% of total RAM")
 
 # Decide on parallelization strategy
 print(f"\n{'='*60}")
@@ -363,28 +375,46 @@ print(f"{'='*60}")
 recommended_parallel = False
 recommended_ncores = OUTPUT_PARAMS["ncores"]  # Default from config
 
+# Determine core reservation based on risk
+reserve_ratio = 0.0
+if mem_ratio >= 0.60 or max_level >= 7:
+    # Extreme risk: reserve ~70% cores for safety
+    reserve_ratio = 0.70
+elif mem_ratio >= 0.40 or max_level >= 6:
+    # High risk: reserve ~50% cores
+    reserve_ratio = 0.50
+else:
+    # Normal: reserve based on configured Save_Cores
+    reserve_ratio = min(OUTPUT_PARAMS["Save_Cores"] / max(cpu_physical, 1), 0.50)
+
+reserved_cores = max(OUTPUT_PARAMS["Save_Cores"], int(cpu_physical * reserve_ratio))
+available_cores = max(1, cpu_physical - reserved_cores)
+
 # High memory usage (>40% RAM): recommend parallelization to distribute load across iterations
-if estimated_memory_gb > (0.4 * ram_capacity_gb):
+if mem_ratio >= 0.60:
+    print(f"⚠️  Extreme memory risk detected ({estimated_memory_gb:.2f} GB ≥ 60% of {ram_capacity_gb:.2f} GB)")
+    print(f"   Recommendation: Prefer SERIAL or minimal parallelism to avoid OOM/segfaults")
+    recommended_parallel = available_cores > 1 and len(OUTPUT_PARAMS["it"]) > 1
+    recommended_ncores = min(available_cores, max(1, len(OUTPUT_PARAMS["it"]) // 2))
+    print(f"   Reserved cores: {reserved_cores}; Recommended cores: {recommended_ncores}")
+elif mem_ratio >= 0.40:
     print(f"⚠️  High memory usage detected ({estimated_memory_gb:.2f} GB > 40% of {ram_capacity_gb:.2f} GB)")
     print(f"   Recommendation: Use parallel processing to handle multiple iterations efficiently")
     recommended_parallel = True
-    # Use physical cores minus Save_Cores, leaving headroom for system
-    available_cores = max(1, cpu_physical - OUTPUT_PARAMS["Save_Cores"])
     recommended_ncores = min(available_cores, len(OUTPUT_PARAMS["it"]))  # Don't exceed number of iterations
-    print(f"   Recommended cores: {recommended_ncores} (physical cores: {cpu_physical}, reserved: {OUTPUT_PARAMS['Save_Cores']})")
+    print(f"   Reserved cores: {reserved_cores}; Recommended cores: {recommended_ncores}")
     
 # Low memory, multiple iterations: can benefit from parallelization
 elif len(OUTPUT_PARAMS["it"]) > 1:
     print(f"✓ Memory usage is manageable ({estimated_memory_gb:.2f} GB < 40% of {ram_capacity_gb:.2f} GB)")
     print(f"  {len(OUTPUT_PARAMS['it'])} iterations to process")
-    available_cores = max(1, cpu_physical - OUTPUT_PARAMS["Save_Cores"])
     recommended_ncores = min(available_cores, len(OUTPUT_PARAMS["it"]))
     if recommended_ncores > 1:
         print(f"  Recommendation: Parallel processing can speed up execution")
         print(f"  Recommended cores: {recommended_ncores}")
         recommended_parallel = True
     else:
-        print(f"  Single core available after reserving {OUTPUT_PARAMS['Save_Cores']} for system")
+        print(f"  Single core available after reserving {reserved_cores} for system")
         recommended_parallel = False
         
 # Single iteration: parallelization doesn't help
@@ -402,7 +432,6 @@ if recommended_parallel:
     else:
         OUTPUT_PARAMS["parallel"] = False
         OUTPUT_PARAMS["ncores"] = 1
-        print(f"✓ Serial processing mode (1 core)")
         ask_custom = input("  Do you want to manually set number of cores? (y/n): ").strip().lower()
         if ask_custom == 'y':
             try:
@@ -410,11 +439,18 @@ if recommended_parallel:
                 if 1 <= custom_ncores <= cpu_count:
                     OUTPUT_PARAMS["parallel"] = custom_ncores > 1
                     OUTPUT_PARAMS["ncores"] = custom_ncores
-                    print(f"✓ Set to {custom_ncores} core(s)")
+                    if custom_ncores > 1:
+                        print(f"✓ Parallel processing ENABLED with {custom_ncores} core(s)")
+                    else:
+                        print(f"✓ Serial processing mode (1 core)")
                 else:
                     print(f"⚠️  Invalid input, keeping default: 1 core")
+                    print(f"✓ Serial processing mode (1 core)")
             except ValueError:
                 print(f"⚠️  Invalid input, keeping default: 1 core")
+                print(f"✓ Serial processing mode (1 core)")
+        else:
+            print(f"✓ Serial processing mode (1 core)")
 else:
     # Serial mode by default
     ask = input(f"\nParallelization not recommended for this configuration. Proceed in serial mode? (y/n) [yes]: ").strip().lower()
@@ -425,18 +461,20 @@ else:
             if 1 <= custom_ncores <= cpu_count:
                 OUTPUT_PARAMS["parallel"] = custom_ncores > 1
                 OUTPUT_PARAMS["ncores"] = custom_ncores
-                print(f"✓ Override: using {custom_ncores} core(s)")
+                print(f"✓ Override: Parallel processing ENABLED with {custom_ncores} core(s)")
             else:
                 print(f"⚠️  Invalid input, using serial mode")
+                print(f"✓ Serial processing mode (1 core)")
                 OUTPUT_PARAMS["parallel"] = False
                 OUTPUT_PARAMS["ncores"] = 1
         except ValueError:
             print(f"⚠️  Invalid input, using serial mode")
+            print(f"✓ Serial processing mode (1 core)")
             OUTPUT_PARAMS["parallel"] = False
             OUTPUT_PARAMS["ncores"] = 1
     else:
         OUTPUT_PARAMS["parallel"] = False
         OUTPUT_PARAMS["ncores"] = 1
-        print(f"✓ Serial mode (1 core)")
+        print(f"✓ Serial processing mode (1 core)")
 
 print(f"{'='*60}\n")

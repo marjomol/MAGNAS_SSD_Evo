@@ -60,6 +60,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
     rad = []
 
     for i in range(len(sims)):
+        # Read halos and zeta for each snapshot in reverse order so that we can track the same most massive halo
         for j in reversed(range(len(it))):
             
             halos = reader.read_families(it[j], path=dir_halos, output_format='dictionaries', output_redshift=False,
@@ -95,19 +96,20 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
                 coords.append(coords[-1])
                 rad.append(rad[-1])
                 
-            if verbose:
+            if verbose and index == None:
+                print("No halo found in snap " + str(it[j]) + ", using the previous one.")
                 
-                # Print the coordinates
-                print("Coordinates of the most massive halo in snap " + str(it[j]) + ":")
-                print("x: " + str(coords[-1][0]))
-                print("y: " + str(coords[-1][1]))
-                print("z: " + str(coords[-1][2]))
-                print("Radius: " + str(rad[-1]) + " Mpc")
-                if index != None:
-                    print("Mass: " + str(halos[max_mass_index]['M']) + " Msun")
-                else:
-                    print("No halo found in this snapshot, using the previous one.")
-                
+    if verbose:
+        
+        # Print the coordinates
+        print("Coordinates of the most massive halo in the last snap " + str(it[-1]) + ":")
+        print("x: " + str(coords[-1][0]))
+        print("y: " + str(coords[-1][1]))
+        print("z: " + str(coords[-1][2]))
+        print("Radius: " + str(rad[-1]) + " Mpc")
+        print("Mass: " + str(halos[max_mass_index]['M']) + " Msun/h")
+
+    # Reverse the lists to match the original order of snapshots            
     coords = coords[::-1]
     rad = rad[::-1]
     
@@ -153,9 +155,9 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
             else:
                 region.append([None])
                 
-            if verbose:      
-                # Print the coordinates
-                print(str(region[-1][0]) + " region: " + str(region[-1]))
+    if verbose:      
+        # Print the coordinates
+        print(str(region[-1][0]) + " region: " + str(region[-1]))
 
     return region, region_size
 
@@ -620,7 +622,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
 def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
                         clus_vx, clus_vy, clus_vz,
                         clus_kp, grid_npatch, grid_irr,
-                        dx, stencil=3, verbose=False):
+                        dx, stencil=3, use_parent_diff=False, buffer_active=False, nghost=1,
+                        patchpare=None, patchnx=None, patchny=None, patchnz=None,
+                        patchrx=None, patchry=None, patchrz=None, verbose=False):
     '''
     Computes the vectorial calculus quantities of interest for the magnetic field and velocity field.
     Only the the necessary quantities are computed based on the components specified in the config "components" dictionary.
@@ -634,6 +638,12 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
         - grid_irr: index of the snapshot
         - dx: size of the cells in Mpc
         - stencil: stencil to be used for the calculations
+        - use_parent_diff: boolean to use parent boundaries in the differential calculations (default is False)
+        - buffer_active: boolean to use buffer zones in the differential calculations (default is False)
+        - nghost: number of ghost cells to be used in the differential calculations (default is 1)
+        - patchpare: parent patch of each patch (required if use_parent_diff is True)
+        - patchnx, patchny, patchnz: number of cells in each patch (required if use_parent_diff is True)
+        - patchrx, patchry, patchrz: size of each patch (required if use_parent_diff is True)
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
@@ -667,14 +677,30 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     if components.get('divergence', False):
         ### We compute the divergence of the magnetic field
         
-        results['diver_B'] = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
+        if use_parent_diff and patchpare is not None:
+            results['diver_B'] = diff.divergence_with_parent_boundaries(
+                clus_Bx, clus_By, clus_Bz, dx, grid_npatch,
+                patchpare, patchnx, patchny, patchnz,
+                patchrx, patchry, patchrz,
+                buffer_active=buffer_active, nghost=nghost,
+                kept_patches=clus_kp, stencil=stencil)
+        else:
+            results['diver_B'] = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['diver_B'] = zero
         
     if components.get('compression', False):
         ### We compute the divergence of the velocity field
         
-        results['diver_v'] = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
+        if use_parent_diff and patchpare is not None:
+            results['diver_v'] = diff.divergence_with_parent_boundaries(
+                clus_vx, clus_vy, clus_vz, dx, grid_npatch,
+                patchpare, patchnx, patchny, patchnz,
+                patchrx, patchry, patchrz,
+                buffer_active=buffer_active, nghost=nghost,
+                kept_patches=clus_kp, stencil=stencil)
+        else:
+            results['diver_v'] = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['diver_v'] = zero
         
@@ -1707,9 +1733,9 @@ def _get_debug_field(key, field_sources, region_coords, data, debug, up_to_level
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
-                    stencil=3, buffer=True, interpol='TSC', nghost=1, bitformat=np.float32, mag=False,
+                    stencil=3, buffer=True, use_siblings=True, interpol='TSC', use_parent_diff=True, nghost=1, bitformat=np.float32, mag=False,
                     energy_evolution=True, profiles=True, projection=True, percentiles=True, 
-                    percentile_levels=(100, 90, 75, 50, 25), debug=[False, 0],
+                    percentile_levels=(95, 90, 75, 50, 25), debug=[False, 0],
                     return_vectorial=False, return_induction=False, return_induction_energy=False,
                     verbose=False):
     '''
@@ -1773,11 +1799,6 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     '''
 
     start_time_Total = time.time() # Record the start time
-    
-    if verbose == True:
-        print(f'********************************************************************************')
-        print(f"Processing iteration {it} in simulation {sims}")
-        print(f'********************************************************************************')
 
     # Load Simulation Data
     
@@ -1796,7 +1817,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                                                 data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                                                 data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
                                                 data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
-                                                size=size, nmax=nmax, nghost=nghost, interpol=interpol, kept_patches=data['clus_kp'])
+                                                size=size, nmax=nmax, nghost=nghost, interpol=interpol, use_siblings=use_siblings, kept_patches=data['clus_kp'])
         for i, key in enumerate(['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']):
             data[f'clus_{key}'] = buffered_field[i]
         print('Ghost buffer added to magnetic and velocity fields')
@@ -1806,7 +1827,10 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     vectorial = vectorial_quantities(components, data['clus_Bx'], data['clus_By'], data['clus_Bz'],
                                 data['clus_vx'], data['clus_vy'], data['clus_vz'],
                                 data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                                dx, stencil=stencil, verbose=verbose)
+                                dx, stencil=stencil, use_parent_diff=use_parent_diff, buffer_active=buffer, nghost=nghost,
+                                patchpare=data['grid_pare'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'], patchnz=data['grid_patchnz'],
+                                patchrx=data['grid_patchrx'], patchry=data['grid_patchry'], patchrz=data['grid_patchrz'],
+                                verbose=verbose)
     
     # Remove ghost buffer cells after derivatives
     if buffer == True:

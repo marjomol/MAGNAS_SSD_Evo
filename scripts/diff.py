@@ -361,7 +361,7 @@ def gradient(field, dx, npatch, kept_patches=None, stencil=3):
         if kept_patches[ipatch]:
             if ipatch == 0:
                 # Level 0: use periodic boundaries
-                gx, gy, gz = arr_periodic_gradient(field[ipatch], resolution[ipatch], stencil=stencil)
+                gx, gy, gz = arr_periodic_gradient(field[ipatch], resolution[ipatch], stencil=5)
             else:
                 # Refined levels: use regular boundaries with extrapolation
                 gx, gy, gz = arr_gradient(field[ipatch], resolution[ipatch], stencil=stencil)
@@ -408,7 +408,7 @@ def divergence(field_x, field_y, field_z, dx, npatch, kept_patches=None, stencil
         if kept_patches[ipatch]:
             if ipatch == 0:
                 # Level 0: use periodic boundaries
-                div.append(arr_periodic_divergence(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
+                div.append(arr_periodic_divergence(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=5))
             else:
                 # Refined levels: use regular boundaries with extrapolation
                 div.append(arr_divergence(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
@@ -456,7 +456,7 @@ def curl(field_x, field_y, field_z, dx, npatch, kept_patches=None, stencil=3):
         if kept_patches[ipatch]:
             if ipatch == 0:
                 # Level 0: use periodic boundaries
-                cx,cy,cz = arr_periodic_curl(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil)
+                cx,cy,cz = arr_periodic_curl(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=5)
             else:
                 # Refined levels: use regular boundaries with extrapolation
                 cx,cy,cz = arr_curl(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil)
@@ -503,7 +503,7 @@ def curl_magnitude(field_x, field_y, field_z, dx, npatch, kept_patches=None, ste
         if kept_patches[ipatch]:
             if ipatch == 0:
                 # Level 0: use periodic boundaries
-                curl_mag.append(arr_periodic_curl_magnitude(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
+                curl_mag.append(arr_periodic_curl_magnitude(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=5))
             else:
                 # Refined levels: use regular boundaries with extrapolation
                 curl_mag.append(arr_curl_magnitude(field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch], stencil=stencil))
@@ -544,7 +544,7 @@ def gradient_magnitude(field, dx, npatch, kept_patches=None, stencil=3):
         if kept_patches[ipatch]:
             if ipatch == 0:
                 # Level 0: use periodic boundaries
-                grad_mag.append(arr_periodic_gradient_magnitude(field[ipatch], resolution[ipatch], stencil=stencil))
+                grad_mag.append(arr_periodic_gradient_magnitude(field[ipatch], resolution[ipatch], stencil=5))
             else:
                 # Refined levels: use regular boundaries with extrapolation
                 grad_mag.append(arr_gradient_magnitude(field[ipatch], resolution[ipatch], stencil=stencil))
@@ -793,7 +793,7 @@ def directional_derivative_scalar_field(sfield, ufield_x, ufield_y, ufield_z, dx
         if kept_patches[ipatch]:
             if ipatch == 0:
                 # Level 0: use periodic boundaries
-                u_nabla_phi.append(arr_periodic_u_nabla_phi(sfield[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch], stencil=stencil))
+                u_nabla_phi.append(arr_periodic_u_nabla_phi(sfield[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch], stencil=5))
             else:
                 # Refined levels: use regular boundaries with extrapolation
                 u_nabla_phi.append(arr_u_nabla_phi(sfield[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch], stencil=stencil))
@@ -887,7 +887,7 @@ def directional_derivative_vector_field(vfield_x, vfield_y, vfield_z, ufield_x, 
             if ipatch == 0:
                 # Level 0: use periodic boundaries
                 ux,uy,uz = arr_periodic_u_nabla_v(vfield_x[ipatch], vfield_y[ipatch], vfield_z[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch],
-                                        stencil=stencil)
+                                        stencil=5)
             else:
                 # Refined levels: use regular boundaries with extrapolation
                 ux,uy,uz = arr_u_nabla_v(vfield_x[ipatch], vfield_y[ipatch], vfield_z[ipatch], ufield_x[ipatch], ufield_y[ipatch], ufield_z[ipatch], resolution[ipatch],
@@ -1039,3 +1039,360 @@ def integrate_energy(t, E0, rho_b_samples, f_samples):
         dt = t[i+1] - t[i]
         E[i+1] = rho_b_samples[i+1] * rk4_step(t[i], dt, E[i], rho_b.value, f_term.value)
     return E
+
+
+@njit(fastmath=True)
+def arr_parent_diff_x_at_boundary(field, field_parent, 
+                                ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                                dx_parent, resolution_ratio, nghost=0, stencil=3):
+    '''
+    Computes df/dx at patch boundaries using parent derivatives.
+    Uses parent spacing directly to avoid over-scaling on refined grids.
+    
+    Args:
+        field: child patch field array (shape can include buffer)
+        field_parent: parent patch field array
+        ipatch_in_parent, jpatch_in_parent, kpatch_in_parent: child's starting position in parent (0-based)
+        dx_parent: parent cell size
+        resolution_ratio: dx_parent / dx_child (typically 2)
+        nghost: number of ghost cells if field has buffer
+        stencil: 3 or 5 point stencil
+        
+    Returns:
+        difference: df/dx at X-boundaries only (rest is zero), same shape as field
+        
+    Author: Marco Molina
+    '''
+    difference = np.zeros_like(field)
+    nx, ny, nz = field.shape
+    
+    # Real patch boundaries (excluding buffer if present)
+    i_start = nghost
+    i_end = nx - nghost - 1
+    j_start = nghost
+    j_end = ny - nghost - 1
+    k_start = nghost
+    k_end = nz - nghost - 1
+    
+    # Left X-boundary (i = i_start)
+    for j in range(j_start, j_end + 1):
+        for k in range(k_start, k_end + 1):
+            i_local = 0
+            j_local = j - j_start
+            k_local = k - k_start
+            
+            ip = int(ipatch_in_parent + i_local // int(resolution_ratio))
+            jp = int(jpatch_in_parent + j_local // int(resolution_ratio))
+            kp = int(kpatch_in_parent + k_local // int(resolution_ratio))
+            
+            if ip > 0 and ip < field_parent.shape[0] - 1 and jp > 0 and jp < field_parent.shape[1] - 1 and kp > 0 and kp < field_parent.shape[2] - 1:
+                if stencil == 3:
+                    difference[i_start, j, k] = (field_parent[ip + 1, jp, kp] - field_parent[ip - 1, jp, kp]) / (2.0 * dx_parent)
+                else:
+                    if ip > 1 and ip < field_parent.shape[0] - 2:
+                        difference[i_start, j, k] = (-field_parent[ip + 2, jp, kp] + 8.0 * field_parent[ip + 1, jp, kp] - 8.0 * field_parent[ip - 1, jp, kp] + field_parent[ip - 2, jp, kp]) / (12.0 * dx_parent)
+    
+    # Right X-boundary (i = i_end)
+    for j in range(j_start, j_end + 1):
+        for k in range(k_start, k_end + 1):
+            i_local = i_end - i_start
+            j_local = j - j_start
+            k_local = k - k_start
+            
+            ip = int(ipatch_in_parent + i_local // int(resolution_ratio))
+            jp = int(jpatch_in_parent + j_local // int(resolution_ratio))
+            kp = int(kpatch_in_parent + k_local // int(resolution_ratio))
+            
+            if ip > 0 and ip < field_parent.shape[0] - 1 and jp > 0 and jp < field_parent.shape[1] - 1 and kp > 0 and kp < field_parent.shape[2] - 1:
+                if stencil == 3:
+                    difference[i_end, j, k] = (field_parent[ip + 1, jp, kp] - field_parent[ip - 1, jp, kp]) / (2.0 * dx_parent)
+                else:
+                    if ip > 1 and ip < field_parent.shape[0] - 2:
+                        difference[i_end, j, k] = (-field_parent[ip + 2, jp, kp] + 8.0 * field_parent[ip + 1, jp, kp] - 8.0 * field_parent[ip - 1, jp, kp] + field_parent[ip - 2, jp, kp]) / (12.0 * dx_parent)
+    
+    return difference
+
+@njit(fastmath=True)
+def arr_parent_diff_y_at_boundary(field, field_parent, 
+                                ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                                dx_parent, resolution_ratio, nghost=0, stencil=3):
+    '''
+    Computes df/dy at patch boundaries using parent derivatives.
+    
+    Args:
+        field: child patch field array (shape can include buffer)
+        field_parent: parent patch field array
+        ipatch_in_parent, jpatch_in_parent, kpatch_in_parent: child's starting position in parent (0-based)
+        dx_parent: parent cell size
+        resolution_ratio: dx_parent / dx_child (typically 2)
+        nghost: number of ghost cells if field has buffer
+        stencil: 3 or 5 point stencil
+        
+    Returns:
+        difference: df/dy at Y-boundaries only (rest is zero), same shape as field
+        
+    Author: Marco Molina
+    '''
+    difference = np.zeros_like(field)
+    nx, ny, nz = field.shape
+    
+    i_start = nghost
+    i_end = nx - nghost - 1
+    j_start = nghost
+    j_end = ny - nghost - 1
+    k_start = nghost
+    k_end = nz - nghost - 1
+    
+    # Front Y-boundary (j = j_start)
+    for i in range(i_start, i_end + 1):
+        for k in range(k_start, k_end + 1):
+            i_local = i - i_start
+            j_local = 0
+            k_local = k - k_start
+            
+            ip = int(ipatch_in_parent + i_local // int(resolution_ratio))
+            jp = int(jpatch_in_parent + j_local // int(resolution_ratio))
+            kp = int(kpatch_in_parent + k_local // int(resolution_ratio))
+            
+            if jp > 0 and jp < field_parent.shape[1] - 1 and ip > 0 and ip < field_parent.shape[0] - 1 and kp > 0 and kp < field_parent.shape[2] - 1:
+                if stencil == 3:
+                    difference[i, j_start, k] = (field_parent[ip, jp + 1, kp] - field_parent[ip, jp - 1, kp]) / (2.0 * dx_parent)
+                else:
+                    if jp > 1 and jp < field_parent.shape[1] - 2:
+                        difference[i, j_start, k] = (-field_parent[ip, jp + 2, kp] + 8.0 * field_parent[ip, jp + 1, kp] - 8.0 * field_parent[ip, jp - 1, kp] + field_parent[ip, jp - 2, kp]) / (12.0 * dx_parent)
+    
+    # Back Y-boundary (j = j_end)
+    for i in range(i_start, i_end + 1):
+        for k in range(k_start, k_end + 1):
+            i_local = i - i_start
+            j_local = j_end - j_start
+            k_local = k - k_start
+            
+            ip = int(ipatch_in_parent + i_local // int(resolution_ratio))
+            jp = int(jpatch_in_parent + j_local // int(resolution_ratio))
+            kp = int(kpatch_in_parent + k_local // int(resolution_ratio))
+            
+            if jp > 0 and jp < field_parent.shape[1] - 1 and ip > 0 and ip < field_parent.shape[0] - 1 and kp > 0 and kp < field_parent.shape[2] - 1:
+                if stencil == 3:
+                    difference[i, j_end, k] = (field_parent[ip, jp + 1, kp] - field_parent[ip, jp - 1, kp]) / (2.0 * dx_parent)
+                else:
+                    if jp > 1 and jp < field_parent.shape[1] - 2:
+                        difference[i, j_end, k] = (-field_parent[ip, jp + 2, kp] + 8.0 * field_parent[ip, jp + 1, kp] - 8.0 * field_parent[ip, jp - 1, kp] + field_parent[ip, jp - 2, kp]) / (12.0 * dx_parent)
+    
+    return difference
+
+@njit(fastmath=True)
+def arr_parent_diff_z_at_boundary(field, field_parent, 
+                                ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                                dx_parent, resolution_ratio, nghost=0, stencil=3):    
+    '''
+    Computes df/dz at patch boundaries using parent derivatives.
+    
+    Args:
+        field: child patch field array (shape can include buffer)
+        field_parent: parent patch field array
+        ipatch_in_parent, jpatch_in_parent, kpatch_in_parent: child's starting position in parent (0-based)
+        dx_parent: parent cell size
+        resolution_ratio: dx_parent / dx_child (typically 2)
+        nghost: number of ghost cells if field has buffer
+        stencil: 3 or 5 point stencil
+        
+    Returns:
+        difference: df/dz at Z-boundaries only (rest is zero), same shape as field
+        
+    Author: Marco Molina
+    '''
+    difference = np.zeros_like(field)
+    nx, ny, nz = field.shape
+    
+    i_start = nghost
+    i_end = nx - nghost - 1
+    j_start = nghost
+    j_end = ny - nghost - 1
+    k_start = nghost
+    k_end = nz - nghost - 1
+    
+    # Bottom Z-boundary (k = k_start)
+    for i in range(i_start, i_end + 1):
+        for j in range(j_start, j_end + 1):
+            i_local = i - i_start
+            j_local = j - j_start
+            k_local = 0
+            
+            ip = int(ipatch_in_parent + i_local // int(resolution_ratio))
+            jp = int(jpatch_in_parent + j_local // int(resolution_ratio))
+            kp = int(kpatch_in_parent + k_local // int(resolution_ratio))
+            
+            if kp > 0 and kp < field_parent.shape[2] - 1 and ip > 0 and ip < field_parent.shape[0] - 1 and jp > 0 and jp < field_parent.shape[1] - 1:
+                if stencil == 3:
+                    difference[i, j, k_start] = (field_parent[ip, jp, kp + 1] - field_parent[ip, jp, kp - 1]) / (2.0 * dx_parent)
+                else:
+                    if kp > 1 and kp < field_parent.shape[2] - 2:
+                        difference[i, j, k_start] = (-field_parent[ip, jp, kp + 2] + 8.0 * field_parent[ip, jp, kp + 1] - 8.0 * field_parent[ip, jp, kp - 1] + field_parent[ip, jp, kp - 2]) / (12.0 * dx_parent)
+    
+    # Top Z-boundary (k = k_end)
+    for i in range(i_start, i_end + 1):
+        for j in range(j_start, j_end + 1):
+            i_local = i - i_start
+            j_local = j - j_start
+            k_local = k_end - k_start
+            
+            ip = int(ipatch_in_parent + i_local // int(resolution_ratio))
+            jp = int(jpatch_in_parent + j_local // int(resolution_ratio))
+            kp = int(kpatch_in_parent + k_local // int(resolution_ratio))
+            
+            if kp > 0 and kp < field_parent.shape[2] - 1 and ip > 0 and ip < field_parent.shape[0] - 1 and jp > 0 and jp < field_parent.shape[1] - 1:
+                if stencil == 3:
+                    difference[i, j, k_end] = (field_parent[ip, jp, kp + 1] - field_parent[ip, jp, kp - 1]) / (2.0 * dx_parent)
+                else:
+                    if kp > 1 and kp < field_parent.shape[2] - 2:
+                        difference[i, j, k_end] = (-field_parent[ip, jp, kp + 2] + 8.0 * field_parent[ip, jp, kp + 1] - 8.0 * field_parent[ip, jp, kp - 1] + field_parent[ip, jp, kp - 2]) / (12.0 * dx_parent)
+    
+    return difference
+
+@njit(fastmath=True)
+def arr_divergence_with_parent_boundaries(arr_x, arr_y, arr_z, dx,
+                                        arr_x_parent, arr_y_parent, arr_z_parent, dx_parent,
+                                        ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                                        nghost=0, stencil=3):
+    '''
+    Computes divergence with parent-based derivatives at boundaries.
+    Combines standard divergence in interior with parent-based at boundaries.
+    
+    Args:
+        arr_x, arr_y, arr_z: child patch vector field components (can include buffer)
+        dx: child cell size
+        arr_x_parent, arr_y_parent, arr_z_parent: parent patch vector field components
+        dx_parent: parent cell size
+        ipatch_in_parent, jpatch_in_parent, kpatch_in_parent: child position in parent (0-based)
+        nghost: number of ghost cells if arrays have buffer
+        stencil: 3 or 5 point stencil
+        
+    Returns:
+        div: divergence array, same shape as input arrays
+        
+    Author: Marco Molina
+    '''
+    # Standard divergence on full array
+    div = arr_divergence(arr_x, arr_y, arr_z, dx, stencil=stencil)
+    
+    # Resolution ratio (used only to locate child cells in parent)
+    res_ratio = dx_parent / dx
+    
+    # Parent-based derivatives at boundaries (already divided by dx_parent)
+    diff_x_parent = arr_parent_diff_x_at_boundary(arr_x, arr_x_parent, 
+                                                  ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                                                  dx_parent, res_ratio, nghost, stencil)
+    diff_y_parent = arr_parent_diff_y_at_boundary(arr_y, arr_y_parent,
+                                                  ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                                                  dx_parent, res_ratio, nghost, stencil)
+    diff_z_parent = arr_parent_diff_z_at_boundary(arr_z, arr_z_parent,
+                                                  ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                                                  dx_parent, res_ratio, nghost, stencil)
+    
+    # Divergence from parent at boundaries (no extra dx scaling needed)
+    div_parent = diff_x_parent + diff_y_parent + diff_z_parent
+    
+    # Average standard and parent divergence at boundaries
+    nx, ny, nz = arr_x.shape
+    i_start = nghost
+    i_end = nx - nghost - 1
+    j_start = nghost
+    j_end = ny - nghost - 1
+    k_start = nghost
+    k_end = nz - nghost - 1
+    
+    # X-boundaries
+    div[i_start, j_start:j_end+1, k_start:k_end+1] = 0.5 * (div[i_start, j_start:j_end+1, k_start:k_end+1] + 
+                                                            div_parent[i_start, j_start:j_end+1, k_start:k_end+1])
+    div[i_end, j_start:j_end+1, k_start:k_end+1] = 0.5 * (div[i_end, j_start:j_end+1, k_start:k_end+1] + 
+                                                          div_parent[i_end, j_start:j_end+1, k_start:k_end+1])
+    
+    # Y-boundaries
+    div[i_start:i_end+1, j_start, k_start:k_end+1] = 0.5 * (div[i_start:i_end+1, j_start, k_start:k_end+1] + 
+                                                            div_parent[i_start:i_end+1, j_start, k_start:k_end+1])
+    div[i_start:i_end+1, j_end, k_start:k_end+1] = 0.5 * (div[i_start:i_end+1, j_end, k_start:k_end+1] + 
+                                                          div_parent[i_start:i_end+1, j_end, k_start:k_end+1])
+    
+    # Z-boundaries
+    div[i_start:i_end+1, j_start:j_end+1, k_start] = 0.5 * (div[i_start:i_end+1, j_start:j_end+1, k_start] + 
+                                                            div_parent[i_start:i_end+1, j_start:j_end+1, k_start])
+    div[i_start:i_end+1, j_start:j_end+1, k_end] = 0.5 * (div[i_start:i_end+1, j_start:j_end+1, k_end] + 
+                                                          div_parent[i_start:i_end+1, j_start:j_end+1, k_end])
+    
+    return div
+
+
+def divergence_with_parent_boundaries(field_x, field_y, field_z, dx, npatch, 
+                                    patchpare, patchnx, patchny, patchnz,
+                                    patchrx, patchry, patchrz,
+                                    buffer_active=False, nghost=1,
+                                    kept_patches=None, stencil=3):
+    '''
+    Computes divergence of vector field with parent-based derivatives at boundaries.
+    High-level function that iterates over patches.
+    
+    Implements Fortran-like approach: boundaries use rescaled parent derivatives.
+    When buffer_active=True, averages buffer-based and parent-based results at real boundaries.
+    
+    Args:
+        field_x, field_y, field_z: vector field components (list of arrays per patch)
+        dx: coarsest grid cell size
+        npatch: number of patches per level
+        patchpare: parent patch indices
+        patchnx, patchny, patchnz: patch dimensions (without buffer)
+        patchrx, patchry, patchrz: patch positions in parent (cell indices, 0-based)
+        buffer_active: whether fields have ghost buffer zones
+        nghost: number of ghost cells if buffer_active=True
+        kept_patches: boolean array for patches to process (None = all)
+        stencil: derivative stencil (3 or 5)
+    
+    Returns:
+        div: list of divergence arrays per patch
+    
+    Author: Marco Molina
+    '''
+    levels = tools.create_vector_levels(npatch)
+    resolution = dx / 2**levels
+    div = []
+    
+    if kept_patches is None:
+        kept_patches = np.ones(npatch.sum()+1, dtype=bool)
+    
+    for ipatch in range(npatch.sum()+1):
+        if not kept_patches[ipatch]:
+            div.append(0)
+            continue
+        
+        if ipatch == 0:
+            # Level 0: periodic boundaries (no parent)
+            div_patch = arr_periodic_divergence(field_x[ipatch], field_y[ipatch], 
+                                            field_z[ipatch], resolution[ipatch], stencil=5)
+            div.append(div_patch)
+            continue
+        
+        # Refined patches: use parent for boundaries
+        parent_idx = int(patchpare[ipatch])
+        
+        if parent_idx >= 0 and parent_idx < len(field_x):
+            # Valid parent exists
+            ipatch_in_parent = int(patchrx[ipatch])
+            jpatch_in_parent = int(patchry[ipatch])
+            kpatch_in_parent = int(patchrz[ipatch])
+            
+            ng = nghost if buffer_active else 0
+            
+            div_patch = arr_divergence_with_parent_boundaries(
+                field_x[ipatch], field_y[ipatch], field_z[ipatch], resolution[ipatch],
+                field_x[parent_idx], field_y[parent_idx], field_z[parent_idx], resolution[parent_idx],
+                ipatch_in_parent, jpatch_in_parent, kpatch_in_parent,
+                nghost=ng, stencil=stencil
+            )
+            div.append(div_patch)
+        else:
+            # No valid parent: use standard divergence
+            div_patch = arr_divergence(field_x[ipatch], field_y[ipatch], field_z[ipatch], 
+                                        resolution[ipatch], stencil=stencil)
+            div.append(div_patch)
+    
+    return div

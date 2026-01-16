@@ -14,7 +14,7 @@ import scripts.utils as tools
 
 @njit(fastmath=True)
 def TSC_kernel(x, h):
-    """
+    '''
     Triangular-Shaped Cloud (TSC) kernel for interpolation.
     
     Args:
@@ -25,7 +25,7 @@ def TSC_kernel(x, h):
         Weight for TSC interpolation (between 0 and 0.75)
         
     Author: Òscar Monllor
-    """
+    '''
     ax = abs(x) / h
     if ax <= 0.5:
         w = 0.75 - ax**2
@@ -37,7 +37,7 @@ def TSC_kernel(x, h):
 
 @njit(fastmath=True)
 def SPH_kernel(r, h):
-    """
+    '''
     3D cubic-spline SPH kernel (Monaghan). Support radius = 2*h.
     Returns W(|r|,h) (not multiplied by mass/density).
     Normalisation constant uses 1/(pi*h^3) for 3D.
@@ -50,7 +50,7 @@ def SPH_kernel(r, h):
         Weight for SPH interpolation (between 0 and ~0.318/h^3)
     
     Author: Marco Molina
-    """
+    '''
     q = r / h
     sigma = 1.0 / (np.pi * h**3)   # 3D normalisation
     if q < 0.0:
@@ -63,6 +63,122 @@ def SPH_kernel(r, h):
         return 0.0
 
 @njit(fastmath=True)
+def direct_parent_access(ipatch, i_patch, j_patch, k_patch,
+                        x, y, z,
+                        pres, nmax,
+                        patch_nx, patch_ny, patch_nz,
+                        patch_field, level_res,
+                        patches_pare, patches_nx, patches_ny, patches_nz,
+                        patches_x, patches_y, patches_z,
+                        patches_rx, patches_ry, patches_rz, patches_levels,
+                        coarse_field, arr_fields):
+    '''
+    Direct parent access: accesses parent cell value directly without interpolation.
+    Equivalent to MASCLET-B 2020 Fortran method: goes up hierarchy until finds parent with sufficient bounds,
+    then returns parent cell value directly without any interpolation.
+    Most conservative and accurate method for avoiding artificial gradients.
+    
+    Args:
+        - ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
+        - x, y, z: coordinates of the interpolation point
+        - pres: pressure (unused here, but kept for consistency)
+        - nmax: maximum number of cells in level 0
+        - patch_nx, patch_ny, patch_nz: dimensions of the current patch
+        - patch_field: field values in the current patch
+        - level_res: resolution at each refinement level
+        - patches_pare, patches_nx, patches_ny, patches_nz: parent patch info
+        - patches_x, patches_y, patches_z: patch starting indices
+        - patches_rx, patches_ry, patches_rz: patch reference coordinates
+        - patches_levels: refinement levels of patches
+        - coarse_field: level 0 field data
+        - arr_fields: list of all patch fields
+    
+    Indexing notes:
+        - Python uses 0-based indexing
+        - patches_x, patches_y, patches_z are already converted to 0-based in readers.py (line 238-240)
+        - Refinement factor = 2 (child cell i maps to parent cell i//2)
+        - No +1 offset needed because already 0-based
+        
+    Returns:
+        - Value at the parent cell directly above the target cell
+    
+    Author: Marco Molina
+    '''
+    l0 = patches_levels[ipatch]
+    ipatch2 = ipatch
+    ii2 = i_patch
+    jj2 = j_patch
+    kk2 = k_patch
+
+    proper_bounds = False
+    while not proper_bounds:
+        ipare = patches_pare[ipatch2]
+        pare_l = patches_levels[ipare]
+        
+        # If parent is also refined, go up one more level
+        if pare_l > 0:
+            ii2 = ii2 // 2
+            jj2 = jj2 // 2
+            kk2 = kk2 // 2
+            ipatch2 = ipare
+        else:
+            # Found a non-refined parent
+            break
+
+        # Get parent patch dimensions
+        pare_nx = patches_nx[ipatch2]
+        pare_ny = patches_ny[ipatch2]
+        pare_nz = patches_nz[ipatch2]
+
+        # Parent patch starting indices (0-based, already from readers.py)
+        imin_pare = patches_x[ipatch2]
+        jmin_pare = patches_y[ipatch2]
+        kmin_pare = patches_z[ipatch2]
+
+        # Map child cell to parent coordinates
+        ii_pare = imin_pare + ii2 // 2
+        jj_pare = jmin_pare + jj2 // 2
+        kk_pare = kmin_pare + kk2 // 2
+        
+        # Check if within parent bounds
+        if (ii_pare >= 0 and ii_pare < pare_nx and
+            jj_pare >= 0 and jj_pare < pare_ny and 
+            kk_pare >= 0 and kk_pare < pare_nz):
+            proper_bounds = True
+
+        if ipare == 0 or proper_bounds:
+            break
+
+    # Get parent patch dimensions (for final access)
+    ipare = patches_pare[ipatch2]
+    pare_nx = patches_nx[ipare]
+    pare_ny = patches_ny[ipare]
+    pare_nz = patches_nz[ipare]
+
+    # Get parent patch starting indices
+    imin_pare = patches_x[ipare]
+    jmin_pare = patches_y[ipare]
+    kmin_pare = patches_z[ipare]
+
+    # Final mapping to parent (0-based)
+    ii_pare = imin_pare + ii2 // 2
+    jj_pare = jmin_pare + jj2 // 2
+    kk_pare = kmin_pare + kk2 // 2
+    
+    # Clamp to valid range (defensive, should not be needed)
+    if ii_pare < 0: ii_pare = 0
+    if ii_pare >= pare_nx: ii_pare = pare_nx - 1
+    if jj_pare < 0: jj_pare = 0
+    if jj_pare >= pare_ny: jj_pare = pare_ny - 1
+    if kk_pare < 0: kk_pare = 0
+    if kk_pare >= pare_nz: kk_pare = pare_nz - 1
+    
+    # Access parent field directly (no interpolation)
+    pare_field = arr_fields[ipare]
+    return float(pare_field[ii_pare, jj_pare, kk_pare])
+
+
+@njit(fastmath=True)
 def nearest_interpolation(ipatch, i_patch, j_patch, k_patch,
                         x, y, z,
                         pres, nmax,
@@ -72,12 +188,35 @@ def nearest_interpolation(ipatch, i_patch, j_patch, k_patch,
                         patches_x, patches_y, patches_z,
                         patches_rx, patches_ry, patches_rz, patches_levels,
                         coarse_field, arr_fields):
-    """
+    '''
     Nearest-neighbor interpolation: finds closest parent cell and copies its value.
     Simple and conservative method that avoids introducing gradients.
     
+    Args:
+        - ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
+        - x, y, z: coordinates of the interpolation point
+        - pres: pressure (unused here, but kept for consistency)
+        - nmax: maximum number of cells in level 0
+        - patch_nx, patch_ny, patch_nz: dimensions of the current patch
+        - patch_field: field values in the current patch
+        - level_res: resolution at each refinement level
+        - patches_pare, patches_nx, patches_ny, patches_nz: parent patch info
+        - patches_x, patches_y, patches_z: patch starting indices
+        - patches_rx, patches_ry, patches_rz: patch reference coordinates
+        - patches_levels: refinement levels of patches
+        - coarse_field: level 0 field data
+        - arr_fields: list of all patch fields
+    
+    Indexing notes:
+        - Python uses 0-based indexing  
+        - patches_x/y/z are 0-based (converted in readers.py)
+        - Refinement factor = 2
+        
+    Returns:
+        - Interpolated value at (x, y, z)
+    
     Author: Marco Molina
-    """
+    '''
     l0 = patches_levels[ipatch]
     ipatch2 = ipatch
     ii2 = i_patch
@@ -141,12 +280,37 @@ def linear_interpolation(ipatch, i_patch, j_patch, k_patch,
                         patches_x, patches_y, patches_z,
                         patches_rx, patches_ry, patches_rz, patches_levels,
                         coarse_field, arr_fields):
-    """
+    '''
     Linear extrapolation from nearest two parent cells in each direction.
     More conservative than TSC but smoother than nearest-neighbor.
     
+    Args:
+        - ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
+        - x, y, z: coordinates of the interpolation point
+        - pres: pressure (unused here, but kept for consistency)
+        - nmax: maximum number of cells in level 0
+        - patch_nx, patch_ny, patch_nz: dimensions of the current patch
+        - patch_field: field values in the current patch
+        - level_res: resolution at each refinement level
+        - patches_pare, patches_nx, patches_ny, patches_nz: parent patch info
+        - patches_x, patches_y, patches_z: patch starting indices
+        - patches_rx, patches_ry, patches_rz: patch reference coordinates
+        - patches_levels: refinement levels of patches
+        - coarse_field: level 0 field data
+        - arr_fields: list of all patch fields
+    
+    Indexing notes:
+        - Python 0-based indexing throughout
+        - patches_x/y/z are 0-based (readers.py line 238: patchx.append(this_x - 1))
+        - patches_rx/ry/rz are physical coordinates (center of FIRST cell in parent coords)
+        - Refinement factor = 2, so ii2 // 2 maps child to parent
+        - NO +1 offset needed in Python (unlike Fortran which uses 1-based)
+        
+    Returns:
+        - Interpolated value at (x, y, z)
+    
     Author: Marco Molina
-    """
+    '''
     l0 = patches_levels[ipatch]
     ipatch2 = ipatch
     ii2 = i_patch
@@ -263,31 +427,37 @@ def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
                     patches_x, patches_y, patches_z,
                     patches_rx, patches_ry, patches_rz, patches_levels,
                     coarse_field, arr_fields):
-    """
+    '''
     Performs TSC interpolation for a point, handling boundaries via parent patch interpolation.
     
     Args:
-        ipatch: current patch index
-        i_patch, j_patch, k_patch: cell indices in current patch
-        x, y, z: target coordinates for interpolation
-        pres: current patch cell size
-        nmax: base level grid size
-        patch_nx, patch_ny, patch_nz: current patch dimensions
-        patch_field: field data for current patch
-        level_res: resolution (cell size) for each level
-        patches_pare: parent patch indices
-        patches_nx, patches_ny, patches_nz: dimensions of all patches
-        patches_x, patches_y, patches_z: cell positions in parent coordinates
-        patches_rx, patches_ry, patches_rz: physical positions (center of first cell)
-        patches_levels: refinement level of each patch
-        coarse_field: level 0 field data
-        arr_fields: list of all patch fields
+        - ipatch: current patch index
+        - i_patch, j_patch, k_patch: cell indices in current patch
+        - x, y, z: target coordinates for interpolation
+        - pres: current patch cell size
+        - nmax: base level grid size
+        - patch_nx, patch_ny, patch_nz: current patch dimensions
+        - patch_field: field data for current patch
+        - level_res: resolution (cell size) for each level
+        - patches_pare: parent patch indices
+        - patches_nx, patches_ny, patches_nz: dimensions of all patches
+        - patches_x, patches_y, patches_z: cell positions in parent coordinates
+        - patches_rx, patches_ry, patches_rz: physical positions (center of first cell)
+        - patches_levels: refinement level of each patch
+        - coarse_field: level 0 field data
+        - arr_fields: list of all patch fields
+        
+    Indexing notes:
+        - All indices are 0-based (Python convention)
+        - patches_x/y/z are 0-based from readers.py
+        - Refinement factor = 2
+        - No index offset adjustments needed (Fortran had +1 for 1-based, we don't)
         
     Returns:
-        Interpolated value at (x, y, z)
+        - Interpolated value at (x, y, z)
         
     Author: Òscar Monllor
-    """ 
+    ''' 
 
     # 3x3x3 stencil for TSC interpolation
     l0 = patches_levels[ipatch]
@@ -376,32 +546,38 @@ def SPH_interpolation(ipatch, i_patch, j_patch, k_patch,
                         patches_x, patches_y, patches_z,
                         patches_rx, patches_ry, patches_rz, patches_levels,
                         coarse_field, arr_fields):
-    """
+    '''
     SPH-style interpolation at point (x,y,z) using parent/ancestor cells.
     Similar parent-walk as TSC_interpolation, but uses cubic-spline SPH kernel
     with support 2*h. We gather a small parent stencil (±2) and compute
     weighted average (weights normalized).
     
     Args:
-        ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
-        x, y, z: coordinates of the interpolation point
-        pres: pressure (unused here, but kept for consistency)
-        nmax: maximum number of cells in level 0
-        patch_nx, patch_ny, patch_nz: dimensions of the current patch
-        patch_field: field values in the current patch
-        level_res: resolution at each refinement level
-        patches_pare, patches_nx, patches_ny, patches_nz: parent patch info
-        patches_x, patches_y, patches_z: patch starting indices
-        patches_rx, patches_ry, patches_rz: patch reference coordinates
-        patches_levels: refinement levels of patches
-        coarse_field: level 0 field data
-        arr_fields: list of all patch fields
+        - ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
+        - x, y, z: coordinates of the interpolation point
+        - pres: pressure (unused here, but kept for consistency)
+        - nmax: maximum number of cells in level 0
+        - patch_nx, patch_ny, patch_nz: dimensions of the current patch
+        - patch_field: field values in the current patch
+        - level_res: resolution at each refinement level
+        - patches_pare, patches_nx, patches_ny, patches_nz: parent patch info
+        - patches_x, patches_y, patches_z: patch starting indices
+        - patches_rx, patches_ry, patches_rz: patch reference coordinates
+        - patches_levels: refinement levels of patches
+        - coarse_field: level 0 field data
+        - arr_fields: list of all patch fields
+        
+    Indexing notes:
+        - All indices are 0-based (Python convention)
+        - patches_x/y/z are 0-based from readers.py
+        - Refinement factor = 2
+        - No index offset adjustments needed (Fortran had +1 for 1-based, we don't)
         
     Returns:
-        Interpolated value at (x, y, z)
+        - Interpolated value at (x, y, z)
         
     Author: Marco Molina
-    """
+    '''
     # Find a parent patch that provides a sufficiently large stencil (like TSC)
     l0 = patches_levels[ipatch]
     ipatch2 = ipatch
@@ -493,8 +669,8 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                     patchx, patchy, patchz,
                     patchrx, patchry, patchrz,
                     patchpare, levels, level_res,
-                    fields, nmax, interpol='TSC'):
-    """
+                    fields, nmax, interpol='TSC', use_siblings=True):
+    '''
     Fills ghost cells of a single patch using interpolation from parent patches.
     If the ghost cell lies inside a brother patch (same refinement level), copy the
     value directly from that brother instead of using parent interpolation.
@@ -512,12 +688,13 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
         fields: list of lists of all fields patches
         nmax: base level grid size
         interpol: interpolation method - 'TSC', 'SPH', 'LINEAR', or 'NEAREST'
+        use_siblings: if True, check for sibling patches before parent interpolation (default: True)
         
     Returns:
         buffered_patches: list of list of arrays with ghost cells filled
         
     Author: Marco Molina
-    """
+    '''
     
     nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
     pres = level_res[ipatch]
@@ -568,102 +745,104 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                 z_ghost = patch_z0 + k_local * pres
                 
                 # First we try to find a brother patch at the same level that contains this point
+                # (only if use_siblings is enabled)
                 brother_found = False
                 
-                ## Try discovered brothers first (cheap)
-                for bi in range(bro_count):
-                    ip = bro_list[bi]
-                    bx0 = bro_bx0[bi]; by0 = bro_by0[bi]; bz0 = bro_bz0[bi]
-                    bnx = bro_bnx[bi]; bny = bro_bny[bi]; bnz = bro_bnz[bi]
-                    pres_b = bro_pres[bi]
-                    
-                    # Check inclusion
-                    if (x_ghost >= bx0 and x_ghost < bx0 + bnx * pres_b and
-                        y_ghost >= by0 and y_ghost < by0 + bny * pres_b and
-                        z_ghost >= bz0 and z_ghost < bz0 + bnz * pres_b):
+                if use_siblings:
+                    ## Try discovered brothers first (cheap)
+                    for bi in range(bro_count):
+                        ip = bro_list[bi]
+                        bx0 = bro_bx0[bi]; by0 = bro_by0[bi]; bz0 = bro_bz0[bi]
+                        bnx = bro_bnx[bi]; bny = bro_bny[bi]; bnz = bro_bnz[bi]
+                        pres_b = bro_pres[bi]
                         
-                        # Compute integer indices inside brother patch
-                        ib = int((x_ghost - bx0) / pres_b)
-                        jb = int((y_ghost - by0) / pres_b)
-                        kb = int((z_ghost - bz0) / pres_b)
-                        
-                        # For some edge cases
-                        if ib < 0: ib = 0
-                        if ib > bnx - 1: ib = bnx - 1
-                        if jb < 0: jb = 0
-                        if jb > bny - 1: jb = bny - 1
-                        if kb < 0: kb = 0
-                        if kb > bnz - 1: kb = bnz - 1
-                        
-                        # Copy value from brother patch (nearest-cell copy)
-                        for f in range(len(fields)):
-                            buffered_patches[f][i, j, k] = fields[f][ip][ib, jb, kb]
-                        
-                        brother_found = True
-                        break
+                        # Check inclusion
+                        if (x_ghost >= bx0 and x_ghost < bx0 + bnx * pres_b and
+                            y_ghost >= by0 and y_ghost < by0 + bny * pres_b and
+                            z_ghost >= bz0 and z_ghost < bz0 + bnz * pres_b):
+                            
+                            # Compute integer indices inside brother patch
+                            ib = int((x_ghost - bx0) / pres_b)
+                            jb = int((y_ghost - by0) / pres_b)
+                            kb = int((z_ghost - bz0) / pres_b)
+                            
+                            # For some edge cases
+                            if ib < 0: ib = 0
+                            if ib > bnx - 1: ib = bnx - 1
+                            if jb < 0: jb = 0
+                            if jb > bny - 1: jb = bny - 1
+                            if kb < 0: kb = 0
+                            if kb > bnz - 1: kb = bnz - 1
+                            
+                            # Copy value from brother patch (nearest-cell copy)
+                            for f in range(len(fields)):
+                                buffered_patches[f][i, j, k] = fields[f][ip][ib, jb, kb]
+                            
+                            brother_found = True
+                            break
 
-                if brother_found:
-                    continue
-                
-                ## Full scan fallback (when not covered by discovered brothers)
-                for ip in range(low_patch_index, high_patch_index):
-                    if ip == ipatch:
+                    if brother_found:
                         continue
                     
-                    # Brother patch cell size and origin
-                    bnx, bny, bnz = patchnx[ip], patchny[ip], patchnz[ip]
-                    pres_b = level_res[ip]
-                    bx0 = patchrx[ip] - pres_b / 2
-                    by0 = patchry[ip] - pres_b / 2
-                    bz0 = patchrz[ip] - pres_b / 2
-
-                    # Check inclusion
-                    if (x_ghost >= bx0 and x_ghost < bx0 + bnx * pres_b and
-                        y_ghost >= by0 and y_ghost < by0 + bny * pres_b and
-                        z_ghost >= bz0 and z_ghost < bz0 + bnz * pres_b):
+                    ## Full scan fallback (when not covered by discovered brothers)
+                    for ip in range(low_patch_index, high_patch_index):
+                        if ip == ipatch:
+                            continue
                         
-                        # Compute integer indices inside brother patch
-                        ib = int((x_ghost - bx0) / pres_b)
-                        jb = int((y_ghost - by0) / pres_b)
-                        kb = int((z_ghost - bz0) / pres_b)
-                        
-                        # For some edge cases
-                        if ib < 0: ib = 0
-                        if ib > bnx - 1: ib = bnx - 1
-                        if jb < 0: jb = 0
-                        if jb > bny - 1: jb = bny - 1
-                        if kb < 0: kb = 0
-                        if kb > bnz - 1: kb = bnz - 1
+                        # Brother patch cell size and origin
+                        bnx, bny, bnz = patchnx[ip], patchny[ip], patchnz[ip]
+                        pres_b = level_res[ip]
+                        bx0 = patchrx[ip] - pres_b / 2
+                        by0 = patchry[ip] - pres_b / 2
+                        bz0 = patchrz[ip] - pres_b / 2
 
-                        # Copy value from brother patch (nearest-cell copy)
-                        for f in range(len(fields)):
-                            buffered_patches[f][i, j, k] = fields[f][ip][ib, jb, kb]
-
-                        # Record discovered brother if cache not full and not already present
-                        already = False
-                        for bi in range(bro_count):
-                            if bro_list[bi] == ip:
-                                already = True
-                                break
-                        if (not already) and (bro_count < cache_size):
-                            idx = bro_count
-                            bro_list[idx] = ip
-                            bro_bx0[idx] = bx0
-                            bro_by0[idx] = by0
-                            bro_bz0[idx] = bz0
-                            bro_bnx[idx] = bnx
-                            bro_bny[idx] = bny
-                            bro_bnz[idx] = bnz
-                            bro_pres[idx] = pres_b
-                            bro_count += 1
+                        # Check inclusion
+                        if (x_ghost >= bx0 and x_ghost < bx0 + bnx * pres_b and
+                            y_ghost >= by0 and y_ghost < by0 + bny * pres_b and
+                            z_ghost >= bz0 and z_ghost < bz0 + bnz * pres_b):
                             
-                        brother_found = True
-                        break
+                            # Compute integer indices inside brother patch
+                            ib = int((x_ghost - bx0) / pres_b)
+                            jb = int((y_ghost - by0) / pres_b)
+                            kb = int((z_ghost - bz0) / pres_b)
+                            
+                            # For some edge cases
+                            if ib < 0: ib = 0
+                            if ib > bnx - 1: ib = bnx - 1
+                            if jb < 0: jb = 0
+                            if jb > bny - 1: jb = bny - 1
+                            if kb < 0: kb = 0
+                            if kb > bnz - 1: kb = bnz - 1
 
-                if brother_found:
-                    continue
+                            # Copy value from brother patch (nearest-cell copy)
+                            for f in range(len(fields)):
+                                buffered_patches[f][i, j, k] = fields[f][ip][ib, jb, kb]
+
+                            # Record discovered brother if cache not full and not already present
+                            already = False
+                            for bi in range(bro_count):
+                                if bro_list[bi] == ip:
+                                    already = True
+                                    break
+                            if (not already) and (bro_count < cache_size):
+                                idx = bro_count
+                                bro_list[idx] = ip
+                                bro_bx0[idx] = bx0
+                                bro_by0[idx] = by0
+                                bro_bz0[idx] = bz0
+                                bro_bnx[idx] = bnx
+                                bro_bny[idx] = bny
+                                bro_bnz[idx] = bnz
+                                bro_pres[idx] = pres_b
+                                bro_count += 1
+                                
+                            brother_found = True
+                            break
+
+                    if brother_found:
+                        continue
                 
-                ## If not borther, use interpolation from parents (choose method)
+                ## If not brother, use interpolation from parents (choose method)
                 for f in range(len(fields)):
                     if interpol == 'TSC':
                         buffered_patches[f][i, j, k] = TSC_interpolation(
@@ -709,6 +888,17 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                             patchx, patchy, patchz,
                             patchrx, patchry, patchrz, levels,
                             fields[f][0], fields[f])
+                    elif interpol == 'PARENT_DIRECT':
+                        buffered_patches[f][i, j, k] = direct_parent_access(
+                            ipatch, i_local, j_local, k_local,
+                            x_ghost, y_ghost, z_ghost,
+                            pres, nmax,
+                            nx, ny, nz,
+                            fields[f][ipatch], level_res,
+                            patchpare, patchnx, patchny, patchnz,
+                            patchx, patchy, patchz,
+                            patchrx, patchry, patchrz, levels,
+                            fields[f][0], fields[f])
     
     return buffered_patches
 
@@ -717,8 +907,8 @@ def add_ghost_buffer(fields, npatch,
                     patchnx, patchny, patchnz,
                     patchx, patchy, patchz,
                     patchrx, patchry, patchrz, patchpare,
-                    size, nmax, nghost=1, interpol='TSC', bitformat=np.float32, kept_patches=None):
-    """
+                    size, nmax, nghost=1, interpol='TSC', use_siblings=True, bitformat=np.float32, kept_patches=None):
+    '''
     Adds ghost buffer cells to all patches in an AMR field using interpolation from parent patches.
     If the ghost cell lies inside a brother patch (same refinement level), copies directly instead of interpolating.
     
@@ -732,10 +922,13 @@ def add_ghost_buffer(fields, npatch,
         size: simulation box size
         nmax: number of cells at base level
         nghost: number of ghost cells to add on each side (default: 1)
-        interpol: interpolation method - 'TSC' (Triangular-Shaped Cloud, high order),
+        interpol: interpolation method - 
+                'TSC' (Triangular-Shaped Cloud, high order interpolation),
+                'PARENT_DIRECT' (direct parent cell access, least accurate),
                 'SPH' (smoothed particle hydrodynamics, high order),
                 'LINEAR' (linear extrapolation, conservative),
                 'NEAREST' (nearest-neighbor copy, most conservative)
+        use_siblings: if True, check for sibling patches before parent interpolation (default: True)
         bitformat: data type for the fields (default is np.float32)
         kept_patches: boolean array indicating which patches to process
         
@@ -743,10 +936,10 @@ def add_ghost_buffer(fields, npatch,
         buffered_fields: list of list of numpy arrays with ghost cells added
         
     Author: Marco Molina
-    """
+    '''
     
-    if interpol not in ['TSC', 'SPH', 'LINEAR', 'NEAREST']:
-        raise ValueError("Interpolation method must be 'TSC', 'SPH', 'LINEAR', or 'NEAREST'")
+    if interpol not in ['TSC', 'PARENT_DIRECT', 'SPH', 'LINEAR', 'NEAREST']:
+        raise ValueError("Interpolation method must be 'TSC', 'PARENT_DIRECT', 'SPH', 'LINEAR', or 'NEAREST'")
     
     levels = tools.create_vector_levels(npatch)
     level_res = size / nmax / (2.0 ** levels)
@@ -799,7 +992,7 @@ def add_ghost_buffer(fields, npatch,
 
 
 def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kept_patches=None):
-    """
+    '''
     Removes ghost buffer cells from all patches, returning only the interior data.
     
     Args:
@@ -812,7 +1005,7 @@ def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kep
         field: list of numpy arrays without ghost buffer cells in original dimensions
         
     Author: Marco Molina
-    """
+    '''
     
     if kept_patches is None:
         kept_patches = np.ones(len(buffered_field), dtype=bool)
@@ -837,7 +1030,7 @@ def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kep
     return field
 
 def inplace_ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kept_patches=None):
-    """
+    '''
     Removes ghost buffer cells in-place, modifying the list but creating new arrays.
     More memory efficient than ghost_buffer_buster for large fields.
     
@@ -851,7 +1044,7 @@ def inplace_ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghos
         None (modifies buffered_field in-place)
         
     Author: Marco Molina
-    """
+    '''
     
     if kept_patches is None:
         kept_patches = np.ones(len(buffered_field), dtype=bool)

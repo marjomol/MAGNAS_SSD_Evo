@@ -531,7 +531,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         limit_info = f"{xlim[0] if xlim else 'auto'}_{ylim[0] if ylim else 'auto'}_{ylim[1] if ylim else 'auto'}"
         sim_info = f"{induction_params.get('up_to_level','')}_{induction_params.get('F','')}_{induction_params.get('vir_kind','')}vir_{induction_params.get('rad_kind','')}rad_{induction_params.get('region','None')}Region"
         if induction_params.get('buffer', False) == True:
-            buffer_info = f'Buffered_{induction_params.get("interpol","")}'
+            buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings", False)}'
         else:
             buffer_info = 'NoBuffer'
 
@@ -912,7 +912,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
             
         if induction_params['buffer'] == True:
-            buffer_info = f'Buffered_{induction_params["interpol"]}'
+            buffer_info = f'Buffered_{induction_params["interpol"]}_siblings_{induction_params["use_siblings"]}'
         else:
             buffer_info = 'NoBuffer'
         
@@ -1413,7 +1413,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
 
         if induction_params.get('buffer', False) == True:
-            buffer_info = f'Buffered_{induction_params.get("interpol","")}'
+            buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings","")}'
         else:
             buffer_info = 'NoBuffer'
 
@@ -1739,7 +1739,7 @@ def distribution_check(arr, quantity, plot_params, induction_params,
             if is_patches:
                 sim_info += '_AMR'
             if induction_params.get('buffer', False):
-                buffer_info = f'Buffered_{induction_params.get("interpol","")}'
+                buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings", False)}'
             else:
                 buffer_info = 'NoBuffer'
 
