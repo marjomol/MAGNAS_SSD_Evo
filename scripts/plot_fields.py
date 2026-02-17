@@ -15,7 +15,7 @@ import scripts.diff as diff
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.font_manager import FontProperties
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm, Normalize, BoundaryNorm
 from matplotlib.ticker import FormatStrFormatter
 from scipy import stats
 from scipy import fft
@@ -110,23 +110,19 @@ def zoom_animation_3D(arr, size, arrow_scale = 1, units = 'Mpc', title = 'Magnet
         
     return ani
         
-def scan_animation_3D(arr, size, study_box, depth = 2, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Scan', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
+def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=None, verbose=True, save=False, folder=None):
     '''
-    Generates an animation of the magnetic field seed in 3D with a scan effect. Can be used for any other 3D spacial field.
+    Generates an animation of the field in 3D with a scan effect.
     
     Args:
         - arr: 3D array to animate
-        - size: size of the array in Mpc in the x direction
-        - study_box: percentage of the box to scan centered in the middle of the scanning plane. Must be a float in (0, 1]
-        - depth: depth of the scanning plane, the larger the depth the less frames the animation will have
-        - arrow_scale: scale of the arrow in the provided units
-        - units: units of the arrow scale. Can be 'Mpc' or 'kpc'
-        - title: title of the animation
-        - verbose: boolean to print the progress of the function
-        - Save: boolean to save the animation or not
-        - DPI: dots per inch in the animation
-        - run: name of the run
-        - folder: folder to save the animation
+        - size: size of the array in Mpc
+        - plot_params: dict with study_box, depth, arrow_scale, units, interval, title, dpi, run, and optional 'amr_levels'
+        - induction_params: dict with sim, it, zeta, time, level, up_to_level, buffer, interpol, stencil
+        - volume_params: dict with vol_idx, reg_idx (for multi-volume scans)
+        - verbose: boolean to print progress
+        - save: boolean to save animation
+        - folder: folder to save animation
         
     Returns:
         - gif file with the animation
@@ -135,76 +131,230 @@ def scan_animation_3D(arr, size, study_box, depth = 2, arrow_scale = 1, units = 
     '''
     
     assert arr.ndim == 3, "Input array must be 3D"
+
+    # Extract plot parameters
+    study_box = plot_params.get('study_box', 1.0)
+    depth = plot_params.get('depth', 2)
+    arrow_scale = plot_params.get('arrow_scale', 1.0)
+    units = plot_params.get('units', 'Mpc')
+    interval = plot_params.get('interval', 100)
+    cmap = plot_params.get('cmap', 'viridis')
+    projection_mode = plot_params.get('projection_mode', 'max')
+    dpi = plot_params.get('dpi', 300)
+    base_title = plot_params.get('title', 'Field Scan')
+    run = plot_params.get('run', '_')
+    
+    # Extract optional AMR levels for colorbar customization (debug mode only)
+    amr_levels_array = plot_params.get('amr_levels', None)
+    max_level = int(np.max(amr_levels_array)) if amr_levels_array is not None and len(amr_levels_array) > 0 else None
+
+    # Extract induction parameters for metadata
+    sim = induction_params.get('sim', 'unknown')
+    it = induction_params.get('it', 0)
+    zeta = induction_params.get('zeta', 0.0)
+    time = induction_params.get('time', 0.0)
+    level = induction_params.get('level', 0)
+    up_to_level = induction_params.get('up_to_level', level)
+    buffer = induction_params.get('buffer', True)
+    interpol = induction_params.get('interpol', 'TSC')
+    stencil = induction_params.get('stencil', 3)
+
+    # Extract volume parameters (if scanning multiple volumes)
+    vol_idx = volume_params.get('vol_idx', 0) if volume_params else 0
+    reg_idx = volume_params.get('reg_idx', 0) if volume_params else 0
+
+    # Build full title with metadata
+    full_title = f"{base_title} - z: {zeta:.2f}"
+
     assert 0 < study_box <= 1, "Study box must be a float in (0, 1]"
     assert depth > 0, "Depth must be a positive integer"
-    assert arrow_scale > 0, "Arrow scale must be a positive integer"
+    assert arrow_scale > 0, "Arrow scale must be a positive number"
     assert units in ['Mpc', 'kpc'], "Units must be 'Mpc' or 'kpc'"
     
     nmax, nmay, nmaz = arr.shape
-    
     dx = size / nmax  # Cell size in Mpc
-    
-    inter = 100
+    inter = interval
     x_lsize = round(nmax//2 - nmax*study_box//2)
     x_dsize = round(nmax//2 + nmax*study_box//2)
     y_lsize = round(nmay//2 - nmay*study_box//2)
     y_dsize = round(nmay//2 + nmay*study_box//2)
-    new_nmax = x_dsize - x_lsize # Para definir el tamaño de la flecha de referencia
+    new_nmax = x_dsize - x_lsize
     col = 'red'
-    
-    fig = plt.figure(figsize=(5, 5))
-    
-    # Find the minimum and maximum values of the magnetic field among all the studied volume
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    fig.subplots_adjust(left=0.12, right=0.80, bottom=0.12, top=0.92)
+
+    # Find the minimum and maximum values of the field among all the studied volume
+    # Include all values (including 0) to properly capture the full range
     all_values = []
     for i in range(nmaz):
         frame_data = arr[x_lsize:x_dsize, y_lsize:y_dsize, i]
-        all_values.extend(frame_data[frame_data > 0].flatten())
+        all_values.extend(frame_data.flatten())  # Include ALL values, including 0
 
     all_values = np.array(all_values)
-    min_value = np.percentile(all_values, 1)  # 1st percentile
-    max_value = np.percentile(all_values, 99.9)  # 99.9th percentile
-    print(min_value, max_value)
-        
-    # Create a logarithmic normalization for the color intensity and regulate the intensity of the color bar
-    norm = LogNorm(vmin=min_value, vmax=max_value)
+    # Filter out NaN/inf but keep zeros
+    all_values = all_values[np.isfinite(all_values)]
     
+    if all_values.size > 0:
+        min_value = np.percentile(all_values, 1)    # 1st percentile
+        max_value = np.percentile(all_values, 99.9) # 99.9th percentile
+    else:
+        min_value = 0
+        max_value = 1
+    
+    # Ensure min < max
+    if min_value >= max_value:
+        if min_value <= 0:
+            min_value = 0  # Allow 0 as minimum for AMR visualization
+        if min_value >= max_value:
+            max_value = min_value + 0.01
+
+    # Choose normalization: BoundaryNorm for discrete AMR levels, LogNorm otherwise
+    if amr_levels_array is not None and len(amr_levels_array) > 0:
+        # Discrete AMR level visualization: values are simply 0, 1, 2, 3, ...
+        max_level = int(np.max(amr_levels_array))
+        # Create boundaries: [0, 1), [1, 2), [2, 3), ...
+        boundaries = [float(i) for i in range(max_level + 2)]
+        # BoundaryNorm for discrete color levels with explicit boundaries
+        norm = BoundaryNorm(boundaries=boundaries, ncolors=256)
+    else:
+        # Logarithmic normalization for continuous field intensity
+        norm = LogNorm(vmin=min_value, vmax=max_value)
+    
+    # Calculate arrow scale conversion
     if units == 'Mpc':
-        ctou = arrow_scale/dx
+        ctou = arrow_scale / dx
     elif units == 'kpc':
-        ctou = arrow_scale/(dx * 1000)
+        ctou = arrow_scale / (dx * 1000)
 
+    # Create the initial image and colorbar (will be reused)
+    im = None
+    cbar = None
+    
     def animate(frame):
-        plt.clf()
-        section = np.sum(arr[x_lsize:x_dsize, y_lsize:y_dsize, (frame - depth//2):(frame + depth//2)], axis=2)
-        plt.imshow(section, cmap='viridis', norm=norm)
-        plt.title(title)
-        plt.arrow((new_nmax - 4*new_nmax//5), (new_nmax - new_nmax//10), ctou, 0, head_width=(ctou/14), head_length=(ctou/7), fc=col, ec=col)
-        text_x = (new_nmax - 4*new_nmax//5) + ctou / 2  # Centered above the arrow
-        text_y = (new_nmax - new_nmax//10) - 0.03 * new_nmax  # Small offset above the arrow
-        plt.text(text_x, text_y, f'{arrow_scale} {units}', color=col, ha='center', va='bottom', fontsize=10)
-        plt.xlabel('x cells')
-        plt.ylabel('y cells')
-
-    ani = FuncAnimation(fig, animate, frames = range(depth, nmaz), interval=inter)
-    ani = FuncAnimation(fig, animate, frames = range(nmaz), interval=inter)
-    
-    
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_dir = os.path.join(base_dir, 'data')
-    ani.save(data_dir + '/animation.gif', writer='pillow')
-    
-    if verbose == True:
-        print(f'Plotting... Magnetic Field Seed Scan Animation computed')
-    
-    # Save the plots
-    if Save == True:
+        nonlocal im, cbar
         
+        # Calculate depth slice bounds with boundary protection
+        z_start = max(0, frame - depth//2)
+        z_end = min(nmaz, frame + depth//2)
+        
+        # Ensure valid slice (at least 1 element)
+        if z_end <= z_start:
+            z_end = z_start + 1
+        
+        # Project along depth direction for this frame
+        if projection_mode == 'min':
+            section = np.min(arr[x_lsize:x_dsize, y_lsize:y_dsize, z_start:z_end], axis=2)
+        elif projection_mode == 'sum':
+            section = np.sum(arr[x_lsize:x_dsize, y_lsize:y_dsize, z_start:z_end], axis=2)
+        else:
+            # Default to max for discrete AMR levels
+            section = np.max(arr[x_lsize:x_dsize, y_lsize:y_dsize, z_start:z_end], axis=2)
+
+        # Snap to integer AMR levels and clip to valid range to avoid float speckles
+        if amr_levels_array is not None and len(amr_levels_array) > 0 and max_level is not None:
+            section = np.rint(section).astype(np.int16)
+            section = np.clip(section, 0, max_level)
+        
+        # On first frame, create image and colorbar
+        if im is None:
+            # Transpose section: imshow expects [y, x], but our section is [x, y]
+            # Also flip y axis to match physical coordinates (y from -y_max to +y_max)
+            im = ax.imshow(section.T[::-1, :], cmap=cmap, norm=norm, origin='lower', interpolation='nearest')
+            cbar = fig.colorbar(im, ax=ax, fraction=0.039, pad=0.05, label='AMR Level')
+            
+            # Customize colorbar ticks to show AMR levels if available
+            if amr_levels_array is not None and len(amr_levels_array) > 0:
+                # For AMR visualization, show discrete level labels (L0, L1, L2, ...)
+                max_level_ticks = int(np.max(amr_levels_array))
+                tick_positions = []
+                tick_labels = []
+                
+                # Simple color scheme: color value = level (0, 1, 2, ...)
+                # Position ticks at the center of each discrete color bin
+                for lvl in range(max_level_ticks + 1):
+                    tick_positions.append(float(lvl) + 0.5)  # Center of bin [lvl, lvl+1)
+                    tick_labels.append(f'L{lvl}')
+                
+                if tick_positions:
+                    cbar.set_ticks(tick_positions)
+                    cbar.set_ticklabels(tick_labels)
+        else:
+            # Update image data without recreating - apply same transpose and flip
+            im.set_data(section.T[::-1, :])
+        
+        ax.set_title(full_title, fontsize=12, fontweight='bold')
+        
+        # Draw reference arrow (bottom-left for consistent placement after transpose)
+        arrow_x = int(new_nmax * 0.08)
+        arrow_y = int(new_nmax * 0.08)
+        ax.arrow(arrow_x, arrow_y, ctou, 0,
+            head_width=(ctou/14), head_length=(ctou/7), fc=col, ec=col)
+        
+        # Add arrow label
+        text_x = arrow_x + ctou / 2
+        text_y = arrow_y + 0.03 * new_nmax
+        ax.text(text_x, text_y, f'{arrow_scale} {units}', color=col, ha='center', va='bottom', fontsize=10)
+        
+        # Set axis labels with physical units
+        x_extent = study_box * size
+        y_extent = study_box * size
+        x_coords = np.linspace(-x_extent/2, x_extent/2, new_nmax)
+        y_coords = np.linspace(-y_extent/2, y_extent/2, new_nmax)
+        
+        # Set ticks and labels in Mpc
+        n_ticks = 5
+        x_tick_indices = np.linspace(0, new_nmax-1, n_ticks, dtype=int)
+        y_tick_indices = np.linspace(0, new_nmax-1, n_ticks, dtype=int)
+        
+        x_tick_labels = [f'{x_coords[i]:.1f}' for i in x_tick_indices]
+        y_tick_labels = [f'{y_coords[i]:.1f}' for i in y_tick_indices]
+        
+        ax.set_xticks(x_tick_indices)
+        ax.set_yticks(y_tick_indices)
+        ax.set_xticklabels(x_tick_labels)
+        ax.set_yticklabels(y_tick_labels)
+        ax.tick_params(labelsize=9)
+        
+        ax.set_xlabel(f'x (Mpc)', fontsize=11)
+        ax.set_ylabel(f'y (Mpc)', fontsize=11)
+
+    ani = FuncAnimation(fig, animate, frames=range(nmaz), interval=inter)
+
+    if verbose:
+        print('Plotting... Field Scan Animation computed')
+
+    if save:
         if folder is None:
             folder = os.getcwd()
-    
-        file_title = ' '.join(title.split()[:4])
-        ani.save(folder + f'/{run}_{file_title}_scan.gif', writer='pillow', dpi = DPI)
+        os.makedirs(folder, exist_ok=True)
+        # Standardized filename: include z/time to avoid overwrites across snaps
+        title_slug = '_'.join(base_title.split())
+        sim_info = f"L{induction_params.get('up_to_level','')}_{induction_params.get('F','')}_{induction_params.get('vir_kind','')}vir_{induction_params.get('rad_kind','')}rad_{induction_params.get('region','None')}Region"
         
+        # Buffer info: distinguish between buffered, no-buffer (test), and data-only (no buffer applied)
+        buffer_flag = induction_params.get('buffer', False)
+        if 'buffer' in induction_params and not buffer_flag:
+            # Explicitly marked as no-buffer for testing
+            buffer_info = 'RawLevels_NoBuf'
+        elif buffer_flag:
+            parent_flag = induction_params.get('parent', False)
+            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
+            buffer_info = f"Buffered_{induction_params.get('interpol','')}_siblings_{induction_params.get('use_siblings', False)}"
+            if parent_flag:
+                buffer_info += f"_parent_{parent_interpol}"
+        else:
+            buffer_info = 'NoBuffer'
+        
+        z_info = f"z{zeta:.3f}"
+        proj_info = f"proj_{projection_mode}"
+        filename = f"{run}_{title_slug}_{sim_info}_{buffer_info}_{induction_params.get('stencil','')}_{proj_info}_{z_info}.gif"
+        filepath = os.path.join(folder, filename)
+        ani.save(filepath, writer='pillow', dpi=dpi)
+        if verbose:
+            print(f'Scan animation saved to {filepath}')
+
+
     return ani
 
 
@@ -406,8 +556,8 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     # Prepare x-axis (plots all snapshots like plot_integral_evolution)
     x_axis = plot_params.get('x_axis', 'zeta')
     if x_axis == 'years':
-        x = np.array([grid_t[i] * time_to_yr for i in valid_indices], dtype=float)
-        xlabel = 'Time (yr)'
+        x = np.array([grid_t[i] * time_to_yr / 1e9 for i in valid_indices], dtype=float)  # Convert to Gyr
+        xlabel = 'Time (Gyr)'
     else:
         x = np.array([grid_zeta[i] for i in valid_indices], dtype=float)
         if x.size and x[-1] < 0:
@@ -451,14 +601,33 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     figure_size = plot_params.get('figure_size', [12, 6])
     dpi = plot_params.get('dpi', 300)
     run = plot_params.get('run', '_')
-    title = plot_params.get('title', 'Percentile Threshold Evolution')
+    base_title = plot_params.get('title', 'Percentile Threshold Evolution')
     line_widths = plot_params.get('line_widths', [2.0, 1.5])
     alpha_fill = plot_params.get('alpha_fill', 0.20)
+    
+    # Read boundary exclusion parameters from plot_params
+    exclude_boundaries = plot_params.get('exclude_boundaries', False)
+    boundary_width = plot_params.get('boundary_width', 1)
+    
+    # Build title and subtitle separately
+    title = base_title
+    subtitle = None
+    if exclude_boundaries and "Excl." not in base_title:
+        subtitle = f"(Excl. {boundary_width}px boundary)"
     
     lw_pct = line_widths[0]
     lw_max = line_widths[1] if len(line_widths) > 1 else line_widths[0]
 
     fig, ax = plt.subplots(figsize=figure_size, dpi=dpi)
+    
+    # Set main title
+    ax.set_title(title, fontproperties=font_title, pad=30)
+    
+    # Add subtitle below title if needed
+    if subtitle:
+        # Add subtitle with smaller font below the main title
+        ax.text(0.5, 1.05, subtitle, transform=ax.transAxes,
+                ha='center', va='top', fontsize=9, style='normal')
 
     colors = plt.cm.viridis(np.linspace(0.15, 0.85, levels_sorted.size))
 
@@ -470,6 +639,8 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
             ax.fill_between(x, lower, upper, color=colors[i], alpha=alpha_fill, label='_nolegend_')
 
     # Plot percentile curves
+    label_entries = []
+    label_x_frac = plot_params.get('label_x_frac', 0.90)
     for i, lvl in enumerate(levels_sorted):
         if float(lvl).is_integer():
             lbl = f'{int(lvl)}%'
@@ -477,11 +648,11 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
             lbl = f'{lvl:.1f}%'
         ax.plot(x, pct_sorted[:, i], color=colors[i], linewidth=lw_pct, label='_nolegend_')
         
-        # Add label at the end of each curve
-        x_end = x[-1]
-        y_end = pct_sorted[-1, i]
-        ax.text(x_end, y_end, f'  {lbl}', fontsize=10, color=colors[i], 
-                verticalalignment='center', fontweight='bold')
+        # Store label position for later (after limits are set)
+        label_idx = max(0, min(int(len(x) * label_x_frac), len(x) - 1))
+        x_label = x[label_idx]
+        y_label = pct_sorted[label_idx, i]
+        label_entries.append((x_label, y_label, lbl, colors[i]))
 
     # Optional max curve
     gmax_list = percentile_data.get('global_max', None)
@@ -492,10 +663,10 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         except Exception:
             gmax = None
         if gmax is not None and gmax.size == x.size:
-            ax.plot(x, gmax, color='#111111', linewidth=lw_max, linestyle='--', label='_nolegend_')
-            # Add Max label
-            ax.text(x[-1], gmax[-1], '  Max', fontsize=10, color='#111111', 
-                    verticalalignment='center', fontweight='bold')
+                ax.plot(x, gmax, color='#111111', linewidth=lw_max, linestyle='--', label='_nolegend_')
+                # Store Max label position for later
+                label_idx = max(0, min(int(len(x) * label_x_frac), len(x) - 1))
+                label_entries.append((x[label_idx], gmax[label_idx], 'Max', '#111111'))
     
     if x_scale == 'log':
         ax.set_xscale('log')
@@ -511,6 +682,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     
     if xlim:
         ax.set_xlim(xlim[0], xlim[1])
+    
     if ylim:
         ax.set_ylim(ylim[0], ylim[1])
 
@@ -519,7 +691,41 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     if x_axis == 'zeta':
         ax.invert_xaxis()
 
-    fig.suptitle(title, fontproperties=font_title, y=0.995)
+    # Ensure labels stay inside the axes bounds
+    label_margin_frac = plot_params.get('label_margin_frac', 0.03)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    x_min, x_max = (x0, x1) if x0 < x1 else (x1, x0)
+    y_min, y_max = (y0, y1) if y0 < y1 else (y1, y0)
+
+    def _clamp_lin(val, vmin, vmax, frac):
+        margin = (vmax - vmin) * frac
+        return min(max(val, vmin + margin), vmax - margin)
+
+    def _clamp_log(val, vmin, vmax, frac):
+        if val <= 0 or vmin <= 0 or vmax <= 0:
+            return _clamp_lin(val, vmin, vmax, frac)
+        lval = np.log10(val)
+        lmin = np.log10(vmin)
+        lmax = np.log10(vmax)
+        margin = (lmax - lmin) * frac
+        lval = min(max(lval, lmin + margin), lmax - margin)
+        return 10 ** lval
+
+    for x_label, y_label, lbl, color in label_entries:
+        if not (np.isfinite(x_label) and np.isfinite(y_label)):
+            continue
+        if x_scale == 'log':
+            x_plot = _clamp_log(x_label, x_min, x_max, label_margin_frac)
+        else:
+            x_plot = _clamp_lin(x_label, x_min, x_max, label_margin_frac)
+        if y_scale == 'log':
+            y_plot = _clamp_log(y_label, y_min, y_max, label_margin_frac)
+        else:
+            y_plot = _clamp_lin(y_label, y_min, y_max, label_margin_frac)
+        ax.text(x_plot, y_plot, lbl, fontsize=10, color=color,
+                verticalalignment='center', fontweight='bold', clip_on=True,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='none', alpha=0.7))
 
     fig.tight_layout()
 
@@ -531,12 +737,19 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         limit_info = f"{xlim[0] if xlim else 'auto'}_{ylim[0] if ylim else 'auto'}_{ylim[1] if ylim else 'auto'}"
         sim_info = f"{induction_params.get('up_to_level','')}_{induction_params.get('F','')}_{induction_params.get('vir_kind','')}vir_{induction_params.get('rad_kind','')}rad_{induction_params.get('region','None')}Region"
         if induction_params.get('buffer', False) == True:
+            parent_flag = induction_params.get('parent', False)
+            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
             buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings", False)}'
+            if parent_flag:
+                buffer_info += f'_parent_{parent_interpol}'
         else:
             buffer_info = 'NoBuffer'
+        
+        # Add boundary exclusion info to filename (use base_title to avoid duplication)
+        boundary_info = f"ExclBound{boundary_width}px" if exclude_boundaries else ""
 
-        file_title = '_'.join(title.split()[:3])
-        filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}.png"
+        file_title = '_'.join(base_title.split()[:3])
+        filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}_{boundary_info}.png"
         fig.savefig(filename, dpi=dpi)
         if verbose:
             print(f'Percentile evolution plot saved as: {filename}')
@@ -912,7 +1125,11 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
             
         if induction_params['buffer'] == True:
+            parent_flag = induction_params.get('parent', False)
+            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
             buffer_info = f'Buffered_{induction_params["interpol"]}_siblings_{induction_params["use_siblings"]}'
+            if parent_flag:
+                buffer_info += f'_parent_{parent_interpol}'
         else:
             buffer_info = 'NoBuffer'
         
@@ -1413,7 +1630,11 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
 
         if induction_params.get('buffer', False) == True:
+            parent_flag = induction_params.get('parent', False)
+            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
             buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings","")}'
+            if parent_flag:
+                buffer_info += f'_parent_{parent_interpol}'
         else:
             buffer_info = 'NoBuffer'
 
@@ -1739,7 +1960,11 @@ def distribution_check(arr, quantity, plot_params, induction_params,
             if is_patches:
                 sim_info += '_AMR'
             if induction_params.get('buffer', False):
+                parent_flag = induction_params.get('parent', False)
+                parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
                 buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings", False)}'
+                if parent_flag:
+                    buffer_info += f'_parent_{parent_interpol}'
             else:
                 buffer_info = 'NoBuffer'
 

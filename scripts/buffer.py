@@ -189,8 +189,17 @@ def nearest_interpolation(ipatch, i_patch, j_patch, k_patch,
                         patches_rx, patches_ry, patches_rz, patches_levels,
                         coarse_field, arr_fields):
     '''
-    Nearest-neighbor interpolation: finds closest parent cell and copies its value.
-    Simple and conservative method that avoids introducing gradients.
+    Nearest-neighbor with parent frontier validation.
+    Copies parent value directly, but ensures parent cell has enough neighbors (not frontier).
+    If parent is frontier, recursively climbs AMR hierarchy until finding a valid non-frontier parent.
+    
+    This implements the PARENT method: skips interpolation and directly uses parent divergence
+    values, but only for parent cells that aren't themselves too close to boundaries.
+    
+    Frontier detection:
+    - For 3-point stencil: cell within 1 of boundary is frontier (needs interior neighbors)
+    - For 5-point stencil: cell within 2 of boundary is frontier
+    - Stencil radius hardcoded to 1 (works for 3-point stencil)
     
     Args:
         - ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
@@ -211,64 +220,80 @@ def nearest_interpolation(ipatch, i_patch, j_patch, k_patch,
         - Python uses 0-based indexing  
         - patches_x/y/z are 0-based (converted in readers.py)
         - Refinement factor = 2
+        - Stencil radius: 1 for 3-point stencil
         
     Returns:
-        - Interpolated value at (x, y, z)
+        - Value from valid (non-frontier) parent cell
     
     Author: Marco Molina
     '''
+    # Stencil radius - hardcoded for 3-point stencil (need 1 neighbor on each side)
+    stencil_radius = 1
+    
     l0 = patches_levels[ipatch]
-    ipatch2 = ipatch
-    ii2 = i_patch
-    jj2 = j_patch
-    kk2 = k_patch
-
-    proper_bounds = False
-    while not proper_bounds:
-        ipare = patches_pare[ipatch2]
+    ipatch_curr = ipatch
+    ii_curr = i_patch
+    jj_curr = j_patch
+    kk_curr = k_patch
+    
+    max_iterations = 20  # Safety limit to prevent infinite loops
+    iteration = 0
+    
+    while iteration < max_iterations:
+        ipare = patches_pare[ipatch_curr]
         pare_l = patches_levels[ipare]
         
+        # Get parent patch dimensions and field
         if pare_l > 0:
             pare_nx = patches_nx[ipare]
             pare_ny = patches_ny[ipare]
             pare_nz = patches_nz[ipare]
             pare_field = arr_fields[ipare]
         else:
+            # Level 0 - use coarse field
             pare_nx = nmax
             pare_ny = nmax
             pare_nz = nmax
             pare_field = coarse_field
-
-        imin_pare = patches_x[ipatch2]
-        jmin_pare = patches_y[ipatch2]
-        kmin_pare = patches_z[ipatch2]
-
-        ii_pare = imin_pare + ii2 // 2
-        jj_pare = jmin_pare + jj2 // 2
-        kk_pare = kmin_pare + kk2 // 2
         
-        if (ii_pare < pare_nx and ii_pare >= 0 and
-            jj_pare < pare_ny and jj_pare >= 0 and 
-            kk_pare < pare_nz and kk_pare >= 0):
-            proper_bounds = True
-
-        if ipare == 0 or proper_bounds:
-            break
-        else:
-            ipatch2 = ipare
-            ii2 = ii_pare
-            jj2 = jj_pare
-            kk2 = kk_pare
+        # Get parent patch starting indices
+        imin_pare = patches_x[ipatch_curr]
+        jmin_pare = patches_y[ipatch_curr]
+        kmin_pare = patches_z[ipatch_curr]
+        
+        # Map child cell to parent cell coordinates (refinement factor = 2)
+        ii_pare = imin_pare + ii_curr // 2
+        jj_pare = jmin_pare + jj_curr // 2
+        kk_pare = kmin_pare + kk_curr // 2
+        
+        # Check if parent cell has enough neighbors (is NOT frontier)
+        # For 3-point stencil: need at least 1 neighbor on each side (ii_pare > 0 and ii_pare < pare_nx - 1)
+        is_parent_valid = (ii_pare > stencil_radius - 1 and ii_pare < pare_nx - stencil_radius and
+                           jj_pare > stencil_radius - 1 and jj_pare < pare_ny - stencil_radius and
+                           kk_pare > stencil_radius - 1 and kk_pare < pare_nz - stencil_radius)
+        
+        if is_parent_valid:
+            # Found a valid parent cell with proper bounds - use its value
+            return float(pare_field[ii_pare, jj_pare, kk_pare])
+        
+        # Parent doesn't have proper bounds - try next coarser level
+        if ipare == 0:
+            # Reached level 0
+            # Clamp indices to valid range for level 0
+            ii_pare_clamped = max(0, min(ii_pare, pare_nx - 1))
+            jj_pare_clamped = max(0, min(jj_pare, pare_ny - 1))
+            kk_pare_clamped = max(0, min(kk_pare, pare_nz - 1))
+            return float(pare_field[ii_pare_clamped, jj_pare_clamped, kk_pare_clamped])
+        
+        # Go to next coarser level
+        ipatch_curr = ipare
+        ii_curr = ii_pare
+        jj_curr = jj_pare
+        kk_curr = kk_pare
+        iteration += 1
     
-    # Clamp to valid range
-    if ii_pare < 0: ii_pare = 0
-    if ii_pare >= pare_nx: ii_pare = pare_nx - 1
-    if jj_pare < 0: jj_pare = 0
-    if jj_pare >= pare_ny: jj_pare = pare_ny - 1
-    if kk_pare < 0: kk_pare = 0
-    if kk_pare >= pare_nz: kk_pare = pare_nz - 1
-    
-    return float(pare_field[ii_pare, jj_pare, kk_pare])
+    # Fallback: return zero (shouldn't reach here in normal operation)
+    return 0.0
 
 @njit(fastmath=True)
 def linear_interpolation(ipatch, i_patch, j_patch, k_patch,
@@ -363,15 +388,16 @@ def linear_interpolation(ipatch, i_patch, j_patch, k_patch,
     z0_pare = patches_rz[ipare] + (kk_pare - 0.5) * hx
 
     # Linear interpolation in each direction separately
+    # Note: proper_bounds check guarantees safe indices (ii_pare > 0 and ii_pare < pare_nx - 1, etc.)
     # x-direction
     if x < x0_pare:
-        v0 = pare_field[max(0, ii_pare - 1), jj_pare, kk_pare]
+        v0 = pare_field[ii_pare - 1, jj_pare, kk_pare]
         v1 = pare_field[ii_pare, jj_pare, kk_pare]
         x0 = x0_pare - hx
         x1 = x0_pare
     else:
         v0 = pare_field[ii_pare, jj_pare, kk_pare]
-        v1 = pare_field[min(pare_nx - 1, ii_pare + 1), jj_pare, kk_pare]
+        v1 = pare_field[ii_pare + 1, jj_pare, kk_pare]
         x0 = x0_pare
         x1 = x0_pare + hx
     
@@ -382,13 +408,13 @@ def linear_interpolation(ipatch, i_patch, j_patch, k_patch,
     
     # y-direction
     if y < y0_pare:
-        v0 = pare_field[ii_pare, max(0, jj_pare - 1), kk_pare]
+        v0 = pare_field[ii_pare, jj_pare - 1, kk_pare]
         v1 = pare_field[ii_pare, jj_pare, kk_pare]
         y0 = y0_pare - hx
         y1 = y0_pare
     else:
         v0 = pare_field[ii_pare, jj_pare, kk_pare]
-        v1 = pare_field[ii_pare, min(pare_ny - 1, jj_pare + 1), kk_pare]
+        v1 = pare_field[ii_pare, jj_pare + 1, kk_pare]
         y0 = y0_pare
         y1 = y0_pare + hx
     
@@ -399,13 +425,13 @@ def linear_interpolation(ipatch, i_patch, j_patch, k_patch,
     
     # z-direction
     if z < z0_pare:
-        v0 = pare_field[ii_pare, jj_pare, max(0, kk_pare - 1)]
+        v0 = pare_field[ii_pare, jj_pare, kk_pare - 1]
         v1 = pare_field[ii_pare, jj_pare, kk_pare]
         z0 = z0_pare - hx
         z1 = z0_pare
     else:
         v0 = pare_field[ii_pare, jj_pare, kk_pare]
-        v1 = pare_field[ii_pare, jj_pare, min(pare_nz - 1, kk_pare + 1)]
+        v1 = pare_field[ii_pare, jj_pare, kk_pare + 1]
         z0 = z0_pare
         z1 = z0_pare + hx
     
@@ -416,6 +442,160 @@ def linear_interpolation(ipatch, i_patch, j_patch, k_patch,
     
     # Average the three directional interpolations
     return (val_x + val_y + val_z) / 3.0
+
+@njit(fastmath=True)
+def trilinear_interpolation(ipatch, i_patch, j_patch, k_patch,
+                            x, y, z,
+                            pres, nmax,
+                            patch_nx, patch_ny, patch_nz,
+                            patch_field, level_res,
+                            patches_pare, patches_nx, patches_ny, patches_nz,
+                            patches_x, patches_y, patches_z,
+                            patches_rx, patches_ry, patches_rz, patches_levels,
+                            coarse_field, arr_fields):
+    '''
+    Trilinear interpolation using the 8 vertices of a parent cell cube.
+    Standard trilinear interpolation: finds the parent cell containing the point,
+    then uses the 8 corner values to compute weighted average based on relative position.
+    
+    The interpolation formula is:
+        F(x,y,z) = F000*(1-dx)*(1-dy)*(1-dz) + F100*dx*(1-dy)*(1-dz) +
+                   F010*dy*(1-dx)*(1-dz)     + F001*dz*(1-dx)*(1-dy) +
+                   F110*dx*dy*(1-dz)         + F101*dx*dz*(1-dy) +
+                   F011*dy*dz*(1-dx)         + F111*dx*dy*dz
+    
+    where dx, dy, dz are normalized distances [0,1] from the lower corner of the cell.
+    
+    Args:
+        - ipatch, i_patch, j_patch, k_patch: indices of the patch and cell
+        - x, y, z: coordinates of the interpolation point
+        - pres: current patch cell size (unused but kept for consistency)
+        - nmax: base level grid size
+        - patch_nx, patch_ny, patch_nz: current patch dimensions
+        - patch_field: field data for current patch
+        - level_res: resolution (cell size) for each level
+        - patches_pare: parent patch indices
+        - patches_nx, patches_ny, patches_nz: dimensions of all patches
+        - patches_x, patches_y, patches_z: cell positions in parent coordinates (0-based)
+        - patches_rx, patches_ry, patches_rz: physical positions (center of first cell)
+        - patches_levels: refinement level of each patch
+        - coarse_field: level 0 field data
+        - arr_fields: list of all patch fields
+        
+    Indexing notes:
+        - All indices are 0-based (Python convention)
+        - patches_x/y/z are 0-based from readers.py
+        - Refinement factor = 2
+        - Trilinear requires access to 8 corners, so parent cell needs +1 in each direction
+        
+    Returns:
+        - Interpolated value at (x, y, z)
+        
+    Author: Marco Molina
+    '''
+    l0 = patches_levels[ipatch]
+    ipatch2 = ipatch
+    ii2 = i_patch
+    jj2 = j_patch
+    kk2 = k_patch
+
+    proper_bounds = False
+    while not proper_bounds:
+        ipare = patches_pare[ipatch2]
+        pare_l = patches_levels[ipare]
+        
+        if pare_l > 0:
+            pare_nx = patches_nx[ipare]
+            pare_ny = patches_ny[ipare]
+            pare_nz = patches_nz[ipare]
+            pare_field = arr_fields[ipare]
+        else:
+            # Level 0 - use periodic boundaries
+            pare_nx = nmax
+            pare_ny = nmax
+            pare_nz = nmax
+            pare_field = coarse_field
+
+        # Convert child cell indices to parent cell indices
+        imin_pare = patches_x[ipatch2]
+        jmin_pare = patches_y[ipatch2]
+        kmin_pare = patches_z[ipatch2]
+
+        # Map child cell to parent cell (refinement factor = 2)
+        ii_pare = imin_pare + ii2 // 2
+        jj_pare = jmin_pare + jj2 // 2
+        kk_pare = kmin_pare + kk2 // 2
+        
+        # Check if we have proper bounds for trilinear (need cell + 1 in each direction)
+        if (ii_pare < pare_nx - 1 and ii_pare >= 0 and
+            jj_pare < pare_ny - 1 and jj_pare >= 0 and 
+            kk_pare < pare_nz - 1 and kk_pare >= 0):
+            proper_bounds = True
+
+        # Exit condition: reached level 0 or found proper bounds
+        if ipare == 0 or proper_bounds:
+            break
+        else:
+            # Go up another level
+            ipatch2 = ipare
+            ii2 = ii_pare
+            jj2 = jj_pare
+            kk2 = kk_pare
+
+    # Parent cell size
+    hx = level_res[pare_l]
+
+    # Center coordinates of parent cell (following TSC_interpolation pattern)
+    # patches_rx/ry/rz provide reference coordinates (see TSC implementation)
+    x0_pare = patches_rx[ipare] + (ii_pare - 0.5) * hx
+    y0_pare = patches_ry[ipare] + (jj_pare - 0.5) * hx
+    z0_pare = patches_rz[ipare] + (kk_pare - 0.5) * hx
+    
+    # For trilinear interpolation, we need normalized distances within the cell
+    # The cell extends from (ii_pare-0.5)*hx to (ii_pare+0.5)*hx around the center
+    # Normalized position within the cell [0,1]:
+    #   0 corresponds to lower face (ii_pare cell center - 0.5*hx)
+    #   1 corresponds to upper face (ii_pare+1 cell center - 0.5*hx = ii_pare cell center + 0.5*hx)
+    
+    # However, for trilinear, we interpolate between vertices at cell centers
+    # Cell center ii_pare is at x0_pare
+    # Cell center ii_pare+1 is at x0_pare + hx
+    # So normalized distance from ii_pare center to ii_pare+1 center:
+    dx = (x - x0_pare) / hx
+    dy = (y - y0_pare) / hx
+    dz = (z - z0_pare) / hx
+    
+    # Clamp to [0, 1] for safety (prevents extrapolation)
+    if dx < 0.0: dx = 0.0
+    if dx > 1.0: dx = 1.0
+    if dy < 0.0: dy = 0.0
+    if dy > 1.0: dy = 1.0
+    if dz < 0.0: dz = 0.0
+    if dz > 1.0: dz = 1.0
+
+    # Get the 8 vertex values (cell centers forming the cube)
+    # F000 = value at (ii_pare, jj_pare, kk_pare)
+    # F100 = value at (ii_pare+1, jj_pare, kk_pare), etc.
+    F000 = pare_field[ii_pare,     jj_pare,     kk_pare    ]
+    F100 = pare_field[ii_pare + 1, jj_pare,     kk_pare    ]
+    F010 = pare_field[ii_pare,     jj_pare + 1, kk_pare    ]
+    F001 = pare_field[ii_pare,     jj_pare,     kk_pare + 1]
+    F110 = pare_field[ii_pare + 1, jj_pare + 1, kk_pare    ]
+    F101 = pare_field[ii_pare + 1, jj_pare,     kk_pare + 1]
+    F011 = pare_field[ii_pare,     jj_pare + 1, kk_pare + 1]
+    F111 = pare_field[ii_pare + 1, jj_pare + 1, kk_pare + 1]
+
+    # Trilinear interpolation formula (standard formula)
+    value = (F000 * (1.0 - dx) * (1.0 - dy) * (1.0 - dz) +
+             F100 * dx * (1.0 - dy) * (1.0 - dz) +
+             F010 * dy * (1.0 - dx) * (1.0 - dz) +
+             F001 * dz * (1.0 - dx) * (1.0 - dy) +
+             F110 * dx * dy * (1.0 - dz) +
+             F101 * dx * dz * (1.0 - dy) +
+             F011 * dy * dz * (1.0 - dx) +
+             F111 * dx * dy * dz)
+
+    return value
 
 @njit(fastmath=True)
 def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
@@ -510,7 +690,6 @@ def TSC_interpolation(ipatch, i_patch, j_patch, k_patch,
             ii2 = ii_pare
             jj2 = jj_pare
             kk2 = kk_pare
-    
 
     # Parent cell size
     hx = level_res[pare_l]
@@ -687,7 +866,7 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
         level_res: cell sizes for each level
         fields: list of lists of all fields patches
         nmax: base level grid size
-        interpol: interpolation method - 'TSC', 'SPH', 'LINEAR', or 'NEAREST'
+        interpol: interpolation method - 'TSC', 'SPH', 'LINEAR', 'TRILINEAR' or 'NEAREST'
         use_siblings: if True, check for sibling patches before parent interpolation (default: True)
         
     Returns:
@@ -729,10 +908,17 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
             for k in range(nz + 2*nghost):
                 
                 # Skip interior cells (already filled)
-                if (i >= nghost and i < nx + nghost and
-                    j >= nghost and j < ny + nghost and
-                    k >= nghost and k < nz + nghost):
-                    continue
+                if nghost > 0:
+                    if (i >= nghost and i < nx + nghost and
+                        j >= nghost and j < ny + nghost and
+                        k >= nghost and k < nz + nghost):
+                        continue
+                else:
+                    # Parent mode: only fill boundary cells on the patch
+                    if (i > 0 and i < nx - 1 and
+                        j > 0 and j < ny - 1 and
+                        k > 0 and k < nz - 1):
+                        continue
                 
                 # Local coordinates (can be negative for ghost cells)
                 i_local = i - nghost
@@ -877,8 +1063,8 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                             patchx, patchy, patchz,
                             patchrx, patchry, patchrz, levels,
                             fields[f][0], fields[f])
-                    elif interpol == 'NEAREST':
-                        buffered_patches[f][i, j, k] = nearest_interpolation(
+                    elif interpol == 'TRILINEAR':
+                        buffered_patches[f][i, j, k] = trilinear_interpolation(
                             ipatch, i_local, j_local, k_local,
                             x_ghost, y_ghost, z_ghost,
                             pres, nmax,
@@ -888,8 +1074,8 @@ def fill_ghost_buffer(ipatch, buffered_patches, nghost,
                             patchx, patchy, patchz,
                             patchrx, patchry, patchrz, levels,
                             fields[f][0], fields[f])
-                    elif interpol == 'PARENT_DIRECT':
-                        buffered_patches[f][i, j, k] = direct_parent_access(
+                    elif interpol == 'NEAREST':
+                        buffered_patches[f][i, j, k] = nearest_interpolation(
                             ipatch, i_local, j_local, k_local,
                             x_ghost, y_ghost, z_ghost,
                             pres, nmax,
@@ -923,12 +1109,17 @@ def add_ghost_buffer(fields, npatch,
         nmax: number of cells at base level
         nghost: number of ghost cells to add on each side (default: 1)
         interpol: interpolation method - 
-                'TSC' (Triangular-Shaped Cloud, high order interpolation),
-                'PARENT_DIRECT' (direct parent cell access, least accurate),
-                'SPH' (smoothed particle hydrodynamics, high order),
-                'LINEAR' (linear extrapolation, conservative),
-                'NEAREST' (nearest-neighbor copy, most conservative)
-        use_siblings: if True, check for sibling patches before parent interpolation (default: True)
+                'TSC' (Triangular-Shaped Cloud, high order, creates nghost ghost cells)
+                'SPH' (smoothed particle hydrodynamics, high order, creates nghost ghost cells)
+                'LINEAR' (linear extrapolation, conservative, creates nghost ghost cells)
+                'TRILINEAR' (trilinear interpolation using 8-vertex cube, standard method, creates nghost ghost cells)
+                'NEAREST' (nearest-neighbor copy, most conservative, creates nghost ghost cells)
+                
+                        Note: parent mode (nghost=0) differs from extra buffer addition in that it only fills frontier cells:
+                                - parent mode with TSC/SPH/LINEAR/TRILINEAR/NEAREST uses the chosen interpolation
+                                    to fill only boundary cells with valid (non-frontier) parent values.
+        use_siblings: if True, check for sibling patches before parent interpolation (default: True).
+                                        Set to False in parent mode to avoid frontier contamination
         bitformat: data type for the fields (default is np.float32)
         kept_patches: boolean array indicating which patches to process
         
@@ -938,8 +1129,8 @@ def add_ghost_buffer(fields, npatch,
     Author: Marco Molina
     '''
     
-    if interpol not in ['TSC', 'PARENT_DIRECT', 'SPH', 'LINEAR', 'NEAREST']:
-        raise ValueError("Interpolation method must be 'TSC', 'PARENT_DIRECT', 'SPH', 'LINEAR', or 'NEAREST'")
+    if interpol not in ['TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST']:
+        raise ValueError("Interpolation method must be 'TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST'")
     
     levels = tools.create_vector_levels(npatch)
     level_res = size / nmax / (2.0 ** levels)
@@ -961,10 +1152,22 @@ def add_ghost_buffer(fields, npatch,
             # keep same convention as readers: use scalar 0 for patches outside region
             [buffered_fields[f].append(0) for f in range(len(fields))]
             continue
+        
+        # Skip buffer creation for level 0 (base level with periodic boundary conditions)
+        # Level 0 always has exactly 1 patch at index 0
+        if ipatch == 0:
+            # Level 0 should not have ghost buffer; return as-is without padding
+            for f in range(len(fields)):
+                src = fields[f][ipatch]
+                if isinstance(src, np.ndarray):
+                    buffered_fields[f].append(src.copy())
+                else:
+                    buffered_fields[f].append(src)
+            continue
             
         nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
         
-        # Create patch with ghost cells
+        # Create patch with ghost cells (only for refinement levels > 0)
         buffered_patches = [np.zeros((nx + 2*nghost, ny + 2*nghost, nz + 2*nghost), 
                                 dtype=bitformat, order='F') for _ in range(len(fields))]
             
@@ -983,12 +1186,74 @@ def add_ghost_buffer(fields, npatch,
             patchx, patchy, patchz,
             patchrx, patchry, patchrz,
             patchpare, levels, level_res,
-            fields_numba, nmax, interpol=interpol
+            fields_numba, nmax, interpol=interpol, use_siblings=use_siblings
         )
         
         [buffered_fields[f].append(buffered_patches[f]) for f in range(len(fields))]
     
     return buffered_fields
+
+
+def blend_patch_boundaries(base_fields, parent_fields,
+                          patchnx, patchny, patchnz,
+                          boundary_width=1, kept_patches=None):
+    '''
+    Blend patch boundary cells between two field lists.
+
+    Args:
+        base_fields: list of per-patch arrays (buffered-then-busted result)
+        parent_fields: list of per-patch arrays (parent-filled result)
+        patchnx, patchny, patchnz: per-patch dimensions
+        boundary_width: number of cells from the edge to blend
+        kept_patches: optional mask for valid patches
+
+    Returns:
+        blended_fields: list of per-patch arrays with blended boundaries
+
+    Author: Marco Molina
+    '''
+    if kept_patches is None:
+        kept_patches = np.ones(len(base_fields), dtype=bool)
+
+    bw = int(max(0, boundary_width))
+    if bw == 0:
+        return [bf if isinstance(bf, np.ndarray) else bf for bf in base_fields]
+
+    blended_fields = []
+    for ipatch in range(len(base_fields)):
+        if not kept_patches[ipatch] or isinstance(base_fields[ipatch], (int, float)):
+            blended_fields.append(0)
+            continue
+        if ipatch == 0:
+            src = base_fields[ipatch]
+            blended_fields.append(src.copy() if isinstance(src, np.ndarray) else src)
+            continue
+
+        base = base_fields[ipatch]
+        parent = parent_fields[ipatch]
+        if not isinstance(base, np.ndarray) or not isinstance(parent, np.ndarray):
+            blended_fields.append(base if isinstance(base, np.ndarray) else 0)
+            continue
+
+        nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
+        bw_eff = min(bw, max(1, min(nx, ny, nz) // 2))
+
+        if bw_eff * 2 >= min(nx, ny, nz):
+            blended = 0.5 * (base + parent)
+            blended_fields.append(blended)
+            continue
+
+        blended = base.copy()
+        blended[:bw_eff, :, :] = 0.5 * (base[:bw_eff, :, :] + parent[:bw_eff, :, :])
+        blended[-bw_eff:, :, :] = 0.5 * (base[-bw_eff:, :, :] + parent[-bw_eff:, :, :])
+        blended[:, :bw_eff, :] = 0.5 * (base[:, :bw_eff, :] + parent[:, :bw_eff, :])
+        blended[:, -bw_eff:, :] = 0.5 * (base[:, -bw_eff:, :] + parent[:, -bw_eff:, :])
+        blended[:, :, :bw_eff] = 0.5 * (base[:, :, :bw_eff] + parent[:, :, :bw_eff])
+        blended[:, :, -bw_eff:] = 0.5 * (base[:, :, -bw_eff:] + parent[:, :, -bw_eff:])
+
+        blended_fields.append(blended)
+
+    return blended_fields
 
 
 def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kept_patches=None):
@@ -1020,10 +1285,14 @@ def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kep
         
         nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
         
-        # Extract interior cells only (removing ghost cells)
-        interior_patch = buffered_field[ipatch][nghost:nx+nghost, 
-                                                nghost:ny+nghost, 
-                                                nghost:nz+nghost].copy()
+        # Level 0 (base patch at index 0) has no ghost buffer and is returned as-is
+        if ipatch == 0:
+            interior_patch = buffered_field[ipatch].copy() if isinstance(buffered_field[ipatch], np.ndarray) else buffered_field[ipatch]
+        else:
+            # All other patches have ghost buffer; extract interior cells only
+            interior_patch = buffered_field[ipatch][nghost:nx+nghost, 
+                                                    nghost:ny+nghost, 
+                                                    nghost:nz+nghost].copy()
         
         field.append(interior_patch)
     
@@ -1055,7 +1324,126 @@ def inplace_ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghos
         
         nx, ny, nz = patchnx[ipatch], patchny[ipatch], patchnz[ipatch]
         
-        # Extract interior cells and replace in list
-        buffered_field[ipatch] = buffered_field[ipatch][nghost:nx+nghost, 
-                                                        nghost:ny+nghost, 
-                                                        nghost:nz+nghost].copy()
+        # Level 0 (base patch at index 0) has no ghost buffer; skip for other patches
+        if ipatch != 0:
+            # Extract interior cells and replace in list for all non-level-0 patches
+            buffered_field[ipatch] = buffered_field[ipatch][nghost:nx+nghost, 
+                                                            nghost:ny+nghost, 
+                                                            nghost:nz+nghost].copy()
+
+
+def debug_buffer_passthrough(fields, npatch,
+                            patchnx, patchny, patchnz,
+                            patchx, patchy, patchz,
+                            patchrx, patchry, patchrz, patchpare,
+                            size, nmax, nghost=1, interpol='TSC', use_siblings=True, 
+                            bitformat=np.float32, kept_patches=None, verbose=True):
+    '''
+    Debug function to verify that add_ghost_buffer + ghost_buffer_buster pipeline
+    does not modify the interior cell values of fields.
+    
+    Uses the provided fields directly, passes them through the buffer add/remove 
+    pipeline, and verifies that interior cells are identical after the round trip.
+    
+    Args:
+        fields: list of list of numpy arrays containing the actual field data to test
+        All other args: same as add_ghost_buffer
+        verbose: print detailed results (default: True)
+        
+    Returns:
+        debug_report: dictionary with test results:
+            - 'passed': boolean, True if all patches passed the test
+            - 'total_patches': number of patches tested
+            - 'failed_patches': list of patch indices that failed
+            - 'max_error': maximum absolute difference found
+            - 'error_details': dictionary with per-patch error information
+            
+    Author: Marco Molina
+    '''
+    
+    if verbose:
+        print("\n" + "="*70)
+        print("DEBUG: Buffer Pass-Through Test")
+        print("="*70)
+    
+    # Store original interior values (deep copy)
+    original_data = []
+    for field_set in fields:
+        field_original = []
+        for ipatch, patch in enumerate(field_set):
+            if isinstance(patch, np.ndarray):
+                field_original.append(patch.copy())
+            else:
+                field_original.append(0)
+        original_data.append(field_original)
+    
+    # Pass through buffer pipeline
+    buffered_fields = add_ghost_buffer(fields, npatch,
+                                    patchnx, patchny, patchnz,
+                                    patchx, patchy, patchz,
+                                    patchrx, patchry, patchrz, patchpare,
+                                    size, nmax, nghost=nghost, interpol=interpol, 
+                                    use_siblings=use_siblings, bitformat=bitformat, 
+                                    kept_patches=kept_patches)
+    
+    # Remove buffer
+    final_fields = []
+    for buffered_field in buffered_fields:
+        final_field = ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, 
+                                        nghost=nghost, kept_patches=kept_patches)
+        final_fields.append(final_field)
+    
+    # Compare original and final interior values
+    debug_report = {
+        'passed': True,
+        'total_patches': len(fields[0]),
+        'failed_patches': [],
+        'max_error': 0.0,
+        'error_details': {}
+    }
+    
+    for field_idx in range(len(fields)):
+        for ipatch in range(len(fields[field_idx])):
+            if kept_patches is not None and not kept_patches[ipatch]:
+                continue
+            
+            original = original_data[field_idx][ipatch]
+            final = final_fields[field_idx][ipatch]
+            
+            if isinstance(original, np.ndarray) and isinstance(final, np.ndarray):
+                # Compare interior cells
+                diff = np.abs(original - final)
+                max_diff = np.max(diff)
+                mean_diff = np.mean(diff)
+                
+                debug_report['max_error'] = max(debug_report['max_error'], max_diff)
+                
+                # Use relative tolerance if values are non-zero, absolute otherwise
+                max_val = np.max(np.abs(original))
+                tolerance = 1e-10 * max_val if max_val > 1e-15 else 1e-15
+                
+                if max_diff > tolerance:
+                    debug_report['passed'] = False
+                    debug_report['failed_patches'].append(ipatch)
+                    debug_report['error_details'][ipatch] = {
+                        'field_index': field_idx,
+                        'max_error': max_diff,
+                        'mean_error': mean_diff,
+                        'shape': original.shape
+                    }
+    
+    if verbose:
+        print(f"Total patches tested: {debug_report['total_patches']}")
+        print(f"Passed: {debug_report['passed']}")
+        if debug_report['failed_patches']:
+            print(f"Failed patches: {debug_report['failed_patches']}")
+            print(f"Error details:")
+            for ipatch, details in debug_report['error_details'].items():
+                print(f"  Patch {ipatch}: max_error={details['max_error']:.2e}, "
+                    f"mean_error={details['mean_error']:.2e}, shape={details['shape']}")
+        else:
+            print("All patches passed!")
+        print(f"Maximum error found: {debug_report['max_error']:.2e}")
+        print("="*70 + "\n")
+    
+    return debug_report

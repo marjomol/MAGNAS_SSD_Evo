@@ -18,6 +18,7 @@ from time import gmtime
 import numpy as np
 import scripts.utils as utils
 import scripts.diff as diff
+import scripts.debug as debug_module
 import buffer as buff
 import scripts.readers as reader
 from scripts.units import *
@@ -28,6 +29,10 @@ from matplotlib import pyplot as plt
 import pdb
 import multiprocessing as mp
 np.set_printoptions(linewidth=200)
+
+
+# Use log_message from utils
+log_message = utils.log_message
 
 
 def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_kind=1, rad_kind=1, verbose=False):
@@ -58,6 +63,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
 
     coords = []
     rad = []
+    max_halo_mass = None
 
     for i in range(len(sims)):
         # Read halos and zeta for each snapshot in reverse order so that we can track the same most massive halo
@@ -73,6 +79,7 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
                 # Find the index of the most massive halo
                 max_mass_index = np.argmax([halo['M'] for halo in halos])
                 id_max_mass = halos[max_mass_index]['id']
+                max_halo_mass = halos[max_mass_index]['M']
                 if vir_kind == 1:
                     R_max_mass = halos[max_mass_index]['R']
             
@@ -97,17 +104,18 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
                 rad.append(rad[-1])
                 
             if verbose and index == None:
-                print("No halo found in snap " + str(it[j]) + ", using the previous one.")
+                log_message("No halo found in snap " + str(it[j]) + ", using the previous one.", tag="halo", level=1)
                 
     if verbose:
         
         # Print the coordinates
-        print("Coordinates of the most massive halo in the last snap " + str(it[-1]) + ":")
-        print("x: " + str(coords[-1][0]))
-        print("y: " + str(coords[-1][1]))
-        print("z: " + str(coords[-1][2]))
-        print("Radius: " + str(rad[-1]) + " Mpc")
-        print("Mass: " + str(halos[max_mass_index]['M']) + " Msun/h")
+        log_message("Coordinates of the most massive halo in the last snap " + str(it[-1]) + ":", tag="halo", level=1)
+        log_message("x: " + str(coords[-1][0]), tag="halo", level=2)
+        log_message("y: " + str(coords[-1][1]), tag="halo", level=2)
+        log_message("z: " + str(coords[-1][2]), tag="halo", level=2)
+        log_message("Radius: " + str(rad[-1]) + " Mpc", tag="halo", level=2)
+        if max_halo_mass is not None:
+            log_message("Mass: " + str(max_halo_mass) + " Msun/h", tag="halo", level=2)
 
     # Reverse the lists to match the original order of snapshots            
     coords = coords[::-1]
@@ -116,15 +124,18 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
     return coords, rad
 
 
-def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
+def create_region(sims, it, coords, rad, size, F=1.0, reg='BOX', verbose=False):
     '''
     Creates the boxes or spheres centered at the coordinates of the most massive halo or any other point in each snapshot.
+    Automatically clips regions to simulation box boundaries and disables region reading if the clipped region
+    equals the entire box.
     
     Args:
         - sims: list of simulation names
         - it: list of snapshots
         - coords: list of coordinates of the most massive halo in each snapshot
         - rad: list of radii of the most massive halo in each snapshot
+        - size: size of the simulation box in Mpc (single value or list)
         - F: factor to scale the radius (default is 1.0)
         - red: region type to create ('BOX' or 'SPH', default is 'BOX')
             - BOX: creates a box
@@ -133,13 +144,22 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
         - verbose: boolean to print the coordinates and radius or not
         
     Returns:
-        - region: list of boxes or spheres centered at the coordinates
+        - region: list of boxes or spheres centered at the coordinates (or None if region equals entire box)
         - region_size: list of sizes of the boxes or spheres in Mpc
         
     Author: Marco Molina
     '''
     
+    # Handle size as list or single value
+    if isinstance(size, list):
+        box_size = size[0]  # Assume first simulation
+    else:
+        box_size = size
         
+    # Box boundaries (simulation box is centered at origin)
+    box_min = -box_size / 2.0
+    box_max = box_size / 2.0
+    
     Rad = []
     region_size = []
     region = []
@@ -148,16 +168,75 @@ def create_region(sims, it, coords, rad, F=1.0, reg='BOX', verbose=False):
         for j in range(len(it)):
             Rad.append(F*rad[i+j])
             region_size.append(2 * Rad[-1])  # Size of the box in Mpc
+            
             if reg == 'BOX':
-                region.append(["box", coords[i+j][0]-Rad[-1], coords[i+j][0]+Rad[-1], coords[i+j][1]-Rad[-1], coords[i+j][1]+Rad[-1], coords[i+j][2]-Rad[-1], coords[i+j][2]+Rad[-1]]) # Mpc
+                # Calculate region boundaries
+                x1 = coords[i+j][0] - Rad[-1]
+                x2 = coords[i+j][0] + Rad[-1]
+                y1 = coords[i+j][1] - Rad[-1]
+                y2 = coords[i+j][1] + Rad[-1]
+                z1 = coords[i+j][2] - Rad[-1]
+                z2 = coords[i+j][2] + Rad[-1]
+                
+                # Clip to box boundaries
+                x1_clipped = max(x1, box_min)
+                x2_clipped = min(x2, box_max)
+                y1_clipped = max(y1, box_min)
+                y2_clipped = min(y2, box_max)
+                z1_clipped = max(z1, box_min)
+                z2_clipped = min(z2, box_max)
+                
+                # Check if clipping occurred
+                if (x1 < box_min or x2 > box_max or 
+                    y1 < box_min or y2 > box_max or 
+                    z1 < box_min or z2 > box_max):
+                    if verbose and j == 0:
+                        log_message(f"Warning: Region for snapshot {it[j]} extends beyond simulation box.", tag="region", level=1)
+                        log_message(f"Original: x=[{x1:.2f}, {x2:.2f}], y=[{y1:.2f}, {y2:.2f}], z=[{z1:.2f}, {z2:.2f}]", tag="region", level=2)
+                        log_message(f"Clipped:  x=[{x1_clipped:.2f}, {x2_clipped:.2f}], y=[{y1_clipped:.2f}, {y2_clipped:.2f}], z=[{z1_clipped:.2f}, {z2_clipped:.2f}]", tag="region", level=2)
+                
+                # Check if clipped region equals entire box (with small tolerance)
+                tolerance = 1e-6
+                region_equals_box = (
+                    abs(x1_clipped - box_min) < tolerance and abs(x2_clipped - box_max) < tolerance and
+                    abs(y1_clipped - box_min) < tolerance and abs(y2_clipped - box_max) < tolerance and
+                    abs(z1_clipped - box_min) < tolerance and abs(z2_clipped - box_max) < tolerance
+                )
+                
+                if region_equals_box:
+                    if verbose and j == 0:
+                        log_message("Region equals entire box -> disabling region filter (reading all patches)", tag="region", level=2)
+                    region.append([None])
+                else:
+                    region.append(["box", x1_clipped, x2_clipped, y1_clipped, y2_clipped, z1_clipped, z2_clipped])
+                    
             elif reg == 'SPH':
-                region.append(["sphere", coords[i+j][0], coords[i+j][1], coords[i+j][2], Rad[-1]]) # Mpc
+                # For spheres, check if radius extends beyond box
+                effective_radius = Rad[-1]
+                max_extent = max(
+                    abs(coords[i+j][0]) + effective_radius,
+                    abs(coords[i+j][1]) + effective_radius,
+                    abs(coords[i+j][2]) + effective_radius
+                )
+                
+                if max_extent > box_max:
+                    if verbose and j == 0:
+                        log_message(f"Warning: Spherical region for snapshot {it[j]} extends beyond simulation box.", tag="region", level=1)
+                        log_message(f"Center: ({coords[i+j][0]:.2f}, {coords[i+j][1]:.2f}, {coords[i+j][2]:.2f})", tag="region", level=2)
+                        log_message(f"Radius: {effective_radius:.2f} Mpc", tag="region", level=2)
+                        log_message("Region equals entire box -> disabling region filter (reading all patches)", tag="region", level=2)
+                    region.append([None])
+                else:
+                    region.append(["sphere", coords[i+j][0], coords[i+j][1], coords[i+j][2], Rad[-1]])
             else:
                 region.append([None])
                 
     if verbose:      
         # Print the coordinates
-        print(str(region[-1][0]) + " region: " + str(region[-1]))
+        if region[-1][0] is None:
+            log_message("Region: None (using entire simulation box)", tag="region", level=1)
+        else:
+            log_message(str(region[-1][0]) + " region: " + str(region[-1]), tag="region", level=1)
 
     return region, region_size
 
@@ -186,7 +265,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         - bitformat: data type for the loaded fields (default is np.float32)
         - region: region coordinates to be used (default is None)
         - verbose: boolean to print the data type loaded or not (default is False)
-        - debug: boolean to print debug information or not (default is False)
+        - debug: dictionary containing the parameters for the debug mode (if False, debug mode is disabled):
         
     Returns:
         - results: dictionary containing the loaded data:
@@ -195,8 +274,8 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             - grid_zeta: redshift of the snapshot
             - grid_npatch: number of patches in the grid
             - grid_patchnx, grid_patchny, grid_patchnz: number of cells in each patch
-            - grid_patchx, grid_patchy, grid_patchz: position of each patch
-            - grid_patchrx, grid_patchry, grid_patchrz: size of each patch
+            - grid_patchx, grid_patchy, grid_patchz: size of each patch
+            - grid_patchrx, grid_patchry, grid_patchrz: position of each patch
             - grid_pare: parent patch of each patch
             - vector_levels: levels of refinement for each patch
             - clus_rho_rho_b: density contrast in the cluster
@@ -262,9 +341,30 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             *_
         ) = grid
         
-        # Only keep patches up to the desired AMR level
+        # Only keep patches up to the desired AMR level and slice patch arrays accordingly
         grid_npatch[level+1:] = 0
+        keep_count = int(1 + np.sum(grid_npatch))
+        grid_patchnx = grid_patchnx[:keep_count]
+        grid_patchny = grid_patchny[:keep_count]
+        grid_patchnz = grid_patchnz[:keep_count]
+        grid_patchx = grid_patchx[:keep_count]
+        grid_patchy = grid_patchy[:keep_count]
+        grid_patchz = grid_patchz[:keep_count]
+        grid_patchrx = grid_patchrx[:keep_count]
+        grid_patchry = grid_patchry[:keep_count]
+        grid_patchrz = grid_patchrz[:keep_count]
+        pare = pare[:keep_count]
         
+        # DIAGNOSTIC: Check for patches in suspicious regions (z > 15 Mpc)
+        if debug.get("patch_analysis", {}).get("enabled", False) == True if isinstance(debug, dict) else False:
+            debug_module.analyze_patch_positions(
+                grid_patchrx, grid_patchry, grid_patchrz,
+                grid_patchnx, grid_patchny, grid_patchnz,
+                pare, grid_npatch, dir_params=dir_params,
+                suspicious_threshold=debug.get("patch_analysis", {}).get("suspicious_threshold", 15.0),
+                verbose=True
+            )
+
         # Read cluster data
         clus = reader.read_clus(
             it=it,
@@ -301,6 +401,19 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             clus_mbz,
             *rest
         ) = clus
+        # Slice cluster fields to kept patch count to stay aligned with grid_npatch
+        clus_rho_rho_b = clus_rho_rho_b[:keep_count]
+        clus_vx = clus_vx[:keep_count]
+        clus_vy = clus_vy[:keep_count]
+        clus_vz = clus_vz[:keep_count]
+        clus_cr0amr = clus_cr0amr[:keep_count]
+        clus_solapst = clus_solapst[:keep_count]
+        clus_mbx = clus_mbx[:keep_count]
+        clus_mby = clus_mby[:keep_count]
+        clus_mbz = clus_mbz[:keep_count]
+        if rest:
+            rest = [r[:keep_count] if hasattr(r, '__len__') else r for r in rest]
+
     else:
         # Read grid data using the reader
         grid = reader.read_grids(
@@ -413,151 +526,25 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
     clus_By = [clus_mby[p] if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_Bz = [clus_mbz[p] if bool(clus_kp[p]) else 0 for p in range(n)]
     
-    if debug:
-    ###########################################################################################
-    
-        size = float(input("Enter the size of the root domain in Mpc/h: "))
-        cell_size = float(input("Enter the cell size of the root grid: "))
-    
-        dx = size / cell_size
-        
-        div_B_check = diff.divergence(clus_Bx, clus_By, clus_Bz, 
-                                    dx, grid_npatch, clus_kp, stencil=3)
-        div_B_flat = np.concatenate([np.abs(div_B_check[p]).flatten() for p in range(n) if bool(clus_kp[p])])
-        max_div_B = np.max(div_B_flat)
-        
-        print(f'Snap {grid_irr}: Max |∇·B| = {max_div_B:.6e}')
-        print(f'Snap {grid_irr}: Mean |∇·B| = {np.mean(div_B_flat):.6e}')
-        print(f'Snap {grid_irr}: Std |∇·B| = {np.std(div_B_flat):.6e}')
-            
-        B_magnitude_flat = np.concatenate([np.sqrt(clus_Bx[p]**2 + clus_By[p]**2 + clus_Bz[p]**2).flatten() for p in range(n) if bool(clus_kp[p])])
-        mean_B_magnitude = np.mean(B_magnitude_flat)
-        levels = utils.create_vector_levels(grid_npatch)
-        resolution = dx / (2 ** np.array(levels))
-        mean_B_magnitude_per_dx = mean_B_magnitude / np.mean(resolution)
-        
-        if mean_B_magnitude > 0:
-            print(f'Snap {grid_irr} (pipeline method): Mean |∇·B| / |B| = {np.mean(div_B_flat) / mean_B_magnitude_per_dx:.6e}')
-        else:
-            print(f'Snap {grid_irr} (pipeline method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
-            
-        def divergence_B_test(Bx, By, Bz, dx, npatch, kp):
-            
-            levels = utils.create_vector_levels(npatch)
-            resolution = dx / (2 ** np.array(levels))
-            div = []
-            div_x = []
-            div_y = []
-            div_z = []
-            
-            if kp is None:
-                kp = np.ones(npatch.sum() + 1, dtype=bool)
-                
-            for p in range(npatch.sum() + 1):
-                if not bool(kp[p]):
-                    div.append(0)
-                    continue
-                
-                Bx_p = Bx[p]
-                By_p = By[p]
-                Bz_p = Bz[p]
-                res_p = resolution[p]
-                
-                dBx_dx = (np.roll(Bx_p, -1, axis=0) - np.roll(Bx_p, 1, axis=0)) / (2 * res_p)
-                dBy_dy = (np.roll(By_p, -1, axis=1) - np.roll(By_p, 1, axis=1)) / (2 * res_p)
-                dBz_dz = (np.roll(Bz_p, -1, axis=2) - np.roll(Bz_p, 1, axis=2)) / (2 * res_p)
-                
-                div_p = dBx_dx + dBy_dy + dBz_dz
-                div.append(div_p)
-                div_x.append(dBx_dx)
-                div_y.append(dBy_dy)
-                div_z.append(dBz_dz)
-                
-            return div, div_x, div_y, div_z
-        
-        div_B_check2, div_Bx, div_By, div_Bz = divergence_B_test(clus_Bx, clus_By, clus_Bz, 
-                                                                dx, grid_npatch, clus_kp, stencil=3)
-        div_B_flat2 = np.concatenate([np.abs(div_B_check2[p]).flatten() for p in range(n) if bool(clus_kp[p])])
-        max_div_B2 = np.max(div_B_flat2)
-        
-        print(f'Snap {grid_irr} (periodic method): Max |∇·B| = {max_div_B2:.6e}')
-        print(f'Snap {grid_irr} (periodic method): Mean |∇·B| = {np.mean(div_B_flat2):.6e}')
-        print(f'Snap {grid_irr} (periodic method): Std |∇·B| = {np.std(div_B_flat2):.6e}')
-        
-        if mean_B_magnitude > 0:
-            print(f'Snap {grid_irr} (periodic method): Mean |∇·B| / |B| = {np.mean(div_B_flat2) / mean_B_magnitude_per_dx:.6e}')
-        else:
-            print(f'Snap {grid_irr} (periodic method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
-            
-        def divergence_B_test_II(Bx, By, Bz, dx, npatch, kp):
-            
-            levels = utils.create_vector_levels(npatch)
-            resolution = dx / (2 ** np.array(levels))
-            div = []
-            div_x = []
-            div_y = []
-            div_z = []
-            
-            if kp is None:
-                kp = np.ones(npatch.sum() + 1, dtype=bool)
-                
-            for p in range(npatch.sum() + 1):
-                if not bool(kp[p]):
-                    div.append(0)
-                    continue
-                
-                Bx_p = Bx[p]
-                By_p = By[p]
-                Bz_p = Bz[p]
-                res_p = resolution[p]
-                
-                # Diferences cell by cell (central differences)
-                dBx_dx = np.zeros_like(Bx_p)
-                dBy_dy = np.zeros_like(By_p)
-                dBz_dz = np.zeros_like(Bz_p)
-                
-                dBx_dx[1:-1,:,:] = (Bx_p[2:,:,:] - Bx_p[0:-2,:,:]) / (2 * res_p)
-                dBy_dy[:,1:-1,:] = (By_p[:,2:,:] - By_p[:,0:-2,:]) / (2 * res_p)
-                dBz_dz[:,:,1:-1] = (Bz_p[:,:,2:] - Bz_p[:,:,0:-2]) / (2 * res_p)
-                
-                # Second order extrapolation at the boundaries
-                dBx_dx[0,:,:] = (4*Bx_p[1,:,:] - 3*Bx_p[0,:,:] - Bx_p[2,:,:]) / (2 * res_p)
-                dBx_dx[-1,:,:] = (3*Bx_p[-1,:,:] + Bx_p[-3,:,:] - 4*Bx_p[-2,:,:]) / (2 * res_p)
-                dBy_dy[:,0,:] = (4*By_p[:,1,:] - 3*By_p[:,0,:] - By_p[:,2,:]) / (2 * res_p)
-                dBy_dy[:,-1,:] = (3*By_p[:,-1,:] + By_p[:,-3,:] - 4*By_p[:,-2,:]) / (2 * res_p)
-                dBz_dz[:,:,0] = (4*Bz_p[:,:,1] - 3*Bz_p[:,:,0] - Bz_p[:,:,2]) / (2 * res_p)
-                dBz_dz[:,:,-1] = (3*Bz_p[:,:,-1] + Bz_p[:,:,-3] - 4*Bz_p[:,:,-2]) / (2 * res_p)            
-                
-                div_p = dBx_dx + dBy_dy + dBz_dz
-                div.append(div_p)
-                div_x.append(dBx_dx)
-                div_y.append(dBy_dy)
-                div_z.append(dBz_dz)
-                
-            return div, div_x, div_y, div_z
-        
-        div_B_check3, div_Bx3, div_By3, div_Bz3 = divergence_B_test_II(clus_Bx, clus_By, clus_Bz, 
-                                                                dx, grid_npatch, clus_kp, stencil=3)
-        div_B_flat3 = np.concatenate([np.abs(div_B_check3[p]).flatten() for p in range(n) if bool(clus_kp[p])])
-        max_div_B3 = np.max(div_B_flat3)
-        
-        print(f'Snap {grid_irr} (inline method): Max |∇·B| = {max_div_B3:.6e}')
-        print(f'Snap {grid_irr} (inline method): Mean |∇·B| = {np.mean(div_B_flat3):.6e}')
-        print(f'Snap {grid_irr} (inline method): Std |∇·B| = {np.std(div_B_flat3):.6e}')
-        
-        if mean_B_magnitude > 0:
-            print(f'Snap {grid_irr} (inline method): Mean |∇·B| / |B| = {np.mean(div_B_flat3) / mean_B_magnitude_per_dx:.6e}')
-        else:
-            print(f'Snap {grid_irr} (inline method): Mean |B| = 0, cannot compute |∇·B| / |B| ratio.')
-
-    ###########################################################################################
+    if debug.get("divergence", {}).get("enabled", False) == True if isinstance(debug, dict) else False:
+        debug_verbose = debug.get("divergence", {}).get("verbose", True) if isinstance(debug, dict) else True
+        debug_module.compare_divergence_methods(
+            clus_Bx,
+            clus_By,
+            clus_Bz,
+            grid_npatch,
+            clus_kp,
+            grid_irr,
+            dir_params,
+            verbose=debug_verbose
+        )
     
     clus_bx = [clus_mbx[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_by = [clus_mby[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_bz = [clus_mbz[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
 
     if verbose == True:
-        print('Data type loaded for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype))
+        log_message('Data type loaded for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype), tag="data", level=1)
 
     # Convert to float64 if not transforming to uniform grid
     if bitformat == np.float64:
@@ -578,7 +565,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
     clus_v2 = [clus_vx[p]**2 + clus_vy[p]**2 + clus_vz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
 
     if verbose == True:
-        print('Working data type for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype))
+        log_message('Working data type for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype), tag="data", level=1)
         
     results = {
         'grid_irr': grid_irr,
@@ -622,9 +609,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
 def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
                         clus_vx, clus_vy, clus_vz,
                         clus_kp, grid_npatch, grid_irr,
-                        dx, stencil=3, use_parent_diff=False, buffer_active=False, nghost=1,
-                        patchpare=None, patchnx=None, patchny=None, patchnz=None,
-                        patchrx=None, patchry=None, patchrz=None, verbose=False):
+                        dx, stencil=3, verbose=False):
     '''
     Computes the vectorial calculus quantities of interest for the magnetic field and velocity field.
     Only the the necessary quantities are computed based on the components specified in the config "components" dictionary.
@@ -638,12 +623,8 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
         - grid_irr: index of the snapshot
         - dx: size of the cells in Mpc
         - stencil: stencil to be used for the calculations
-        - use_parent_diff: boolean to use parent boundaries in the differential calculations (default is False)
         - buffer_active: boolean to use buffer zones in the differential calculations (default is False)
         - nghost: number of ghost cells to be used in the differential calculations (default is 1)
-        - patchpare: parent patch of each patch (required if use_parent_diff is True)
-        - patchnx, patchny, patchnz: number of cells in each patch (required if use_parent_diff is True)
-        - patchrx, patchry, patchrz: size of each patch (required if use_parent_diff is True)
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
@@ -676,31 +657,13 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     
     if components.get('divergence', False):
         ### We compute the divergence of the magnetic field
-        
-        if use_parent_diff and patchpare is not None:
-            results['diver_B'] = diff.divergence_with_parent_boundaries(
-                clus_Bx, clus_By, clus_Bz, dx, grid_npatch,
-                patchpare, patchnx, patchny, patchnz,
-                patchrx, patchry, patchrz,
-                buffer_active=buffer_active, nghost=nghost,
-                kept_patches=clus_kp, stencil=stencil)
-        else:
-            results['diver_B'] = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
+        results['diver_B'] = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['diver_B'] = zero
         
     if components.get('compression', False):
         ### We compute the divergence of the velocity field
-        
-        if use_parent_diff and patchpare is not None:
-            results['diver_v'] = diff.divergence_with_parent_boundaries(
-                clus_vx, clus_vy, clus_vz, dx, grid_npatch,
-                patchpare, patchnx, patchny, patchnz,
-                patchrx, patchry, patchrz,
-                buffer_active=buffer_active, nghost=nghost,
-                kept_patches=clus_kp, stencil=stencil)
-        else:
-            results['diver_v'] = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
+        results['diver_v'] = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['diver_v'] = zero
         
@@ -742,7 +705,7 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     total_time_vector = end_time_vector - start_time_vector
     
     if verbose == True:
-        print('Time for vector calculations in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_vector))))
+        log_message('Time for vector calculations in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_vector))), tag="vector", level=1)
         
     return results
     
@@ -901,7 +864,7 @@ def induction_equation(components, vectorial_quantities,
     total_time_induction_terms = end_time_induction_terms - start_time_induction_terms
     
     if verbose == True:
-        print('Time for calculating the induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_terms))))
+        log_message('Time for calculating the induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_terms))), tag="induction", level=1)
 
     return results, magnitudes
 
@@ -990,7 +953,7 @@ def induction_equation_energy(components, induction_equation,
     total_time_induction_energy_terms = end_time_induction_energy_terms - start_time_induction_energy_terms
     
     if verbose == True:
-        print('Time for calculating the energy induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_energy_terms))))
+        log_message('Time for calculating the energy induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_energy_terms))), tag="induction_energy", level=1)
         
     return results
     
@@ -1077,7 +1040,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                                                             size, nmax, coords, region_coords, rad, a0_masclet, units, kept_patches=clus_kp)
     
             if verbose == True:
-                print(f'Snap {it} in {sims}: {key} energy density volume integral done')
+                log_message(f'Snap {it} in {sims}: {key} energy density volume integral done', tag="integral", level=1)
         else:
             results[f'int_{prefix}'] = zero
     
@@ -1086,7 +1049,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                                                             grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
                                                             size, nmax, coords, region_coords, rad, a0_masclet, units, kept_patches=clus_kp)
         if verbose == True:
-            print(f'Snap {it} in {sims}: Kinetic energy density volume integral done')
+            log_message(f'Snap {it} in {sims}: Kinetic energy density volume integral done', tag="integral", level=1)
     else:
         results['int_kinetic_energy'] = zero
         
@@ -1095,7 +1058,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                                                 grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
                                                 size, nmax, coords, region_coords, rad, a0_masclet, units, kept_patches=clus_kp)
         if verbose == True:
-            print(f'Snap {it} in {sims}: Magnetic energy density volume integral done')
+            log_message(f'Snap {it} in {sims}: Magnetic energy density volume integral done', tag="integral", level=1)
     else:
         results['int_b2'] = zero
     
@@ -1108,7 +1071,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
     total_time_induction = end_time_induction - start_time_induction
 
     if verbose == True:
-        print('Time for induction integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))))
+        log_message('Time for induction integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))), tag="integral", level=1)
 
     return results
 
@@ -1208,7 +1171,7 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
                     results[f'evo_{prefix}'] = [(rho_b[i+1] * ((1/rho_b[i]) * (induction_energy_integral[f'int_b2'][i]) +
                     (grid_time[i+1] - grid_time[i]) * (induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
                 if verbose == True:
-                    print(f'Energy evolution: {key} volume energy integral evolution done')
+                    log_message(f'Energy evolution: {key} volume energy integral evolution done', tag="evolution", level=1)
             else:
                 results[f'evo_{prefix}'] = zero
             
@@ -1226,7 +1189,7 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
                 elif derivative == 'rate':
                     results[f'evo_{prefix}'] = [induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i] for i in range(n)]
                 if verbose == True:
-                    print(f'Energy evolution: {key} energy integral evolution done')
+                    log_message(f'Energy evolution: {key} energy integral evolution done', tag="evolution", level=1)
             else:
                 results[f'evo_{prefix}'] = zero
     
@@ -1238,20 +1201,20 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
         results['evo_kinetic_energy'] = [(1/(grid_time[i+1] - grid_time[i])) * ((rho_b[i+1] * induction_energy_integral['int_kinetic_energy'][i+1]) - (rho_b[i] * induction_energy_integral['int_kinetic_energy'][i])) for i in range(n)]
     
     if verbose == True:
-        print(f'Energy evolution: magnetic and kinetic energy integral evolution done')
+        log_message('Energy evolution: magnetic and kinetic energy integral evolution done', tag="evolution", level=1)
             
     results['evo_volume_phi'] = [(induction_energy_integral['volume'][i]) for i in range(n+1)]
     results['evo_volume_co'] = [(induction_energy_integral['volume'][i] / ((1/(1+grid_zeta[i]))**3)) for i in range(n+1)]
     
     if verbose == True:
-        print('Energy evolution: volume evolution done')
+        log_message('Energy evolution: volume evolution done', tag="evolution", level=1)
     
     end_time_evolution = time.time()
     
     total_time_evolution = end_time_evolution - start_time_evolution
     
     if verbose == True:
-        print('Time for evolution of the induction energy integral: '+str(strftime("%H:%M:%S", gmtime(total_time_evolution))))
+        log_message('Time for evolution of the induction energy integral: '+str(strftime("%H:%M:%S", gmtime(total_time_evolution))), tag="evolution", level=1)
 
     return results
 
@@ -1358,7 +1321,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
                                             size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
             results[f'{prefix}_profile'] = rho_b * profile
             if verbose:
-                print(f'Snap {it} in {sims}: {key} profile done')
+                log_message(f'Snap {it} in {sims}: {key} profile done', tag="profiles", level=1)
         else:
             results[f'{prefix}_profile'] = zero
     
@@ -1375,7 +1338,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
                                                 size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
         results['kinetic_energy_profile'] = rho_b * profile
         if verbose:
-            print(f'Snap {it} in {sims}: Kinetic profile done')
+            log_message(f'Snap {it} in {sims}: Kinetic profile done', tag="profiles", level=1)
     else:
         results['kinetic_energy_profile'] = zero
         
@@ -1387,7 +1350,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
                                         size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
         results['clus_b2_profile'] = rho_b * profile
         if verbose:
-            print(f'Snap {it} in {sims}: b2 profile done')
+            log_message(f'Snap {it} in {sims}: b2 profile done', tag="profiles", level=1)
     else:
         results['clus_b2_profile'] = zero
     
@@ -1399,7 +1362,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
                                                 size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
         results['clus_rho_rho_b_profile'] = rho_b * profile
         if verbose:
-            print(f'Snap {it} in {sims}: Density profile done')
+            log_message(f'Snap {it} in {sims}: Density profile done', tag="profiles", level=1)
     else:
         results['clus_rho_rho_b_profile'] = zero
         profile_bin_centers, _ = utils.radial_profile_vw(field=clus_rho_rho_b, cr0amr=clus_cr0amr,
@@ -1415,7 +1378,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     total_time_profile = end_time_profile - start_time_profile
     
     if verbose == True:
-        print('Time for profile calculation in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_profile))))
+        log_message('Time for profile calculation in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_profile))), tag="profiles", level=1)
         
     return results
 
@@ -1423,7 +1386,9 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
 def compute_percentile_thresholds(field_numerator, field_denominator, scale_factor,
                                 cr0amr, solapst, npatch, up_to_level,
                                 percentiles=(100, 90, 75, 50, 25),
-                                use_abs=True, denom_eps=0.0, verbose=False):
+                                use_abs=True, denom_eps=0.0, kept_patches=None,
+                                exclude_boundaries=False, boundary_width=1,
+                                exclude_zeros=True, verbose=False):
     '''
     Compute percentile thresholds of a ratio field in a single snapshot with safeguards and band edges.
     Applies clean_field to ensure only cells at maximum available resolution are considered.
@@ -1441,6 +1406,10 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
         - percentiles: tuple/list of percentiles to compute
         - use_abs: take absolute value of the ratio before percentiles
         - denom_eps: minimum absolute value allowed in denominator; smaller values are masked
+        - kept_patches: 1d boolean array indicating which patches are inside the region (None to keep all)
+        - exclude_boundaries: if True, exclude boundary cells from percentile calculation
+        - boundary_width: number of boundary cells to exclude from each side (default 1)
+        - exclude_zeros: if True, exclude zero values from percentile calculation
         - verbose: whether to print timing information
 
     Returns:
@@ -1457,45 +1426,62 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
 
     Author: Marco Molina
     '''
-
     start_time_percentiles = time.time()
 
     # Apply clean_field to ensure only cells at maximum resolution are considered
     clean_numerator = utils.clean_field(field_numerator, cr0amr, solapst, npatch, up_to_level)
     clean_denominator = utils.clean_field(field_denominator, cr0amr, solapst, npatch, up_to_level)
 
+    # Build a validity mask from AMR refinement/overlap flags (1 = valid, 0 = invalid)
+    mask_template = []
+    for patch in clean_numerator:
+        if patch is None:
+            mask_template.append(None)
+        elif np.isscalar(patch):
+            mask_template.append(np.array(patch, dtype=float))
+        else:
+            mask_template.append(np.ones_like(patch, dtype=float))
+    valid_mask = utils.clean_field(mask_template, cr0amr, solapst, npatch, up_to_level)
+
+    # Always print boundary exclusion status for diagnostics
+    if exclude_boundaries and boundary_width > 0:
+        log_message(f"Excluding {boundary_width} boundary cells from each patch side", tag="percentiles", level=1)
+    elif verbose:
+        log_message("Including all cells (boundaries NOT excluded)", tag="percentiles", level=1)
+
     # Handle scale_factor: scalar or array with one value per patch
     if np.isscalar(scale_factor):
-        # Simple scalar multiplication
-        ratio = np.divide(
-            clean_numerator,
-            clean_denominator,
-            out=np.full_like(clean_numerator, np.nan, dtype=float),
-            where=np.abs(clean_denominator) > denom_eps,
-        )
-        if use_abs:
-            ratio = np.abs(ratio)
-        ratio = ratio * scale_factor
-        
-        # Flatten and filter: exclude NaN, Inf, and zero values from clean_field
-        vals = ratio.ravel()
-        vals = vals[np.isfinite(vals) & (vals != 0.0)]
+        scale_arr = np.full(len(clean_numerator), scale_factor, dtype=float)
     else:
-        # scale_factor is an array with one value per patch
-        scale_arr = np.asarray(scale_factor)
-        
-        # field_numerator and field_denominator are lists of 3D arrays (one per patch)
+        scale_arr = np.asarray(scale_factor, dtype=float)
         if not isinstance(field_numerator, (list, tuple)):
             raise ValueError("field_numerator must be a list/tuple of arrays (one per patch)")
-        
-        n_patches = len(clean_numerator)
-        if scale_arr.size != n_patches:
-            raise ValueError(f"scale_factor array size ({scale_arr.size}) must match number of patches ({n_patches})")
-        
-        # Process each patch with its corresponding scale factor
-        ratio_patches = []
-        for i, (num_patch, denom_patch) in enumerate(zip(clean_numerator, clean_denominator)):
-            # Compute ratio for this patch
+        if scale_arr.size != len(clean_numerator):
+            raise ValueError(
+                f"scale_factor array size ({scale_arr.size}) must match number of patches ({len(clean_numerator)})"
+            )
+
+    vals_list = []
+    for i, (num_patch, denom_patch) in enumerate(zip(clean_numerator, clean_denominator)):
+        if kept_patches is not None and not kept_patches[i]:
+            continue
+
+        if num_patch is None or denom_patch is None:
+            continue
+
+        if np.isscalar(num_patch) or np.isscalar(denom_patch):
+            ratio_patch = np.divide(
+                num_patch,
+                denom_patch,
+                out=np.array(np.nan, dtype=float),
+                where=np.abs(denom_patch) > denom_eps,
+            )
+            if use_abs:
+                ratio_patch = np.abs(ratio_patch)
+            ratio_patch = ratio_patch * scale_arr[i]
+            patch_vals = np.atleast_1d(ratio_patch)
+            patch_mask = np.atleast_1d(valid_mask[i]).astype(bool)
+        else:
             ratio_patch = np.divide(
                 num_patch,
                 denom_patch,
@@ -1504,14 +1490,47 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
             )
             if use_abs:
                 ratio_patch = np.abs(ratio_patch)
-            
-            # Multiply by the scale factor for this patch
             ratio_patch = ratio_patch * scale_arr[i]
-            ratio_patches.append(ratio_patch)
-        
-        # Concatenate all patches and filter: exclude NaN, Inf, and zero values from clean_field
-        vals = np.concatenate([np.asarray(p).ravel() for p in ratio_patches])
-        vals = vals[np.isfinite(vals) & (vals != 0.0)]
+
+            patch_mask = valid_mask[i].astype(bool)
+
+            if exclude_boundaries and boundary_width > 0:
+                nx, ny, nz = ratio_patch.shape
+                if nx > 2 * boundary_width and ny > 2 * boundary_width and nz > 2 * boundary_width:
+                    interior_mask = np.ones((nx, ny, nz), dtype=bool)
+                    interior_mask[:boundary_width, :, :] = False
+                    interior_mask[-boundary_width:, :, :] = False
+                    interior_mask[:, :boundary_width, :] = False
+                    interior_mask[:, -boundary_width:, :] = False
+                    interior_mask[:, :, :boundary_width] = False
+                    interior_mask[:, :, -boundary_width:] = False
+                    patch_mask = patch_mask & interior_mask
+
+            patch_vals = ratio_patch[patch_mask]
+
+        if patch_vals.size == 0:
+            continue
+
+        patch_vals = patch_vals[np.isfinite(patch_vals)]
+        if exclude_zeros:
+            patch_vals = patch_vals[patch_vals != 0.0]
+
+        if patch_vals.size > 0:
+            vals_list.append(np.asarray(patch_vals).ravel())
+
+    if vals_list:
+        vals = np.concatenate(vals_list)
+    else:
+        vals = np.array([])
+
+    # Diagnostic output for data statistics
+    total_patches = len(clean_numerator)
+    patches_processed = len(vals_list)
+    if verbose or (exclude_boundaries and boundary_width > 0):
+        log_message(f"Patches processed: {patches_processed}/{total_patches}", tag="percentiles", level=2)
+        log_message(f"Total valid values: {vals.size:,}", tag="percentiles", level=2)
+        if vals.size > 0:
+            log_message(f"Value range: [{np.min(vals):.3e}, {np.max(vals):.3e}]", tag="percentiles", level=2)
 
     if vals.size == 0:
         return {
@@ -1551,7 +1570,7 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
     total_time_percentiles = end_time_percentiles - start_time_percentiles
     
     if verbose:
-        print('Time for percentile thresholds computation: ' + str(strftime("%H:%M:%S", gmtime(total_time_percentiles))))
+        log_message('Time for percentile thresholds computation: ' + str(strftime("%H:%M:%S", gmtime(total_time_percentiles))), tag="percentiles", level=1)
 
     return {
         "percentiles": thresholds,
@@ -1562,6 +1581,7 @@ def compute_percentile_thresholds(field_numerator, field_denominator, scale_fact
         "global_max": gmax,
         "bands": bands,
     }
+
 
 def uniform_induction(components, induction_equation,
                     clus_cr0amr, clus_solapst, grid_npatch,
@@ -1654,10 +1674,10 @@ def uniform_induction(components, induction_equation,
                                                 interpolate=True, verbose=False, kept_patches=clus_kp, return_coords=False
                                             )
             if verbose == True:
-                print(f'Snap {it} in {sims}: {key} uniform field done')
-                print(results[f'uniform_{prefix}_x'].shape)
-                print(results[f'uniform_{prefix}_y'].shape)
-                print(results[f'uniform_{prefix}_z'].shape)
+                log_message(f'Snap {it} in {sims}: {key} uniform field done', tag="projection", level=1)
+                log_message(str(results[f'uniform_{prefix}_x'].shape), tag="projection", level=2)
+                log_message(str(results[f'uniform_{prefix}_y'].shape), tag="projection", level=2)
+                log_message(str(results[f'uniform_{prefix}_z'].shape), tag="projection", level=2)
         else:
             results[f'uniform_{prefix}_x'] = zero
             results[f'uniform_{prefix}_y'] = zero
@@ -1668,74 +1688,19 @@ def uniform_induction(components, induction_equation,
     total_time_uniform = end_time_uniform - start_time_uniform
     
     if verbose == True:
-        print('Time for uniform field calculation in snap '+ str(grid_npatch) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_uniform))))
-        
+        log_message('Time for uniform field calculation in snap '+ str(grid_npatch) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_uniform))), tag="projection", level=1)
+    
     return results
 
-def _get_debug_field(key, field_sources, region_coords, data, debug, up_to_level, size, nmax):
-    '''
-    Helper function to retrieve and process debug fields.
-    
-    Args:
-        - key: the key of the field to retrieve
-        - field_sources: list of dictionaries containing possible field sources
-        - region_coords: coordinates defining the region of interest
-        - data: dictionary containing grid parameters
-        - debug: list indicating the debug mode
-        - up_to_level: level of refinement in the AMR grid
-        - size: size of the grid
-        - nmax: maximum number of patches in the grid
         
-    Returns:
-        - processed field or None if not found
-        
-    Author: Marco Molina
-    '''
-    field = None
-    for source in field_sources:
-        if key in source.keys():
-            field = source[key]
-            break
-    
-    if field is None:
-        return None
-    
-    if debug[1] == 0:  # Uniform grid mode
-        return utils.unigrid(
-            field=field,
-            box_limits=region_coords[1:],
-            up_to_level=up_to_level,
-            npatch=data['grid_npatch'],
-            patchnx=data['grid_patchnx'],
-            patchny=data['grid_patchny'],
-            patchnz=data['grid_patchnz'],
-            patchrx=data['grid_patchrx'],
-            patchry=data['grid_patchry'],
-            patchrz=data['grid_patchrz'],
-            size=size,
-            nmax=nmax,
-            interpolate=True,
-            verbose=False,
-            kept_patches=data['clus_kp'],
-            return_coords=False
-        )
-    elif debug[2]:  # Clean field mode
-        return utils.clean_field(
-            field,
-            data['clus_cr0amr'],
-            data['clus_solapst'],
-            data['grid_npatch'],
-            up_to_level=up_to_level
-        )
-    else:  # Raw field mode
-        return field
-
 def process_iteration(components, dir_grids, dir_gas, dir_params,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
-                    stencil=3, buffer=True, use_siblings=True, interpol='TSC', use_parent_diff=True, nghost=1, bitformat=np.float32, mag=False,
+                    stencil=3, buffer=True, use_siblings=True, interpol='TSC', nghost=1, blend=False,
+                    parent=False, parent_interpol=None,
+                    bitformat=np.float32, mag=False,
                     energy_evolution=True, profiles=True, projection=True, percentiles=True, 
-                    percentile_levels=(95, 90, 75, 50, 25), debug=[False, 0],
+                    percentile_levels=(95, 90, 75, 50, 25), debug_params=None,
                     return_vectorial=False, return_induction=False, return_induction_energy=False,
                     verbose=False):
     '''
@@ -1778,7 +1743,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - projection: boolean to compute uniform projection (default is True)
         - percentiles: boolean to compute percentile thresholds (default is True)
         - percentile_levels: tuple of percentile thresholds to compute (default is (100, 90, 75, 50, 25))
-        - debug: boolean to print inner progress information (default is False)
+        - debug_params: dictionary with debug configuration (default is None, uses empty dict)
         - return_vectorial: boolean to return vectorial quantities dictionary (default is False)
         - return_induction: boolean to return induction equation dictionary (default is False)
         - return_induction_energy: boolean to return induction energy dictionary (default is False)
@@ -1800,50 +1765,158 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
 
     start_time_Total = time.time() # Record the start time
 
+    # Initialize debug parameters if not provided
+    if debug_params is None:
+        debug_params = {
+            "buffer": {"enabled": False, "verbose": False},
+            "divergence": {"enabled": False, "verbose": False},
+            "field_analysis": {"enabled": False}
+        }
+
     # Load Simulation Data
     
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, bitformat=bitformat, region=region_coords, verbose=verbose, debug=False)
+    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, bitformat=bitformat, region=region_coords, verbose=verbose, debug=debug_params.get("divergence", {}) and debug_params.get("patch_analysis", {}))
     levels = utils.create_vector_levels(data['grid_npatch'])
     dx = size/nmax
     resolution = dx / (2 ** levels)
     
+    # Run debug tests if enabled
+    debug_fields = None
+    pipeline_debug_results = None
+    scan_pack = None
+    if debug_params.get("buffer", {}).get("enabled", False):
+        if verbose:
+            log_message(f"\n{'*'*80}", tag="debug", level=1)
+            log_message("BUFFER DEBUG MODE ENABLED - Running buffer pipeline validation tests...", tag="debug", level=1)
+            log_message(f"{'*'*80}", tag="debug", level=1)
+        pipeline_debug_results = debug_module.run_debug_buffer_pipeline(data, size, nmax, nghost=nghost, 
+                                                interpol=interpol, use_siblings=use_siblings, 
+                                                bitformat=bitformat, 
+                                                verbose=debug_params.get("buffer", {}).get("verbose", True))
+    
+    if parent_interpol is None:
+        parent_interpol = interpol
+
+    parent_mode = bool(parent)
+
+    blend_active = bool(blend) and bool(buffer)
+    boundary_width = 1 if stencil == 3 else 2
+    buffer_nghost = nghost
+    if parent_mode and not blend_active:
+        buffer_nghost = 0
+    if blend_active and buffer_nghost == 0:
+        buffer_nghost = boundary_width
+        if verbose:
+            log_message(
+                f'Blend active: using buffer nghost={buffer_nghost} (stencil={stencil}) in addition to parent fill',
+                tag="buffer",
+                level=1
+            )
+
+    original_fields = None
+    if blend_active:
+        original_fields = {
+            'Bx': data['clus_Bx'],
+            'By': data['clus_By'],
+            'Bz': data['clus_Bz'],
+            'vx': data['clus_vx'],
+            'vy': data['clus_vy'],
+            'vz': data['clus_vz']
+        }
+
     # Add ghost buffer cells before derivatives
-    if buffer == True:
-        
-        buffered_field = buff.add_ghost_buffer([data[f'clus_Bx'], data[f'clus_By'], data[f'clus_Bz'], data[f'clus_vx'], data[f'clus_vy'], data[f'clus_vz']],
-                                                data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
-                                                data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
-                                                data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
-                                                size=size, nmax=nmax, nghost=nghost, interpol=interpol, use_siblings=use_siblings, kept_patches=data['clus_kp'])
+    if buffer == True and buffer_nghost > 0:
+        buffered_field = buff.add_ghost_buffer(
+            [data['clus_Bx'], data['clus_By'], data['clus_Bz'], data['clus_vx'], data['clus_vy'], data['clus_vz']],
+            data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+            data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
+            data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
+            size=size, nmax=nmax, nghost=buffer_nghost, interpol=interpol, use_siblings=use_siblings,
+            kept_patches=data['clus_kp']
+        )
         for i, key in enumerate(['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']):
             data[f'clus_{key}'] = buffered_field[i]
-        print('Ghost buffer added to magnetic and velocity fields')
+        if verbose == True:
+            log_message('Ghost buffer added to magnetic and velocity fields', tag="buffer", level=1)
 
     # Vectorial calculus
     ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
     vectorial = vectorial_quantities(components, data['clus_Bx'], data['clus_By'], data['clus_Bz'],
                                 data['clus_vx'], data['clus_vy'], data['clus_vz'],
                                 data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                                dx, stencil=stencil, use_parent_diff=use_parent_diff, buffer_active=buffer, nghost=nghost,
-                                patchpare=data['grid_pare'], patchnx=data['grid_patchnx'], patchny=data['grid_patchny'], patchnz=data['grid_patchnz'],
-                                patchrx=data['grid_patchrx'], patchry=data['grid_patchry'], patchrz=data['grid_patchrz'],
-                                verbose=verbose)
-    
-    # Remove ghost buffer cells after derivatives
-    if buffer == True:
+                                dx, stencil=stencil, verbose=verbose)
+            
+    # Remove ghost buffer cells after derivatives (skip if parent mode uses frontier fill)
+    if buffer == True and buffer_nghost > 0:
         if verbose == True:
-            print('Removing ghost buffer from computed vectorial fields')
+            log_message('Removing ghost buffer from computed vectorial fields', tag="buffer", level=1)
         for key in vectorial.keys():
-            vectorial[key] = buff.ghost_buffer_buster(vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
-            # buff.inplace_ghost_buffer_buster(vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+            vectorial[key] = buff.ghost_buffer_buster(
+                vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                buffer_nghost, kept_patches=data['clus_kp']
+            )
         if verbose == True:
-            print(f'Removing ghost buffer from magnetic and velocity fields')
+            log_message('Removing ghost buffer from magnetic and velocity fields', tag="buffer", level=1)
         for key in ['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']:
-            data[f'clus_{key}'] = buff.ghost_buffer_buster(data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
-            # buff.inplace_ghost_buffer_buster(data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'], nghost, kept_patches=data['clus_kp'])
+            data[f'clus_{key}'] = buff.ghost_buffer_buster(
+                data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                buffer_nghost, kept_patches=data['clus_kp']
+            )
+    elif buffer == True and parent_mode and not blend_active:
+        parent_use_siblings = False
+        buffered_field = buff.add_ghost_buffer(
+            [vectorial[key] for key in vectorial.keys()],
+            data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+            data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
+            data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
+            size=size, nmax=nmax, nghost=0, interpol=parent_interpol, use_siblings=parent_use_siblings,
+            kept_patches=data['clus_kp']
+        )
+        for i, key in enumerate(vectorial.keys()):
+            vectorial[key] = buffered_field[i]
+        if verbose == True:
+            log_message(
+                f'Parent frontier filling applied to vectorial fields (parent_interpol={parent_interpol})',
+                tag="buffer",
+                level=1
+            )
+
+    if blend_active:
+        vectorial_no_buffer = vectorial_quantities(
+            components,
+            original_fields['Bx'], original_fields['By'], original_fields['Bz'],
+            original_fields['vx'], original_fields['vy'], original_fields['vz'],
+            data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+            dx, stencil=stencil, verbose=False
+        )
+
+        parent_use_siblings = False
+        parent_field = buff.add_ghost_buffer(
+            [vectorial_no_buffer[key] for key in vectorial_no_buffer.keys()],
+            data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+            data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
+            data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
+            size=size, nmax=nmax, nghost=0, interpol=parent_interpol, use_siblings=parent_use_siblings,
+            kept_patches=data['clus_kp']
+        )
+
+        for idx, key in enumerate(vectorial.keys()):
+            vectorial[key] = buff.blend_patch_boundaries(
+                vectorial[key], parent_field[idx],
+                data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                boundary_width=boundary_width, kept_patches=data['clus_kp']
+            )
+
+        if verbose == True:
+            log_message(
+                f'Blend applied: boundary cells are averaged between buffer and parent fill '
+                f'(parent_interpol={parent_interpol})',
+                tag="buffer",
+                level=1
+            )
 
     # Magnetic Induction Equation
     
@@ -1863,7 +1936,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         induction = None
         magnitudes = None
         if verbose:
-            print('Induction equation skipped (not required by any enabled output).')
+            log_message('Induction equation skipped (not required by any enabled output).', tag="pipeline", level=1)
     
     # Magnetic Induction Equation in Terms of the Magnetic Energy
     
@@ -1882,9 +1955,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     else:
         induction_energy = None
         if verbose and compute_induction_energy and induction is None:
-            print('Induction energy skipped (induction not available).')
+            log_message('Induction energy skipped (induction not available).', tag="pipeline", level=1)
         elif verbose and not compute_induction_energy:
-            print('Induction energy skipped (not required by any enabled output).')
+            log_message('Induction energy skipped (not required by any enabled output).', tag="pipeline", level=1)
     
     if energy_evolution and induction_energy is not None:
         # Volume Integral of the Magnetic Induction Equation
@@ -1920,9 +1993,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         induction_test_energy_integral = None
         if verbose == True:
             if not energy_evolution:
-                print('Energy evolution is set to False, skipping volume integral of the magnetic induction equation.')
+                log_message('Energy evolution is set to False, skipping volume integral of the magnetic induction equation.', tag="pipeline", level=1)
             elif induction_energy is None:
-                print('Energy evolution skipped (induction_energy not available).')
+                log_message('Energy evolution skipped (induction_energy not available).', tag="pipeline", level=1)
             
     if profiles and induction_energy is not None:
         # Radial Profiles of the Magnetic Induction Equation
@@ -1941,9 +2014,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         induction_energy_profiles = None
         if verbose == True:
             if not profiles:
-                print('Profiles are set to False, skipping radial profiles of the magnetic induction equation.')
+                log_message('Profiles are set to False, skipping radial profiles of the magnetic induction equation.', tag="pipeline", level=1)
             elif induction_energy is None:
-                print('Radial profiles skipped (induction_energy not available).')
+                log_message('Radial profiles skipped (induction_energy not available).', tag="pipeline", level=1)
             
     if projection and induction is not None:
         # Uniform Projection of the Magnetic Induction Equation
@@ -1961,15 +2034,22 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         induction_uniform = None
         if verbose == True:
             if not projection:
-                print('Projection is set to False, skipping uniform projection of the magnetic induction equation.')
+                log_message('Projection is set to False, skipping uniform projection of the magnetic induction equation.', tag="pipeline", level=1)
             elif induction is None:
-                print('Uniform projection skipped (induction not available).')
+                log_message('Uniform projection skipped (induction not available).', tag="pipeline", level=1)
             
     if percentiles:
         # Percentile Thresholds of the Magnetic Field Divergence
         
         # Scale divergence by resolution to make it comparable to field magnitude
         # Divergence has units [field/length], multiplying by dx gives [field]
+        
+        # Extract percentile calculation options from debug_params if available
+        percentile_params = debug_params.get("percentile_params", {}) if debug_params else {}
+        exclude_boundaries = percentile_params.get("exclude_boundaries", False)
+        boundary_width = percentile_params.get("boundary_width", 1)
+        exclude_zeros = percentile_params.get("exclude_zeros", True)
+        
         diver_B_percentiles = compute_percentile_thresholds(
             field_numerator=vectorial['diver_B'],
             field_denominator=data['clus_B'],
@@ -1981,31 +2061,61 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             percentiles=percentile_levels,
             use_abs=True,
             denom_eps=0.0,
+            kept_patches=data['clus_kp'],
+            exclude_boundaries=exclude_boundaries,
+            boundary_width=boundary_width,
+            exclude_zeros=exclude_zeros,
             verbose=verbose
         )
     elif not percentiles:
         diver_B_percentiles = None
         if verbose == True:
-            print('Percentiles is set to False, skipping percentile thresholds of the magnetic field divergence.')
+            log_message('Percentiles is set to False, skipping percentile thresholds of the magnetic field divergence.', tag="pipeline", level=1)
+
+    # Build scan visualization volume if requested (pure-debug data)
+    if debug_params.get("scan_animation", {}).get("enabled", False):
+        scan_pack = debug_module.build_scan_animation_data(
+            data=data,
+            size=size,
+            nmax=nmax,
+            region_coords=region_coords,
+            nghost=nghost,
+            use_siblings=use_siblings,
+            up_to_level=up_to_level,
+            bitformat=bitformat,
+            verbose=debug_params.get("scan_animation", {}).get("verbose", False),
+            clean_output=debug_params.get("clean_output", False)
+        )
             
-    if debug[0] == True:
-        
-        debug_data = ['clus_B', 'clus_Bx', 'clus_By', 'clus_Bz', 'clus_B2', 'diver_B', 'MIE_diver_x', 'MIE_diver_y', 'MIE_diver_z', 'MIE_diver_B2']
-        
-        debug_fields = {}
-
+    if debug_params.get("field_analysis", {}).get("enabled", False):
         field_sources = [data, vectorial, induction, induction_energy]
-        debug_fields = {
-            key: _get_debug_field(key, field_sources, region_coords, data, debug, up_to_level, size, nmax)
-            for key in debug_data
-        }
-        debug_fields = {k: v for k, v in debug_fields.items() if v is not None}
-
-        if verbose == True:
-            print('Debug fields computed for iteration '+ str(it) + ' in simulation '+ str(sims))
+        field_list = debug_params.get("field_analysis", {}).get("field_list", None)
+        debug_fields = debug_module.analyze_debug_fields(
+            field_sources=field_sources,
+            region_coords=region_coords,
+            data=data,
+            debug_params=debug_params,
+            up_to_level=up_to_level,
+            size=size,
+            nmax=nmax,
+            pipeline_debug_results=pipeline_debug_results,
+            scan_pack=scan_pack,
+            verbose=verbose,
+            it=it,
+            sims=sims,
+            field_list=field_list
+        )
                 
     else:
-        debug_fields = None
+        # If no field analysis, still return any available debug artifacts
+        if pipeline_debug_results is not None or scan_pack is not None:
+            debug_fields = {}
+            if pipeline_debug_results is not None:
+                debug_fields['_pipeline_validation'] = pipeline_debug_results
+            if scan_pack is not None:
+                debug_fields.update(scan_pack)
+        else:
+            debug_fields = None
         
     data = {
         'grid_time': data['grid_time'],
@@ -2027,6 +2137,6 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     total_time_Total = end_time_Total - start_time_Total
     
     if verbose == True:
-        print(f'Time for processing iteration {it} in simulation {sims}: {strftime("%H:%M:%S", gmtime(total_time_Total))}')
+        log_message(f'Time for processing iteration {it} in simulation {sims}: {strftime("%H:%M:%S", gmtime(total_time_Total))}', tag="pipeline", level=1)
 
     return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields

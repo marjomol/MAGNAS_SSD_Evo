@@ -15,9 +15,11 @@ from scripts.induction_evo import process_iteration
 def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
                                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
-                                    stencil=3, buffer=True, use_siblings=True, interpol='TSC', use_parent_diff=True, nghost=1, bitformat=None, mag=False,
+                                    stencil=3, buffer=True, use_siblings=True, interpol='TSC', nghost=1, blend=False,
+                                    parent=False, parent_interpol=None,
+                                    bitformat=None, mag=False,
                                     energy_evolution=True, profiles=True, projection=True, percentiles=True, 
-                                    percentile_levels=(100, 90, 75, 50, 25), debug=None,
+                                    percentile_levels=(100, 90, 75, 50, 25), debug_params=None,
                                     return_vectorial=False, return_induction=False, return_induction_energy=False,
                                     verbose=False):
     '''
@@ -35,8 +37,8 @@ def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
     Author: Marco Molina Pradillo
     '''
     
-    if debug is None:
-        debug = [False, 0]
+    if debug_params is None:
+        debug_params = {}
     
     # Create string buffers to capture output
     stdout_capture = io.StringIO()
@@ -70,8 +72,10 @@ def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
                 buffer=buffer,
                 use_siblings=use_siblings,
                 interpol=interpol,
-                use_parent_diff=use_parent_diff,
                 nghost=nghost,
+                blend=blend,
+                parent=parent,
+                parent_interpol=parent_interpol,
                 bitformat=bitformat,
                 mag=mag,
                 energy_evolution=energy_evolution,
@@ -79,7 +83,7 @@ def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
                 projection=projection,
                 percentiles=percentiles,
                 percentile_levels=percentile_levels,
-                debug=debug,
+                debug_params=debug_params,
                 return_vectorial=return_vectorial,
                 return_induction=return_induction,
                 return_induction_energy=return_induction_energy,

@@ -35,7 +35,7 @@ IND_PARAMS = {
     "nbins": [25], # Number of bins for the profiles histograms
     "rmin": [0.01], # Minimum radius to calculate the profiles
     "logbins": True, # Use logarithmic bins
-    "F": 1, # Factor to multiply the viral radius to define the box size
+    "F": 20, # Factor to multiply the viral radius to define the box size
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
@@ -44,8 +44,10 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [7], # Max. level of the AMR grid to be read
-    "up_to_level": [7], # AMR level up to which calculate
+    # "level": [1], # Max. level of the AMR grid to be read
+    # "up_to_level": [1], # AMR level up to which calculate
+    "level": [2], # Max. level of the AMR grid to be read
+    "up_to_level": [2], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
@@ -53,16 +55,18 @@ IND_PARAMS = {
     # "H0": H0_isu,
     "epsilon": 1e-30,
     "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
-    "use_parent_diff": False, # Use parent rescaled derivatives in patch boundaries (Fortran-like approach)
-    "buffer": False, # Use buffer zones to avoid boundary effects (recommended but slower)
-    "use_siblings": True, # Use sibling patches in buffer (if False, only parent interpolation is used)
-    "interpol": 'TSC', # Interpolation method for the buffer zones ('TSC', 'PARENT_DIRECT', 'SPH', 'LINEAR', 'NEAREST')
+    "buffer": True, # Use buffer zones to avoid boundary effects BEFORE differentiating near patch boundaries (recommended but slower)
+    "interpol": 'TRILINEAR', # Interpolation method ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST').
+    "use_siblings": False, # Use sibling patches in buffer (if False, only parent interpolation is used)
+    "parent": True, # Parent mode fills frontiers after differenciating using the interpolation in "parent_interpol" (no extra buffer cells)
+    "parent_interpol": 'TRILINEAR', # Interpolation method for parent fill ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST')
+    "blend": True, # Blend boundary values from buffer differentiation with parent-filled boundaries (only if parent is True)
     "divergence": True, # Process the divergence induction component
-    "compression": True, # Process the compression induction component
-    "stretching": True, # Process the stretching induction component
-    "advection": True, # Process the advection induction component
-    "drag": True, # Process the drag induction component
-    "total": True, # Process the total induction component
+    "compression": False, # Process the compression induction component
+    "stretching": False, # Process the stretching induction component
+    "advection": False, # Process the advection induction component
+    "drag": False, # Process the drag induction component
+    "total": False, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": False, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
@@ -86,24 +90,23 @@ IND_PARAMS = {
 OUTPUT_PARAMS = {
     # "save": False,
     # "verbose": False,
-    "debug": [False, 1, True],
     "save": True,
     "verbose": True,
-    # "debug": [True, 1, True], # [Bool, Grid debugging (0: Uniform, 1: AMR), Clean fields (If AMR)],
-    # "bitformat": np.float64,
+    "save_terminal": True,  # Save terminal output to file
+    # "bitformat": np.float32,
     "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 4, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_2_best',
+    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_2_new_debug',
+    # "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_29_evo_fix_def',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
-    # "it": [1050], # For different redshift snap iterations analysis
+    "it": [1050], # For different redshift snap iterations analysis
     # "it": [1800, 2119],
-    # "it": list(range(1000, 2001, 50)) + [2119],
-    # "it": list(range(250, 2001, 50)) + [2119], # For different redshift snap iterations analysis
-    "it": list(range(300, 2001, 50)) + [2119], # For different redshift snap iterations analysis
-    # "it": list(range(0, 2001, 50)) + [2119], # For different redshift snap iterations analysis
+    # "it": list(range(1000, 2101, 50)) + [2119],
+    # "it": list(range(250, 2101, 50)) + [2119], # For different redshift snap iterations analysis
+    # "it": list(range(50, 2101, 50)) + [2119], # For different redshift snap iterations analysis
     "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
@@ -113,10 +116,104 @@ OUTPUT_PARAMS = {
     "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
     "rawdir": "raw_data_out/",
+    "terminaldir": "terminal_output/",
     "ID1": "dynamo/",
-    "ID2": "divergence_test_buffer",
+    # "ID2": "divergence_test_percentile_evo_def",
+    "ID2": "divergence_deep_test",
     # "ID2": "profiles_test",
     "random_seed": 23 # Set the random seed for reproducibility
+}
+
+DEBUG_PARAMS = {
+    # ==== Iteration Selection for Debugging ====
+    # Iteration indices to enable debugging on specific snapshots
+    # Default: first and last snapshots
+    # "it_indx": [0, -1],
+    "it_indx": [-1],
+    # ==== Unigrid Interpolation Mode ====
+    "unigrid_interp_mode": 'DIRECT',  # 'DIRECT', 'NGP', or 'TRILINEAR'
+                                       # 'DIRECT' (recommended): avoids spurious artifacts from zero-division in base grid
+                                       # 'NGP': Nearest Grid Point with position calculations  
+                                       # 'TRILINEAR': full trilinear interpolation (may cause artifacts at boundaries)
+    # ==== Output Cleaning ====
+    # If True, replace NaN/inf/outliers with zeros in debug visualizations ("sweep under the rug")
+    # If False (default), preserve raw data to diagnose errors (recommended for debugging)
+    "clean_output": False,
+    # ==== Buffer Level Check ====
+    "buffer_level_check": {
+        "enabled": False, # Whether to include buffer level checks during the scan or buffer test
+        "check_cell_patch": True,# Whether to check the cell_patch values during the buffer scan (only if buffer_level_check is True)
+    },
+    # ==== Patch Position Analysis ====
+    "patch_analysis": {
+        # "enabled": False,  # Enable patch position diagnostics
+        "enabled": False,  # Enable patch position diagnostics
+        "verbose": True,  # Print detailed results
+        "suspicious_threshold": 18,  # Threshold for flagging suspicious patch positions (in Mpc/h)
+    },
+    # ==== Percentile Calculation Parameters ====
+    "percentile_params": {
+        "exclude_boundaries": False,  # Exclude patch boundary cells from percentile calculation
+        "boundary_width": 2,          # Number of boundary cells to exclude (if exclude_boundaries=True)
+        "exclude_zeros": False,        # Exclude zero values from percentile calculation
+    },
+    # ==== Buffer Pipeline Debug ====
+    "buffer": {
+        "enabled": False,  # Enable buffer pass-through validation test
+        "verbose": True,  # Print detailed results
+    },
+    # ==== Divergence Method Debug ====
+    "divergence": {
+        "enabled": False,  # Enable divergence consistency validation test
+        # "enabled": True,
+        "verbose": True,  # Print detailed results
+    },
+    # ==== Ghost Cell Inspection (Buffer Diagnostics) ====
+    # Uses interpol method from IND_PARAMS
+    "ghost_cell_inspection": {
+        "enabled": True,  # Enable ghost cell value inspection for buffer validation
+        "verbose": True,   # Print detailed results
+    },
+    # ==== Buffer vs Extrapolation Comparison ====
+    # Uses interpol, stencil, and use_siblings from IND_PARAMS
+    "buffer_vs_extrapolation": {
+        "enabled": True,  # Enable comparison of buffer vs. extrapolation divergence
+        "verbose": True,   # Print detailed results
+    },
+    # ==== Divergence Spatial Distribution ====
+    "divergence_spatial": {
+        "enabled": True,  # Enable spatial distribution analysis of divergence
+        "verbose": True,   # Print detailed results
+    },
+    # ==== Scan Animation Debug ====
+    "scan_animation": {
+        # "enabled": True,
+        "enabled": False,
+        "verbose": True,
+        "save": True
+    },
+    # ==== Volume Analysis ====
+    "volume_analysis": {
+        "enabled": False,  # Enable volume analysis diagnostics
+        "verbose": True  # Print detailed results
+    },
+    # ==== Field Analysis Debug (for field-specific outputs) ====
+    "field_analysis": {
+        "enabled": False,  # Enable field analysis debug outputs
+        "bins": 100,  # Number of bins for histograms
+        "log_scale": True,  # Use logarithmic scale
+        "%points": 1001,  # Number of points for analysis
+        "subsample_fraction": 0.2,  # Fraction of data to subsample
+        "central_fraction": 1.0,  # Fraction of central region
+        "uniform_grid": False,  # Convert to uniform grid (True) or keep as AMR (False)
+        "clean_field": False,  # Whether to clean the field before plotting (removes masked regions)
+        "title": "Divergence Induction",
+        "quantities": ["Magnetic Field Energy", "Magnetic Field Divergence", 
+                    "X-Divergence Induction", "Y-Divergence Induction", 
+                    "Z-Divergence Induction", "Divergence Induction Energy"],
+        "dpi": 300,
+        "run": OUTPUT_PARAMS["run"]
+    }
 }
 
 EVO_PLOT_PARAMS = {
@@ -167,31 +264,33 @@ PROFILE_PLOT_PARAMS = {
     'run': OUTPUT_PARAMS["run"]
 }
 
-DEBUG_PARAMS = {
-    'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
-    # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
-    'bins': 100,
-    'log_scale': True,
-    '%points': 1001,
-    'subsample_fraction': 0.2,
-    'central_fraction': 1.0,
-    'title': 'Divergence Induction',
-    'quantities': ['Magnetic Field Energy', 'Magnetic Field Divergence', 'X-Divergence Induction', 'Y-Divergence Induction', 'Z-Divergence Induction', 'Divergence Induction Energy'],
-    'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
-}
-
 PERCENTILE_PLOT_PARAMS = {
     'x_axis': 'years', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
     'xlim': None, # None for auto
     'ylim': None, # None for auto
-    'figure_size': [12, 6], # [width, height]
+    'figure_size': [6, 6], # [width, height]
     'line_widths': [2.0, 1.5], # [percentile_lines, max_line]
     'alpha_fill': 0.20, # transparency for shaded bands
     'title': 'Divergence Relative Error',
     # 'title': ' Percentile Threshold Evolution',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
+}
+
+SCAN_PLOT_PARAMS = {
+    'study_box': 1.0,            # fraction of box side to scan (0,1]
+    'depth': 2,                  # depth (slices) for the scan slab - small value to see short patches better
+    'projection_mode': 'min',   # 'max', 'min' or 'sum' for the scan projection
+    'arrow_scale': 1.0,          # scale for arrow annotation
+    'units': 'Mpc',              # 'Mpc' or 'kpc'
+    'cmap': 'magma',             # Matplotlib colormap for the scan
+                                 # For discrete levels, use: 'tab10', 'Set1', 'Set2', 'Set3', 'Paired'
+                                 # For continuous: 'viridis', 'plasma', 'inferno', 'magma'
+                                 # Current options good for discrete: 'Accent', 'tab10', 'Set1'
+    'interval': 100,             # ms between frames
+    'title': 'Buffer Assignment Scan',
     'dpi': 300,
     'run': OUTPUT_PARAMS["run"]
 }
@@ -205,16 +304,18 @@ PERCENTILE_PLOT_PARAMS = {
 outdir = OUTPUT_PARAMS["outdir"]
 plotdir = OUTPUT_PARAMS["plotdir"]
 rawdir = OUTPUT_PARAMS["rawdir"]
+terminaldir = OUTPUT_PARAMS["terminaldir"]
 ID1 = OUTPUT_PARAMS["ID1"]
 ID2 = OUTPUT_PARAMS["ID2"]
 
 # We create the folder for the plots and data
 image_folder = outdir + plotdir + ID1 + f'MAGNAS_SSD_{ID2}'
 data_folder = outdir + rawdir + ID1 + f'MAGNAS_SSD_{ID2}'
+terminal_folder = outdir + terminaldir + ID1 + f'MAGNAS_SSD_{ID2}'
 parameters_folders = []
 
 # List of folders to check
-folders = [image_folder, data_folder]
+folders = [image_folder, data_folder, terminal_folder]
 for i in range(len(OUTPUT_PARAMS['sims'])):
     folders.append(data_folder + '/' + OUTPUT_PARAMS['sims'][i] + '/')
     parameters_folders.append(data_folder + '/' + OUTPUT_PARAMS['sims'][i] + '/')
@@ -230,6 +331,7 @@ for folder in folders:
 
 OUTPUT_PARAMS["image_folder"] = image_folder
 OUTPUT_PARAMS["data_folder"] = data_folder
+OUTPUT_PARAMS["terminal_folder"] = terminal_folder
 OUTPUT_PARAMS["parameters_folders"] = parameters_folders
 
 # Determine the format of the output files
@@ -245,6 +347,35 @@ elif IND_PARAMS["stencil"] == 3:
 elif IND_PARAMS["stencil"] == 5:
     IND_PARAMS["nghost"] = 2
 
+# Validate interpolation method and adjust parameters for parent mode
+allowed_interpol = ['TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST']
+if IND_PARAMS["interpol"] not in allowed_interpol:
+    raise ValueError("Invalid interpolation method. Must be 'TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST'.")
+if IND_PARAMS.get("parent_interpol", IND_PARAMS["interpol"]) not in allowed_interpol:
+    raise ValueError("Invalid parent_interpol method. Must be 'TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST'.")
+IND_PARAMS["parent_interpol"] = IND_PARAMS.get("parent_interpol", IND_PARAMS["interpol"])
+
+# If parent mode is selected, enforce compatible parameters
+if IND_PARAMS["parent"] is True:
+    blend_enabled = IND_PARAMS.get("blend", False)
+    method_name = 'PARENT' + ' + ' + IND_PARAMS["parent_interpol"]
+    interp_desc = ''
+    if IND_PARAMS["parent_interpol"] == 'TSC':
+        interp_desc = 'TSC (smooth Triangular-Shaped Cloud)'
+    elif IND_PARAMS["parent_interpol"] == 'TRILINEAR':
+        interp_desc = 'Trilinear (linear interpolation)'
+    elif IND_PARAMS["parent_interpol"] == 'NEAREST':
+        interp_desc = 'Nearest Neighbor (discontinuous)'
+    elif IND_PARAMS["parent_interpol"] == 'LINEAR':
+        interp_desc = 'Linear (linear interpolation)'
+    elif IND_PARAMS["parent_interpol"] == 'SPH':
+        interp_desc = 'SPH (Smoothed Particle Hydrodynamics)'
+    print(f"\n⚠️  Parent mode enabled ({method_name}):")
+    if blend_enabled:
+        print("    - blend: True (buffer settings kept; parent fill applied separately)")
+    else:
+        print("    - parent fill will use nghost=0 and use_siblings=False at call site")
+    print(f"    - parent interpolation: {interp_desc}")
 
 ## Some seed parameters are calculated from the previous ones
 
@@ -266,6 +397,10 @@ for i in range(len(OUTPUT_PARAMS['sims'])):
 IND_PARAMS["dx"] = dx
 IND_PARAMS["volume"] = volume
 OUTPUT_PARAMS["dir_params"] = parameters_folders
+
+# Copy percentile params from DEBUG_PARAMS into PERCENTILE_PLOT_PARAMS
+if "percentile_params" in DEBUG_PARAMS:
+    PERCENTILE_PLOT_PARAMS.update(DEBUG_PARAMS["percentile_params"])
 
 if IND_PARAMS["test_params"]["test"]:
     TEST = test_limits(a0, OUTPUT_PARAMS['dir_grids'], OUTPUT_PARAMS['dir_params'][0], 
@@ -455,7 +590,6 @@ else:
     # Serial mode by default
     ask = input(f"\nParallelization not recommended for this configuration. Proceed in serial mode? (y/n) [yes]: ").strip().lower()
     if ask == 'n':
-        # User wants to override
         try:
             custom_ncores = int(input(f"Enter number of cores to use (1-{cpu_count}): "))
             if 1 <= custom_ncores <= cpu_count:
