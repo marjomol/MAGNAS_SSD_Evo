@@ -12,7 +12,103 @@ Authors: Marco Molina
 """
 
 import sys
+import os
+import tempfile
+import atexit
 from pathlib import Path
+
+_ORIGINAL_STDOUT = sys.__stdout__
+_EARLY_LOG_FILE = None
+_EARLY_LOG_PATH = None
+_FINAL_LOG_FILE = None
+
+
+class _DualWriter:
+    def __init__(self, file_obj, console_obj):
+        self.file = file_obj
+        self.console = console_obj
+
+    def write(self, message):
+        if not getattr(self.file, "closed", False):
+            self.file.write(message)
+            self.file.flush()
+        self.console.write(message)
+        self.console.flush()
+
+    def flush(self):
+        if not getattr(self.file, "closed", False):
+            self.file.flush()
+        self.console.flush()
+
+    def isatty(self):
+        return False
+
+
+def _start_early_capture():
+    global _EARLY_LOG_FILE, _EARLY_LOG_PATH
+    if _EARLY_LOG_FILE is not None:
+        return
+    _EARLY_LOG_FILE = tempfile.NamedTemporaryFile(
+        prefix="magnas_terminal_",
+        suffix=".log",
+        delete=False,
+        mode="w",
+        encoding="utf-8"
+    )
+    _EARLY_LOG_PATH = _EARLY_LOG_FILE.name
+    sys.stdout = _DualWriter(_EARLY_LOG_FILE, _ORIGINAL_STDOUT)
+
+
+def _disable_early_capture():
+    global _EARLY_LOG_FILE, _EARLY_LOG_PATH
+    if _EARLY_LOG_FILE is None:
+        return
+    sys.stdout = _ORIGINAL_STDOUT
+    try:
+        _EARLY_LOG_FILE.flush()
+        _EARLY_LOG_FILE.close()
+    finally:
+        _EARLY_LOG_FILE = None
+    if _EARLY_LOG_PATH:
+        try:
+            os.remove(_EARLY_LOG_PATH)
+        except OSError:
+            pass
+        _EARLY_LOG_PATH = None
+
+
+def _close_final_log():
+    global _FINAL_LOG_FILE
+    if _FINAL_LOG_FILE is not None:
+        _FINAL_LOG_FILE.flush()
+        _FINAL_LOG_FILE.close()
+        _FINAL_LOG_FILE = None
+
+
+def _finalize_terminal_log(log_filepath):
+    global _FINAL_LOG_FILE
+    if _EARLY_LOG_FILE is None or _EARLY_LOG_PATH is None:
+        return
+
+    _EARLY_LOG_FILE.flush()
+    _EARLY_LOG_FILE.close()
+
+    with open(_EARLY_LOG_PATH, "r", encoding="utf-8") as src, open(
+        log_filepath, "w", encoding="utf-8"
+    ) as dst:
+        dst.write(src.read())
+
+    _FINAL_LOG_FILE = open(log_filepath, "a", encoding="utf-8", buffering=1)
+    sys.stdout = _DualWriter(_FINAL_LOG_FILE, _ORIGINAL_STDOUT)
+    atexit.register(_close_final_log)
+
+    try:
+        os.remove(_EARLY_LOG_PATH)
+    except OSError:
+        pass
+
+
+_start_early_capture()
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -34,10 +130,21 @@ try:
     from config import OUTPUT_PARAMS as out_params
     from config import DEBUG_PARAMS as debug_params
     from config import SCAN_PLOT_PARAMS as scan_plot_params
+    from config import get_sim_characteristics
 except ImportError as e:
     print(f"Error importing modules: {e}")
     print("Make sure this script is run from the MAGNAS_SSD_Evo/scripts directory")
     sys.exit(1)
+
+if out_params.get("save_terminal", False):
+    log_filename = utils.build_terminal_log_filename("all", "all", ind_params, out_params)
+    terminal_folder = out_params.get("terminal_folder", "terminal_output/")
+    if not terminal_folder.endswith('/'):
+        terminal_folder += '/'
+    log_filepath = terminal_folder + log_filename
+    _finalize_terminal_log(log_filepath)
+else:
+    _disable_early_capture()
 
 
 # Use log_message from utils
@@ -1352,21 +1459,42 @@ def diagnose_buffer_vs_extrapolation(clus_Bx, clus_By, clus_Bz, grid_npatch, clu
     
     # Compute differences
     if verbose:
-        log_message('Comparison summary (with buffer/parent vs no-buffer):', tag="buffer_comp", level=2)
+        log_message('Comparison summary (buffer/parent vs no-buffer baseline):', tag="buffer_comp", level=2)
         delta_max = stats_with_buffer['max'] - stats_no_buffer['max']
         delta_mean = stats_with_buffer['mean'] - stats_no_buffer['mean']
         ratio_max = stats_with_buffer['max'] / stats_no_buffer['max'] if stats_no_buffer['max'] > 0 else np.inf
         ratio_mean = stats_with_buffer['mean'] / stats_no_buffer['mean'] if stats_no_buffer['mean'] > 0 else np.inf
         
-        log_message(f'  Δmax = {delta_max:+.6e} (ratio={ratio_max:.3f}x)', tag="buffer_comp", level=2)
-        log_message(f'  Δmean = {delta_mean:+.6e} (ratio={ratio_mean:.3f}x)', tag="buffer_comp", level=2)
+        log_message(
+            f'  Max change: Δmax = {delta_max:+.6e} (buffer/no-buffer = {ratio_max:.3f}x)',
+            tag="buffer_comp",
+            level=2
+        )
+        log_message(
+            f'  Mean change: Δmean = {delta_mean:+.6e} (buffer/no-buffer = {ratio_mean:.3f}x)',
+            tag="buffer_comp",
+            level=2
+        )
+        log_message(
+            '  Interpretation: ratio < 1.0 means buffer reduces divergence; > 1.0 increases it.',
+            tag="buffer_comp",
+            level=3
+        )
         
         if ratio_max > 1.5:
-            log_message(f'  ⚠ Buffer increases max divergence by {(ratio_max-1)*100:.1f}%', tag="buffer_comp", level=2)
+            log_message(
+                f'  ⚠ Max divergence increases by {(ratio_max-1)*100:.1f}%',
+                tag="buffer_comp",
+                level=2
+            )
         elif ratio_max < 0.8:
-            log_message(f'  ✓ Buffer reduces max divergence by {(1-ratio_max)*100:.1f}%', tag="buffer_comp", level=2)
+            log_message(
+                f'  ✓ Max divergence decreases by {(1-ratio_max)*100:.1f}%',
+                tag="buffer_comp",
+                level=2
+            )
         else:
-            log_message(f'  ≈ Buffer has minimal impact on divergence', tag="buffer_comp", level=2)
+            log_message('  ≈ Max divergence change is small', tag="buffer_comp", level=2)
     
     results = {
         'snapshot': grid_irr,
@@ -1658,7 +1786,7 @@ def diagnose_divergence_spatial_distribution(div_list, npatch, kp, grid_irr,
         else:
             buffer_mode = "with buffer" if use_buffer else "without buffer (extrapolation)"
         log_message(f'Divergence Spatial Distribution Analysis (snapshot {grid_irr}, {buffer_mode})', tag="spatial_div", level=1)
-        log_message('Boundary layer uses 2-cell thickness on each face', tag="spatial_div", level=2)
+        log_message('Boundary layer: 2-cell thickness on each face', tag="spatial_div", level=2)
     
     # Aggregate statistics
     boundary_ratios = []
@@ -1692,15 +1820,19 @@ def diagnose_divergence_spatial_distribution(div_list, npatch, kp, grid_irr,
         # Max divergence statistics
         max_div_global = np.max(max_divs)
         mean_max_div = np.mean(max_divs)
-        log_message(f'Global max |∇·B|: {max_div_global:.6e} (mean across patches: {mean_max_div:.6e})', 
+        log_message(
+            f'Global max |∇·B|: {max_div_global:.6e} (mean of per-patch maxima: {mean_max_div:.6e})',
                    tag="spatial_div", level=2)
         
         # High divergence clustering
         mean_high_div_ratio = np.mean(high_div_ratios)
         max_high_div_ratio = np.max(high_div_ratios)
         log_message(
-            f'High-divergence clustering (>95% of patch max): mean={mean_high_div_ratio*100:.2f}%, max={max_high_div_ratio*100:.2f}%',
-                   tag="spatial_div", level=2)
+            f'High-divergence clustering (>95% of each patch max): mean={mean_high_div_ratio*100:.2f}%, '
+            f'max={max_high_div_ratio*100:.2f}%',
+            tag="spatial_div",
+            level=2
+        )
         
         # Boundary vs interior analysis
         valid_ratios = [r for r in boundary_ratios if not np.isinf(r) and not np.isnan(r)]
@@ -1709,18 +1841,28 @@ def diagnose_divergence_spatial_distribution(div_list, npatch, kp, grid_irr,
             median_boundary_ratio = np.median(valid_ratios)
             max_boundary_ratio = np.max(valid_ratios)
             
-            log_message(f'Boundary/Interior divergence ratio: mean={mean_boundary_ratio:.2f}x, median={median_boundary_ratio:.2f}x, max={max_boundary_ratio:.2f}x', 
+            log_message(
+                f'Boundary/Interior ratio: mean={mean_boundary_ratio:.2f}x, '
+                f'median={median_boundary_ratio:.2f}x, max={max_boundary_ratio:.2f}x',
                        tag="spatial_div", level=2)
+            log_message(
+                '  Interpretation: ~1.0 means uniform; >1.0 means boundary-heavy divergence.',
+                tag="spatial_div",
+                level=3
+            )
             
             # Interpretation
             if mean_boundary_ratio > 3.0:
-                log_message(f'⚠ ARTIFACT DETECTED: High boundary concentration (ratio > 3.0) suggests edge artifacts', 
+                log_message(
+                    '⚠ High boundary concentration (mean ratio > 3.0) suggests edge artifacts',
                            tag="spatial_div", level=0)
             elif mean_boundary_ratio > 1.5:
-                log_message(f'Moderate boundary concentration (ratio > 1.5) - may be acceptable trade-off', 
+                log_message(
+                    'Moderate boundary concentration (mean ratio > 1.5) - may be acceptable trade-off',
                            tag="spatial_div", level=2)
             else:
-                log_message(f'Divergence evenly distributed (ratio ≈ 1.0) - no edge artifacts detected', 
+                log_message(
+                    'Divergence evenly distributed (ratio around 1.0) - no edge artifacts detected',
                            tag="spatial_div", level=2)
     
     results = {
@@ -2909,16 +3051,7 @@ def main():
     size = ind_params["size"][0] if isinstance(ind_params["size"], list) else ind_params["size"]
     dir_params = out_params["dir_params"][sim_index]
 
-    # Prepare terminal logging if enabled
-    log_filepath = None
-    if out_params.get("save_terminal", False):
-        log_filename = build_terminal_log_filename(sim_name, snapshot_it, ind_params, out_params)
-        terminal_folder = out_params.get("terminal_folder", "terminal_output/")
-        # Ensure terminal_folder ends with /
-        if not terminal_folder.endswith('/'):
-            terminal_folder += '/'
-        log_filepath = terminal_folder + log_filename
-        print(f"\n[INFO] Terminal output will be saved to: {log_filepath}\n")
+    # Terminal logging is handled globally at startup
     
     # Build region if configured, otherwise use full box
     region_coords = [None]
@@ -2954,18 +3087,10 @@ def main():
         region_coords = [None]
         rad_val = None
 
-    # If logging to file, redirect output
-    if log_filepath:
-        with redirect_output_to_file(log_filepath, verbose_console=True):
-            _run_debug_main_logic(
-                sim_name, snapshot_it, level, up_to_level, nmax, size, 
-                dir_params, region_coords, rad_val
-            )
-    else:
-        _run_debug_main_logic(
-            sim_name, snapshot_it, level, up_to_level, nmax, size, 
-            dir_params, region_coords, rad_val
-        )
+    _run_debug_main_logic(
+        sim_name, snapshot_it, level, up_to_level, nmax, size,
+        dir_params, region_coords, rad_val
+    )
 
 
 def _run_debug_main_logic(sim_name, snapshot_it, level, up_to_level, nmax, size, 
@@ -2982,6 +3107,10 @@ def _run_debug_main_logic(sim_name, snapshot_it, level, up_to_level, nmax, size,
     )
     
     print(f"Loading data: sim={sim_name}, it={snapshot_it}")
+    
+    # Get simulation characteristics for this simulation
+    sim_characteristics = get_sim_characteristics(sim_name)
+    
     data = load_data(
         sim_name,
         snapshot_it,
@@ -2994,6 +3123,7 @@ def _run_debug_main_logic(sim_name, snapshot_it, level, up_to_level, nmax, size,
         test=ind_params["test_params"],
         bitformat=out_params["bitformat"],
         region=region_coords,
+        sim_characteristics=sim_characteristics,
         verbose=out_params.get("verbose", False),
         debug=False
     )

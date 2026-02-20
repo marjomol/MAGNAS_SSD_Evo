@@ -9,11 +9,22 @@ from config import PROFILE_PLOT_PARAMS as prof_plot_params
 from config import DEBUG_PARAMS as debug_params
 from config import PERCENTILE_PLOT_PARAMS as percentile_plot_params
 from config import SCAN_PLOT_PARAMS as scan_plot_params
+from config import get_sim_characteristics
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
 from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
 from scripts.parallel_utils import process_iteration_with_logging
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
+
+def _get_last_rad(rad_list):
+    if not rad_list:
+        return 0
+    if isinstance(rad_list[0], (list, tuple, np.ndarray)):
+        for sim_rad in reversed(rad_list):
+            if sim_rad:
+                return sim_rad[-1]
+        return 0
+    return rad_list[-1]
 
 _log_cm = None
 if out_params.get("save_terminal", False):
@@ -38,29 +49,37 @@ start_time = time.time()
 # ============================
 
 if __name__ == "__main__":
-    
     if out_params["parallel"]:
         print(f'**************************************************************')
         print(f"Running in parallel mode with {out_params['ncores']} cores")
         print(f'**************************************************************')
-        # Find the most massive halo in each snapshot
-        Coords, Rad = find_most_massive_halo(out_params["sims"], out_params["it"], 
-                                            ind_params["a0"], 
-                                            out_params["dir_halos"], 
-                                            out_params["dir_grids"], 
-                                            out_params["data_folder"], 
-                                            vir_kind=ind_params["vir_kind"], 
-                                            rad_kind=ind_params["rad_kind"], 
-                                            verbose=out_params["verbose"])
-        # Create the regions of interest in the grid
-        Region_Coord, Region_Size = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
-                    size=ind_params["size"], F=ind_params["F"], reg=ind_params["region"], 
-                            verbose=out_params["verbose"])
+        # Find the most massive halo and region per simulation
+        Coords = []
+        Rad = []
+        Region_Coord = []
+        Region_Size = []
+        for i, sim_name in enumerate(out_params["sims"]):
+            it_list = out_params["it"][i]
+            coords_i, rad_i = find_most_massive_halo(
+                sim_name, it_list,
+                ind_params["a0"],
+                out_params["dir_halos"],
+                out_params["dir_grids"],
+                out_params["data_folder"],
+                vir_kind=ind_params["vir_kind"],
+                rad_kind=ind_params["rad_kind"],
+                verbose=out_params["verbose"]
+            )
+            region_coord_i, region_size_i = create_region(
+                sim_name, it_list, coords_i, rad_i,
+                size=ind_params["size"][i], F=ind_params["F"], reg=ind_params["region"],
+                verbose=out_params["verbose"]
+            )
+            Coords.append(coords_i)
+            Rad.append(rad_i)
+            Region_Coord.append(region_coord_i)
+            Region_Size.append(region_size_i)
         
-        # Prepare per-snapshot flags from config indices
-        profile_idx_set = set([out_params["it"][k] for k in prof_plot_params["it_indx"]]) if len(out_params["it"]) else set()
-        debug_idx_set = set([out_params["it"][k] for k in debug_params["it_indx"]]) if len(out_params["it"]) else set()
-
         # Process all configured levels, one parallel batch per level
         for L, lvl in enumerate(ind_params["level"]):
             # Initialize result dictionaries for this level based on what's enabled
@@ -76,16 +95,19 @@ if __name__ == "__main__":
             all_diver_B_percentiles = {} if ind_params["percentiles"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
-            scan_meta_sim = []  # track sim name per scan volume
-            scan_meta_it = []   # track iteration per scan volume
-            scan_meta_idx = []  # track index into all_data lists
+            scan_meta_sim = []
+            scan_meta_it = []
+            scan_meta_idx = []
             first_iteration = True
 
             from concurrent.futures import ProcessPoolExecutor
             futures = []
             with ProcessPoolExecutor(max_workers=out_params["ncores"]) as executor:
                 for i, sims in enumerate(out_params["sims"]):
-                    for j, it in enumerate(out_params["it"]):
+                    it_list = out_params["it"][i]
+                    profile_idx_set = set([it_list[k] for k in prof_plot_params["it_indx"] if -len(it_list) <= k < len(it_list)])
+                    debug_idx_set = set([it_list[k] for k in debug_params["it_indx"] if -len(it_list) <= k < len(it_list)])
+                    for j, it in enumerate(it_list):
                         profiles_flag = bool(ind_params["profiles"]) and (it in profile_idx_set)
 
                         # Always apply percentile_params to all snapshots, but keep other debug
@@ -97,6 +119,9 @@ if __name__ == "__main__":
                         else:
                             debug_params_flag = {"percentile_params": percentile_params}
 
+                        # Get simulation characteristics for this simulation
+                        sim_characteristics = get_sim_characteristics(sims)
+
                         fut = executor.submit(
                             process_iteration_with_logging,
                             ind_params["components"],
@@ -105,9 +130,9 @@ if __name__ == "__main__":
                             out_params["dir_params"][i],
                             sims,
                             it,
-                            Coords[i + j],
-                            Region_Coord[i + j],
-                            Rad[i + j],
+                            Coords[i][j],
+                            Region_Coord[i][j],
+                            Rad[i][j],
                             ind_params["rmin"][i],
                             lvl,
                             lvl,
@@ -129,6 +154,7 @@ if __name__ == "__main__":
                             parent_interpol=ind_params.get("parent_interpol", ind_params["interpol"]),
                             bitformat=out_params["bitformat"],
                             mag=ind_params["mag"],
+                            sim_characteristics=sim_characteristics,
                             energy_evolution=ind_params["energy_evolution"],
                             profiles=profiles_flag,
                             projection=ind_params["projection"],
@@ -245,7 +271,7 @@ if __name__ == "__main__":
                     induction_energy_integral_evo,
                     evo_plot_params, plot_ind_params,
                     all_data['grid_time'], all_data['grid_zeta'],
-                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                    _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                     folder=out_params['image_folder']
                 )
                 print(f"Ploting " + evo_plot_params["title"] + f" completed (level {lvl}).")
@@ -253,14 +279,20 @@ if __name__ == "__main__":
             if ind_params["profiles"] and all_induction_energy_profiles is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
-                plot_radial_profiles(
-                    all_induction_energy_profiles,
-                    prof_plot_params, plot_ind_params,
-                    all_data['grid_time'], all_data['grid_zeta'],
-                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
-                    folder=out_params['image_folder']                
-                )
-                print(f"Ploting " + prof_plot_params["title"] + f" completed (level {lvl}).")
+                # Determine how many snapshots have profiles calculated
+                num_snapshots_with_profiles = len(all_induction_energy_profiles.get('clus_b2_profile', []))
+                if num_snapshots_with_profiles > 0:
+                    # Adjust it_indx to plot all snapshots with profiles
+                    prof_plot_params_adjusted = prof_plot_params.copy()
+                    prof_plot_params_adjusted['it_indx'] = list(range(num_snapshots_with_profiles))
+                    plot_radial_profiles(
+                        all_induction_energy_profiles,
+                        prof_plot_params_adjusted, plot_ind_params,
+                        all_data['grid_time'], all_data['grid_zeta'],
+                        _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                        folder=out_params['image_folder']                
+                    )
+                    print(f"Ploting " + prof_plot_params["title"] + f" completed (level {lvl}).")
 
             if ind_params["percentiles"] and all_diver_B_percentiles is not None:
                 plot_ind_params = ind_params.copy()
@@ -289,7 +321,7 @@ if __name__ == "__main__":
                         continue
                     distribution_check(all_debug_fields[field_key], quantity, debug_params, local_ind_params,
                                     all_data['grid_time'], all_data['grid_zeta'],
-                                    Rad[-1], ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
+                                    _get_last_rad(Rad), ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
                                     clean=debug_params.get("field_analysis", {}).get("clean_field", False), verbose=out_params["verbose"], save=out_params["save"],
                                     folder=out_params["image_folder"])
                     print(f"Ploting distribution check for " + quantity + f" completed (level {lvl}).")
@@ -304,7 +336,8 @@ if __name__ == "__main__":
                 for vol_idx, volume in enumerate(scan_volumes):
                     ind_meta = ind_params.copy()
                     sim = scan_meta_sim[vol_idx] if vol_idx < len(scan_meta_sim) else out_params["sims"][0]
-                    it_val = scan_meta_it[vol_idx] if vol_idx < len(scan_meta_it) else out_params["it"][0]
+                    fallback_it = out_params["it"][0][0] if out_params["it"] and out_params["it"][0] else 0
+                    it_val = scan_meta_it[vol_idx] if vol_idx < len(scan_meta_it) else fallback_it
                     idx = scan_meta_idx[vol_idx] if vol_idx < len(scan_meta_idx) else vol_idx
                     zeta_val = all_data['grid_zeta'][idx]
                     time_val = all_data['grid_time'][idx]
@@ -359,19 +392,32 @@ if __name__ == "__main__":
             print(f'*************************')
             print("Running in serial mode")
             print(f'*************************')
-            # Find the most massive halo in each snapshot
-            Coords, Rad = find_most_massive_halo(out_params["sims"], out_params["it"], 
-                                                ind_params["a0"], 
-                                                out_params["dir_halos"], 
-                                                out_params["dir_grids"], 
-                                                out_params["data_folder"], 
-                                                vir_kind=ind_params["vir_kind"], 
-                                                rad_kind=ind_params["rad_kind"], 
-                                                verbose=out_params["verbose"])
-            # Create the regions of interest in the grid
-            Region_Coord, Region_Size = create_region(out_params["sims"], out_params["it"], Coords, Rad, 
-                                size=ind_params["size"], F=ind_params["F"], reg=ind_params["region"], 
-                                verbose=out_params["verbose"])
+            # Find the most massive halo and region per simulation
+            Coords = []
+            Rad = []
+            Region_Coord = []
+            Region_Size = []
+            for i, sim_name in enumerate(out_params["sims"]):
+                it_list = out_params["it"][i]
+                coords_i, rad_i = find_most_massive_halo(
+                    sim_name, it_list,
+                    ind_params["a0"],
+                    out_params["dir_halos"],
+                    out_params["dir_grids"],
+                    out_params["data_folder"],
+                    vir_kind=ind_params["vir_kind"],
+                    rad_kind=ind_params["rad_kind"],
+                    verbose=out_params["verbose"]
+                )
+                region_coord_i, region_size_i = create_region(
+                    sim_name, it_list, coords_i, rad_i,
+                    size=ind_params["size"][i], F=ind_params["F"], reg=ind_params["region"],
+                    verbose=out_params["verbose"]
+                )
+                Coords.append(coords_i)
+                Rad.append(rad_i)
+                Region_Coord.append(region_coord_i)
+                Region_Size.append(region_size_i)
             
             # Initialize result dictionaries before the loop (conditional based on config)
             all_data = {}
@@ -386,13 +432,19 @@ if __name__ == "__main__":
             all_diver_B_percentiles = {} if ind_params["percentiles"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
+            scan_meta_sim = []
+            scan_meta_it = []
+            scan_meta_idx = []
 
             # Flag to track first iteration for dictionary initialization
             first_iteration = True
             
             # Process each iteration in serial
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
-                for it, j in zip(out_params["it"], range(len(out_params["it"]))):
+                it_list = out_params["it"][i]
+                profile_idx_set = set([it_list[k] for k in prof_plot_params["it_indx"] if -len(it_list) <= k < len(it_list)])
+                debug_idx_set = set([it_list[k] for k in debug_params["it_indx"] if -len(it_list) <= k < len(it_list)])
+                for j, it in enumerate(it_list):
                     
                     # Print header before processing
                     print(f"\n{'*'*80}")
@@ -403,11 +455,14 @@ if __name__ == "__main__":
                     # Always apply percentile_params to all snapshots, but keep other debug
                     # settings only for selected iterations
                     percentile_params = debug_params.get("percentile_params", {})
-                    if it in [out_params["it"][k] for k in debug_params["it_indx"]]:
+                    if it in debug_idx_set:
                         debug_params_flag = {**debug_params}
                         debug_params_flag["percentile_params"] = percentile_params
                     else:
                         debug_params_flag = {"percentile_params": percentile_params}
+
+                    # Get simulation characteristics for this simulation
+                    sim_characteristics = get_sim_characteristics(sims)
 
                     (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral,
                     induction_test_energy_integral, induction_energy_profiles, induction_uniform,
@@ -418,9 +473,9 @@ if __name__ == "__main__":
                         dir_params=out_params["dir_params"][i],
                         sims=sims,
                         it=it,
-                        coords=Coords[i+j],
-                        region_coords=Region_Coord[i+j],
-                        rad=Rad[i+j],
+                        coords=Coords[i][j],
+                        region_coords=Region_Coord[i][j],
+                        rad=Rad[i][j],
                         rmin=ind_params["rmin"][i],
                         level=ind_params["level"][L],
                         up_to_level=ind_params["level"][L],
@@ -442,8 +497,9 @@ if __name__ == "__main__":
                         parent_interpol=ind_params.get("parent_interpol", ind_params["interpol"]),
                         bitformat=out_params["bitformat"],
                         mag=ind_params["mag"],
+                        sim_characteristics=sim_characteristics,
                         energy_evolution=ind_params["energy_evolution"],
-                        profiles=ind_params["profiles"] if it in [out_params["it"][k] for k in prof_plot_params["it_indx"]] else False,
+                        profiles=ind_params["profiles"] if it in profile_idx_set else False,
                         projection=ind_params["projection"],
                         percentiles=ind_params["percentiles"],
                         percentile_levels=ind_params["percentile_levels"],
@@ -500,7 +556,10 @@ if __name__ == "__main__":
                                 all_debug_fields[key] = []
                         
                         first_iteration = False
-                    
+
+                    # Current index for this iteration in aggregated arrays
+                    iter_idx = len(all_data.get('grid_time', []))
+
                     for key in data.keys():
                         all_data[key].append(data[key])
                     
@@ -545,6 +604,10 @@ if __name__ == "__main__":
                             if key not in all_debug_fields:
                                 all_debug_fields[key] = []
                             all_debug_fields[key].append(debug_fields[key])
+                        if '_scan_volume' in debug_fields:
+                            scan_meta_sim.append(sims)
+                            scan_meta_it.append(it)
+                            scan_meta_idx.append(iter_idx)
 
             # field = np.abs(np.sqrt(induction_uniform['uniform_MIE_compres_x']**2 + 
             #                 induction_uniform['uniform_MIE_compres_y']**2 + 
@@ -574,7 +637,7 @@ if __name__ == "__main__":
                     induction_energy_integral_evo,
                     evo_plot_params, plot_ind_params,
                     all_data['grid_time'], all_data['grid_zeta'],
-                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
+                    _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                     folder=out_params['image_folder']
                 )
 
@@ -586,15 +649,21 @@ if __name__ == "__main__":
                 # Create local params with current level for plotting
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = ind_params["level"][L]
-                plot_radial_profiles(
-                    all_induction_energy_profiles,
-                    prof_plot_params, plot_ind_params,
-                    all_data['grid_time'], all_data['grid_zeta'],
-                    Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
-                    folder=out_params['image_folder']                
-                )
-                
-                print(f"Ploting " + prof_plot_params["title"] + " completed.")
+                # Determine how many snapshots have profiles calculated
+                num_snapshots_with_profiles = len(all_induction_energy_profiles.get('clus_b2_profile', []))
+                if num_snapshots_with_profiles > 0:
+                    # Adjust it_indx to plot all snapshots with profiles
+                    prof_plot_params_adjusted = prof_plot_params.copy()
+                    prof_plot_params_adjusted['it_indx'] = list(range(num_snapshots_with_profiles))
+                    plot_radial_profiles(
+                        all_induction_energy_profiles,
+                        prof_plot_params_adjusted, plot_ind_params,
+                        all_data['grid_time'], all_data['grid_zeta'],
+                        _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                        folder=out_params['image_folder']                
+                    )
+                    
+                    print(f"Ploting " + prof_plot_params["title"] + " completed.")
             
             if ind_params["percentiles"] == False:
                 print("Percentiles calculation is disabled in the configuration. Skipping percentile evolution plots.")
@@ -628,7 +697,7 @@ if __name__ == "__main__":
                         continue
                     distribution_check(all_debug_fields[field_key], quantity, debug_params, plot_ind_params,
                                     all_data['grid_time'], all_data['grid_zeta'],
-                                    Rad[-1], ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
+                                    _get_last_rad(Rad), ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
                                     clean=debug_params.get("field_analysis", {}).get("clean_field", False), verbose=out_params["verbose"], save=out_params["save"],
                                     folder=out_params["image_folder"])
                     print(f"Ploting distribution check for " + quantity + " completed.")
@@ -642,11 +711,13 @@ if __name__ == "__main__":
                 for vol_idx, volume in enumerate(scan_volumes):
                     ind_meta = ind_params.copy()
                     
-                    sim = out_params["sims"][vol_idx]
-                    it_val = out_params["it"][vol_idx]
+                    sim = scan_meta_sim[vol_idx] if vol_idx < len(scan_meta_sim) else out_params["sims"][0]
+                    fallback_it = out_params["it"][0][0] if out_params["it"] and out_params["it"][0] else 0
+                    it_val = scan_meta_it[vol_idx] if vol_idx < len(scan_meta_it) else fallback_it
+                    idx = scan_meta_idx[vol_idx] if vol_idx < len(scan_meta_idx) else vol_idx
                     # In serial mode, all_data stores lists not dicts by sim
-                    zeta_val = all_data['grid_zeta'][vol_idx]
-                    time_val = all_data['grid_time'][vol_idx]
+                    zeta_val = all_data['grid_zeta'][idx]
+                    time_val = all_data['grid_time'][idx]
                     region_size = scan_region_sizes[vol_idx]
                     
                     ind_meta['sim'] = sim

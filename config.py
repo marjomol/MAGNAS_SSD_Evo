@@ -23,19 +23,19 @@ from scripts.test import test_limits
 # Induction Parameters #
 
 IND_PARAMS = {
-    "nmax": [128],
-    "nmay": [128],
-    "nmaz": [128],
-    "size": [40], # Size of the box in Mpc
-    "npalev": [13000],
-    "nlevels": [7],
-    "namrx": [32],
-    "namry": [32],
-    "namrz": [32],
-    "nbins": [25], # Number of bins for the profiles histograms
-    "rmin": [0.01], # Minimum radius to calculate the profiles
+    "nmax": [128, 128],
+    "nmay": [128, 128],
+    "nmaz": [128, 128],
+    "size": [40, 40], # Size of the box in Mpc
+    "npalev": [40000, 40000],
+    "nlevels": [7, 9],
+    "namrx": [32, 32],
+    "namry": [32, 32],
+    "namrz": [32, 32],
+    "nbins": [25, 25], # Number of bins for the profiles histograms
+    "rmin": [0.01, 0.01], # Minimum radius to calculate the profiles
     "logbins": True, # Use logarithmic bins
-    "F": 20, # Factor to multiply the viral radius to define the box size
+    "F": 2, # Factor to multiply the viral radius to define the box size
     "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
@@ -44,10 +44,10 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    # "level": [1], # Max. level of the AMR grid to be read
-    # "up_to_level": [1], # AMR level up to which calculate
-    "level": [2], # Max. level of the AMR grid to be read
-    "up_to_level": [2], # AMR level up to which calculate
+    "level": [4], # Max. level of the AMR grid to be read
+    "up_to_level": [4], # AMR level up to which calculate
+    # "level": [9], # Max. level of the AMR grid to be read
+    # "up_to_level": [9], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
@@ -57,24 +57,24 @@ IND_PARAMS = {
     "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
     "buffer": True, # Use buffer zones to avoid boundary effects BEFORE differentiating near patch boundaries (recommended but slower)
     "interpol": 'TRILINEAR', # Interpolation method ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST').
-    "use_siblings": False, # Use sibling patches in buffer (if False, only parent interpolation is used)
+    "use_siblings": True, # Use sibling patches in buffer (if False, only parent interpolation is used)
     "parent": True, # Parent mode fills frontiers after differenciating using the interpolation in "parent_interpol" (no extra buffer cells)
-    "parent_interpol": 'TRILINEAR', # Interpolation method for parent fill ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST')
+    "parent_interpol": 'NEAREST', # Interpolation method for parent fill ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST')
     "blend": True, # Blend boundary values from buffer differentiation with parent-filled boundaries (only if parent is True)
     "divergence": True, # Process the divergence induction component
-    "compression": False, # Process the compression induction component
-    "stretching": False, # Process the stretching induction component
-    "advection": False, # Process the advection induction component
-    "drag": False, # Process the drag induction component
-    "total": False, # Process the total induction component
+    "compression": True, # Process the compression induction component
+    "stretching": True, # Process the stretching induction component
+    "advection": True, # Process the advection induction component
+    "drag": True, # Process the drag induction component
+    "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
     "energy_evolution": False, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
     "derivative": 'central', # Derivative to use for the evolution (implicit, central, RK or rate)
-    "profiles": False, # Calculate the profiles of the induction components
+    "profiles": True, # Calculate the profiles of the induction components
     "projection": False, # Calculate the projection of the induction components
     "A2U": False, # Transform the AMR grid to a uniform grid
-    "percentiles": True, # Calculate percentile thresholds of the magnetic field divergence
+    "percentiles": False, # Calculate percentile thresholds of the magnetic field divergence
     "percentile_levels": (95, 90, 75, 50, 25), # Percentile thresholds to compute
     "return_vectorial": False, # Return the vectorial components of the induction terms
     "return_induction": False, # Return the induction terms arrays
@@ -93,25 +93,27 @@ OUTPUT_PARAMS = {
     "save": True,
     "verbose": True,
     "save_terminal": True,  # Save terminal output to file
-    # "bitformat": np.float32,
-    "bitformat": np.float64,
+    "bitformat": np.float32,
+    # "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 4, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_2_new_debug',
+    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_3_refine_profile',
     # "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_29_evo_fix_def',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
-    "it": [1050], # For different redshift snap iterations analysis
-    # "it": [1800, 2119],
+    # "sims": ["cluster_L40_p32_agn_sim_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
+    # "sims": ["cluster_B_low_res_paper_2020", "cluster_L40_p32_agn_sim_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
+    # "it": [[1300], [500]], # For different redshift snap iterations analysis
+    "it": [1800],
     # "it": list(range(1000, 2101, 50)) + [2119],
     # "it": list(range(250, 2101, 50)) + [2119], # For different redshift snap iterations analysis
     # "it": list(range(50, 2101, 50)) + [2119], # For different redshift snap iterations analysis
     "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF",
-    "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX",
+    "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF/",
+    "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX/",
     # "outdir": "/scratch/marcomol/output_files_PRIMAL_",
     "outdir": "/home/marcomol/trabajo/data/out/",
     "plotdir": "plots/",
@@ -122,6 +124,130 @@ OUTPUT_PARAMS = {
     "ID2": "divergence_deep_test",
     # "ID2": "profiles_test",
     "random_seed": 23 # Set the random seed for reproducibility
+}
+
+
+SIM_CHARACTERISTICS = {
+# Simulation Characteristics #    
+    # Default characteristics applied to all simulations unless overridden
+    "default": {
+        # EXISTENCE flags: What fields exist in the data files
+        # Note: delta, vx/vy/vz always exist (not configurable)
+        "is_mascletB": True,      # Files contain magnetic fields (Bx, By, Bz)
+        "is_cooling": True,       # Files contain cooling data (temp, metalicity)
+        "has_cr0amr": True,       # Files contain cosmic ray refinement flag
+        "has_solapst": True,      # Files contain solapst mask flag
+        "has_pres": True,         # Files contain pressure field
+        "has_pot": True,          # Files contain gravitational potential
+        "has_opot": False,        # Files contain old gravitational potential (rare)
+        
+        # READ flags: What fields to actually read (optional, defaults to True)
+        # Set to False to skip reading a field that exists (saves memory/time)
+        "read_velocity": True,    # Read velocity fields (vx, vy, vz)
+        "read_B": True,           # Read magnetic fields (Bx, By, Bz)
+        "read_pressure": False,    # Read pressure field
+        "read_potential": False,   # Read gravitational potential
+        "read_old_potential": False,  # Read old potential (rarely needed)
+        "read_temperature": False, # Read temperature (if cooling exists)
+        "read_metalicity": False,  # Read metalicity (if cooling exists)
+        "read_cr0amr": True,      # Read refinement flag
+        "read_solapst": True,     # Read solapst mask
+    },
+    # Simulation-specific overrides (use simulation name as key)
+    "cluster_B_low_res_paper_2020": {
+        "is_cooling": False,      # This simulation has NO cooling (no temp/metalicity in file)
+        "is_mascletB": True,      # This simulation has magnetic fields (Bx, By, Bz in file)
+    },
+    "cluster_L40_p32_agn_sim_7_bis": {
+        "is_cooling": True,       # This simulation HAS cooling (temp/metalicity in file)
+        "is_mascletB": True,      # This simulation has magnetic fields (Bx, By, Bz in file)
+    },
+    # Add more simulations here as needed:
+    # "your_simulation_name": {
+    #     "is_cooling": False,
+    #     "output_temp": False,
+    #     etc...
+    # }
+}
+
+EVO_PLOT_PARAMS = {
+    'evolution_type': IND_PARAMS["evolution_type"],
+    'derivative': IND_PARAMS["derivative"],
+    'x_axis': 'zeta', # 'zeta' or 'years'
+    'x_scale': 'lin', # 'lin' or 'log'
+    'y_scale': 'log',
+    'xlim': [2.5, 0], # None for auto
+    # 'xlim': None, # None for auto
+    # 'ylim': [1e57, 1e60], # For the test
+    # 'ylim': [1e58, 1e63], # None for auto
+    'ylim': None, # None for auto
+    'cancel_limits': False, # bool to flip the x axis (useful for zeta)
+    'figure_size': [12, 8], # [width, height]
+    'line_widths': [5, 1.5], # [line1, line2] for main and component lines
+    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
+    'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
+    'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
+    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
+    'volume_evolution': True, # bool to plot volume evolution as additional figure
+    'title': 'Magnetic Field Evolution Analysis',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
+}
+
+PROFILE_PLOT_PARAMS = {
+    'it_indx': [0],
+    # 'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
+    # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
+    'x_scale': 'log', # 'lin' or 'log'
+    'y_scale': 'log', # 'lin' or 'log'
+    'xlim': None, # None for auto
+    'ylim': None, # None for auto
+    'rylim': None, # None for auto
+    'dylim': None, # None for auto
+    # 'xlim': [5e-3,1e0], # None for auto
+    # 'ylim': [3e53,1e65], # None for auto
+    # 'rylim': [3e39,3e47], # None for auto
+    # 'dylim': [1e-28,1e-25], # None for auto
+    'figure_size': [12, 8], # [width, height]
+    'line_widths': [3, 2], # [line1, line2] for main and component lines
+    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
+    'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
+    'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
+    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
+    'title': 'Induction Radial Profile',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
+}
+
+PERCENTILE_PLOT_PARAMS = {
+    'x_axis': 'years', # 'zeta' or 'years'
+    'x_scale': 'lin', # 'lin' or 'log'
+    'y_scale': 'log', # 'lin' or 'log'
+    'xlim': None, # None for auto
+    'ylim': None, # None for auto
+    'figure_size': [6, 6], # [width, height]
+    'line_widths': [2.0, 1.5], # [percentile_lines, max_line]
+    'alpha_fill': 0.20, # transparency for shaded bands
+    'title': 'Divergence Relative Error',
+    # 'title': ' Percentile Threshold Evolution',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
+}
+
+SCAN_PLOT_PARAMS = {
+    'study_box': 1.0,            # fraction of box side to scan (0,1]
+    'depth': 2,                  # depth (slices) for the scan slab - small value to see short patches better
+    'projection_mode': 'min',   # 'max', 'min' or 'sum' for the scan projection
+    'arrow_scale': 1.0,          # scale for arrow annotation
+    'units': 'Mpc',              # 'Mpc' or 'kpc'
+    'cmap': 'magma',             # Matplotlib colormap for the scan
+                                 # For discrete levels, use: 'tab10', 'Set1', 'Set2', 'Set3', 'Paired'
+                                 # For continuous: 'viridis', 'plasma', 'inferno', 'magma'
+                                 # Current options good for discrete: 'Accent', 'tab10', 'Set1'
+    'interval': 100,             # ms between frames
+    'title': 'Buffer Assignment Scan',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"]
 }
 
 DEBUG_PARAMS = {
@@ -216,88 +342,61 @@ DEBUG_PARAMS = {
     }
 }
 
-EVO_PLOT_PARAMS = {
-    'evolution_type': IND_PARAMS["evolution_type"],
-    'derivative': IND_PARAMS["derivative"],
-    'x_axis': 'zeta', # 'zeta' or 'years'
-    'x_scale': 'lin', # 'lin' or 'log'
-    'y_scale': 'log',
-    'xlim': [2.5, 0], # None for auto
-    # 'xlim': None, # None for auto
-    # 'ylim': [1e57, 1e60], # For the test
-    # 'ylim': [1e58, 1e63], # None for auto
-    'ylim': None, # None for auto
-    'cancel_limits': False, # bool to flip the x axis (useful for zeta)
-    'figure_size': [12, 8], # [width, height]
-    'line_widths': [5, 1.5], # [line1, line2] for main and component lines
-    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
-    'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
-    'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
-    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
-    'volume_evolution': True, # bool to plot volume evolution as additional figure
-    'title': 'Magnetic Field Evolution Analysis',
-    'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
-}
-
-PROFILE_PLOT_PARAMS = {
-    'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
-    # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
-    'x_scale': 'log', # 'lin' or 'log'
-    'y_scale': 'log', # 'lin' or 'log'
-    'xlim': None, # None for auto
-    'ylim': None, # None for auto
-    'rylim': None, # None for auto
-    'dylim': None, # None for auto
-    # 'xlim': [5e-3,1e0], # None for auto
-    # 'ylim': [3e53,1e65], # None for auto
-    # 'rylim': [3e39,3e47], # None for auto
-    # 'dylim': [1e-28,1e-25], # None for auto
-    'figure_size': [12, 8], # [width, height]
-    'line_widths': [3, 2], # [line1, line2] for main and component lines
-    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
-    'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
-    'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
-    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
-    'title': 'Induction Radial Profile',
-    'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
-}
-
-PERCENTILE_PLOT_PARAMS = {
-    'x_axis': 'years', # 'zeta' or 'years'
-    'x_scale': 'lin', # 'lin' or 'log'
-    'y_scale': 'log', # 'lin' or 'log'
-    'xlim': None, # None for auto
-    'ylim': None, # None for auto
-    'figure_size': [6, 6], # [width, height]
-    'line_widths': [2.0, 1.5], # [percentile_lines, max_line]
-    'alpha_fill': 0.20, # transparency for shaded bands
-    'title': 'Divergence Relative Error',
-    # 'title': ' Percentile Threshold Evolution',
-    'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
-}
-
-SCAN_PLOT_PARAMS = {
-    'study_box': 1.0,            # fraction of box side to scan (0,1]
-    'depth': 2,                  # depth (slices) for the scan slab - small value to see short patches better
-    'projection_mode': 'min',   # 'max', 'min' or 'sum' for the scan projection
-    'arrow_scale': 1.0,          # scale for arrow annotation
-    'units': 'Mpc',              # 'Mpc' or 'kpc'
-    'cmap': 'magma',             # Matplotlib colormap for the scan
-                                 # For discrete levels, use: 'tab10', 'Set1', 'Set2', 'Set3', 'Paired'
-                                 # For continuous: 'viridis', 'plasma', 'inferno', 'magma'
-                                 # Current options good for discrete: 'Accent', 'tab10', 'Set1'
-    'interval': 100,             # ms between frames
-    'title': 'Buffer Assignment Scan',
-    'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
-}
-
 # ============================
 # Only edit the section above
 # ============================
+
+def _expand_per_sim_param(value, sims_count, param_name):
+    if isinstance(value, (list, tuple, np.ndarray)):
+        value_list = list(value)
+        if len(value_list) == 1 and sims_count > 1:
+            return value_list * sims_count
+        if len(value_list) == sims_count:
+            return value_list
+        if len(value_list) == 0:
+            raise ValueError(f"IND_PARAMS['{param_name}'] cannot be empty")
+        if sims_count == 1:
+            return value_list
+        raise ValueError(
+            f"IND_PARAMS['{param_name}'] must have length 1 or {sims_count} (got {len(value_list)})"
+        )
+    return [value for _ in range(sims_count)]
+
+def _normalize_it_list(it_value, sims_count):
+    if isinstance(it_value, (list, tuple, np.ndarray)):
+        it_list = list(it_value)
+        if len(it_list) > 0 and all(isinstance(v, (list, tuple, np.ndarray)) for v in it_list):
+            if len(it_list) == 1 and sims_count > 1:
+                return [list(it_list[0]) for _ in range(sims_count)]
+            if len(it_list) == sims_count:
+                return [list(v) for v in it_list]
+            raise ValueError(
+                f"OUTPUT_PARAMS['it'] must have length 1 or {sims_count} when using per-sim lists"
+            )
+        return [list(it_list) for _ in range(sims_count)]
+    return [[it_value] for _ in range(sims_count)]
+
+sims_count = len(OUTPUT_PARAMS["sims"])
+
+per_sim_keys = [
+    "nmax",
+    "nmay",
+    "nmaz",
+    "size",
+    "npalev",
+    "nlevels",
+    "namrx",
+    "namry",
+    "namrz",
+    "nbins",
+    "rmin",
+]
+
+for key in per_sim_keys:
+    IND_PARAMS[key] = _expand_per_sim_param(IND_PARAMS[key], sims_count, key)
+
+OUTPUT_PARAMS["it"] = _normalize_it_list(OUTPUT_PARAMS["it"], sims_count)
+OUTPUT_PARAMS["total_iterations"] = sum(len(it_list) for it_list in OUTPUT_PARAMS["it"])
 
 ## The output parameters are used to create the image directories and other formatting parameters
 
@@ -372,7 +471,7 @@ if IND_PARAMS["parent"] is True:
         interp_desc = 'SPH (Smoothed Particle Hydrodynamics)'
     print(f"\n⚠️  Parent mode enabled ({method_name}):")
     if blend_enabled:
-        print("    - blend: True (buffer settings kept; parent fill applied separately)")
+        print("    - blend: True (buffer and parent fill settings applied separately)")
     else:
         print("    - parent fill will use nghost=0 and use_siblings=False at call site")
     print(f"    - parent interpolation: {interp_desc}")
@@ -397,6 +496,27 @@ for i in range(len(OUTPUT_PARAMS['sims'])):
 IND_PARAMS["dx"] = dx
 IND_PARAMS["volume"] = volume
 OUTPUT_PARAMS["dir_params"] = parameters_folders
+
+# Helper function to get simulation characteristics
+def get_sim_characteristics(sim_name):
+    """
+    Get the characteristics for a specific simulation by merging default 
+    characteristics with simulation-specific overrides.
+    
+    Args:
+        sim_name: Name of the simulation
+        
+    Returns:
+        Dictionary with all simulation characteristics
+    """
+    # Start with default characteristics
+    characteristics = SIM_CHARACTERISTICS["default"].copy()
+    
+    # Override with simulation-specific settings if they exist
+    if sim_name in SIM_CHARACTERISTICS:
+        characteristics.update(SIM_CHARACTERISTICS[sim_name])
+    
+    return characteristics
 
 # Copy percentile params from DEBUG_PARAMS into PERCENTILE_PLOT_PARAMS
 if "percentile_params" in DEBUG_PARAMS:

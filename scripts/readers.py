@@ -712,3 +712,217 @@ def read_families(it, path='', output_format='dictionaries', output_redshift=Fal
         return return_variables[0]
     else:
         return tuple(return_variables)
+
+
+def unpack_clus_data(clus_tuple, read_clus_kwargs, region=None):
+    """
+    Dynamically unpacks the tuple returned by read_clus based on what was actually read.
+    
+    This function uses the kwargs that were passed to read_clus() to know which fields
+    were actually read, and unpacks accordingly.
+    
+    The read_clus function returns variables in this order (only if output_X=True):
+    1. delta (if output_delta=True)
+    2. vx, vy, vz (if output_v=True)
+    3. pres (if output_pres=True)
+    4. pot (if output_pot=True)
+    5. opot (if output_opot=True)
+    6. temp (if output_temp=True)
+    7. metalicity (if output_metalicity=True)
+    8. cr0amr (if output_cr0amr=True)
+    9. solapst (if output_solapst=True)
+    10. Bx, By, Bz (if output_B=True)
+    11. keep_patches (if read_region is not None)
+    
+    Args:
+        clus_tuple: tuple returned by read_clus
+        read_clus_kwargs: dict with kwargs that were passed to read_clus (from get_read_clus_kwargs)
+        region: region specification (if None, no keep_patches expected)
+        
+    Returns:
+        Dictionary with variables (None for fields that weren't read)
+        
+    Author: Marco Molina
+    """
+    
+    # Initialize all variables to None
+    result = {
+        'delta': None,
+        'vx': None,
+        'vy': None,
+        'vz': None,
+        'pres': None,
+        'pot': None,
+        'opot': None,
+        'temp': None,
+        'metalicity': None,
+        'cr0amr': None,
+        'solapst': None,
+        'Bx': None,
+        'By': None,
+        'Bz': None,
+        'keep_patches': None
+    }
+    
+    # Extract what was actually READ from kwargs
+    output_delta = read_clus_kwargs.get('output_delta', True)
+    output_v = read_clus_kwargs.get('output_v', True)
+    output_pres = read_clus_kwargs.get('output_pres', False)
+    output_pot = read_clus_kwargs.get('output_pot', False)
+    output_opot = read_clus_kwargs.get('output_opot', False)
+    output_temp = read_clus_kwargs.get('output_temp', False)
+    output_metalicity = read_clus_kwargs.get('output_metalicity', False)
+    output_cr0amr = read_clus_kwargs.get('output_cr0amr', False)
+    output_solapst = read_clus_kwargs.get('output_solapst', False)
+    output_B = read_clus_kwargs.get('output_B', False)
+    
+    # Convert tuple to list for easier indexing
+    clus_list = list(clus_tuple)
+    idx = 0
+    
+    # Unpack according to the order specified in read_clus
+    if output_delta:
+        result['delta'] = clus_list[idx]
+        idx += 1
+    
+    if output_v:
+        result['vx'] = clus_list[idx]
+        result['vy'] = clus_list[idx + 1]
+        result['vz'] = clus_list[idx + 2]
+        idx += 3
+    
+    if output_pres:
+        result['pres'] = clus_list[idx]
+        idx += 1
+    
+    if output_pot:
+        result['pot'] = clus_list[idx]
+        idx += 1
+    
+    if output_opot:
+        result['opot'] = clus_list[idx]
+        idx += 1
+    
+    if output_temp:
+        result['temp'] = clus_list[idx]
+        idx += 1
+    
+    if output_metalicity:
+        result['metalicity'] = clus_list[idx]
+        idx += 1
+    
+    if output_cr0amr:
+        result['cr0amr'] = clus_list[idx]
+        idx += 1
+    
+    if output_solapst:
+        result['solapst'] = clus_list[idx]
+        idx += 1
+    
+    if output_B:
+        result['Bx'] = clus_list[idx]
+        result['By'] = clus_list[idx + 1]
+        result['Bz'] = clus_list[idx + 2]
+        idx += 3
+    
+    if region is not None and idx < len(clus_list):
+        result['keep_patches'] = clus_list[idx]
+        idx += 1
+    
+    # Validate that we consumed all elements
+    if idx != len(clus_list):
+        print(f"WARNING: unpack_clus_data consumed {idx} elements but tuple has {len(clus_list)}.")
+        print(f"This may indicate a mismatch between read_clus flags and unpacking logic.")
+        print(f"Read kwargs: {read_clus_kwargs}")
+        print(f"Expected order: delta, vx, vy, vz, " + 
+              (f"pres, " if output_pres else "") +
+              (f"pot, " if output_pot else "") +
+              (f"opot, " if output_opot else "") +
+              (f"temp, " if output_temp else "") +
+              (f"metalicity, " if output_metalicity else "") +
+              (f"cr0amr, " if output_cr0amr else "") +
+              (f"solapst, " if output_solapst else "") +
+              (f"Bx, By, Bz" if output_B else ""))
+    
+    return result
+
+
+def get_read_clus_kwargs(sim_characteristics, level, region=None, **override_flags):
+    """
+    Constructs keyword arguments for read_clus() based on config and optional overrides.
+    
+    TWO-LEVEL SYSTEM:
+      1. EXISTENCE flags (is_cooling, is_mascletB, has_X): What EXISTS in files
+      2. READ flags (read_X): What we WANT to read from existing fields
+    
+    Read flags are taken from config (SIM_CHARACTERISTICS) by default, but can be
+    overridden via function parameters.
+    
+    Args:
+        sim_characteristics: dict with existence and read preference flags
+        level: maximum refinement level to read
+        region: optional region specification for spatial filtering
+        **override_flags: optional overrides for read_X flags (e.g., read_velocity=False)
+        
+    Returns:
+        dict with kwargs for read_clus()
+        
+    Example:
+        # Use config defaults:
+        kwargs = get_read_clus_kwargs(sim_chars, level, region)
+        
+        # Override config to skip velocity:
+        kwargs = get_read_clus_kwargs(sim_chars, level, region, read_velocity=False)
+        
+    Author: Marco Molina
+    """
+    # Extract EXISTENCE flags from config (what fields exist in files)
+    is_cooling = sim_characteristics.get('is_cooling', False)
+    is_mascletB = sim_characteristics.get('is_mascletB', True)
+    has_pres = sim_characteristics.get('has_pres', True)
+    has_pot = sim_characteristics.get('has_pot', True)
+    has_opot = sim_characteristics.get('has_opot', False)
+    has_cr0amr = sim_characteristics.get('has_cr0amr', True)
+    has_solapst = sim_characteristics.get('has_solapst', True)
+    
+    # Extract READ preference flags from config (what we want to read)
+    # Can be overridden by function parameters
+    read_velocity = override_flags.get('read_velocity', 
+                                       sim_characteristics.get('read_velocity', True))
+    read_B = override_flags.get('read_B', 
+                                sim_characteristics.get('read_B', True))
+    read_pressure = override_flags.get('read_pressure', 
+                                       sim_characteristics.get('read_pressure', True))
+    read_potential = override_flags.get('read_potential', 
+                                        sim_characteristics.get('read_potential', True))
+    read_old_potential = override_flags.get('read_old_potential', 
+                                           sim_characteristics.get('read_old_potential', False))
+    read_temperature = override_flags.get('read_temperature', 
+                                         sim_characteristics.get('read_temperature', True))
+    read_metalicity = override_flags.get('read_metalicity', 
+                                        sim_characteristics.get('read_metalicity', True))
+    read_cr0amr = override_flags.get('read_cr0amr', 
+                                     sim_characteristics.get('read_cr0amr', True))
+    read_solapst = override_flags.get('read_solapst', 
+                                      sim_characteristics.get('read_solapst', True))
+    
+    # Build kwargs: output_X = read_X AND has_X
+    # (only request reading if we want it AND it exists)
+    kwargs = {
+        'max_refined_level': level,
+        'output_delta': True,                                    # Always read density
+        'output_v': read_velocity,                               # Velocity (always exists)
+        'output_pres': read_pressure and has_pres,               # Pressure (if exists)
+        'output_pot': read_potential and has_pot,                # Potential (if exists)
+        'output_opot': read_old_potential and has_opot,          # Old potential (if exists)
+        'output_temp': read_temperature and is_cooling,          # Temperature (if cooling)
+        'output_metalicity': read_metalicity and is_cooling,     # Metalicity (if cooling)
+        'output_cr0amr': read_cr0amr and has_cr0amr,             # CR flag (if exists)
+        'output_solapst': read_solapst and has_solapst,          # Solapst (if exists)
+        'output_B': read_B and is_mascletB,                      # B field (if mascletB)
+        'is_mascletB': is_mascletB,                              # Tell reader: B exists
+        'is_cooling': is_cooling,                                # Tell reader: cooling exists
+        'verbose': False,
+        'read_region': region
+    }
+    return kwargs

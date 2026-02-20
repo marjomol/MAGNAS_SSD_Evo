@@ -35,14 +35,14 @@ np.set_printoptions(linewidth=200)
 log_message = utils.log_message
 
 
-def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_kind=1, rad_kind=1, verbose=False):
+def find_most_massive_halo(sim_name, it, a0, dir_halos, dir_grids, data_folder, vir_kind=1, rad_kind=1, verbose=False):
     '''
     Finds the coordinates and radius of the most massive halo in each snapshot of the simulations. In case
     we are looking for the most massive halo to center our analysis, we need to build the python halo catalogue
     (by now we exclude subhalos)
     
     Args:
-        - sims: list of simulation names
+        - sim_name: simulation name
         - it: list of snapshots
         - a0: scale factor of the simulation (typically 1.0 for the last snapshot)
         - dir_halos: directory where the halo catalogues are stored
@@ -65,73 +65,70 @@ def find_most_massive_halo(sims, it, a0, dir_halos, dir_grids, data_folder, vir_
     rad = []
     max_halo_mass = None
 
-    for i in range(len(sims)):
-        # Read halos and zeta for each snapshot in reverse order so that we can track the same most massive halo
-        for j in reversed(range(len(it))):
-            
-            halos = reader.read_families(it[j], path=dir_halos, output_format='dictionaries', output_redshift=False,
-                        min_mass=None, exclude_subhaloes=True, read_region=None, keep_boundary_contributions=False)
-            
-            _,_,_,_,zeta = reader.read_grids(it = it[j], path=dir_grids+sims[i], parameters_path=data_folder+'/'+sims[i]+'/', digits=5, read_general=True, read_patchnum=False, read_dmpartnum=False,
-            read_patchcellextension=False, read_patchcellposition=False, read_patchposition=False, read_patchparent=False, nparray=False)
-            
-            if j == len(it) - 1:
-                # Find the index of the most massive halo
-                max_mass_index = np.argmax([halo['M'] for halo in halos])
-                id_max_mass = halos[max_mass_index]['id']
-                max_halo_mass = halos[max_mass_index]['M']
-                if vir_kind == 1:
-                    R_max_mass = halos[max_mass_index]['R']
-            
-            index = next((i for i, halo in enumerate(halos) if halo['id'] == id_max_mass), None)
-            
-            if index != None:
-                
-                coords.append((halos[index]['x'], halos[index]['y'], halos[index]['z']))
-                
-                if vir_kind == 1 and rad_kind == 1:
-                    rad.append(R_max_mass) # Taking the Virial radius of the most massive halo at the last snap
-                elif vir_kind == 1 and rad_kind == 2:
-                    rad.append(R_max_mass * (a0/(1 + zeta)))
-                elif vir_kind == 2 and rad_kind == 1:
-                    rad.append(halos[index]['R']) # Changing the virial radius at each snap
-                elif vir_kind == 2 and rad_kind == 2:
-                    rad.append(halos[index]['R'] * (a0/(1 + zeta)))
-                            
-            elif index == None:
-                
-                coords.append(coords[-1])
-                rad.append(rad[-1])
-                
-            if verbose and index == None:
-                log_message("No halo found in snap " + str(it[j]) + ", using the previous one.", tag="halo", level=1)
-                
-    if verbose:
+    # Read halos and zeta for each snapshot in reverse order so that we can track the same most massive halo
+    for j in reversed(range(len(it))):
+        halos = reader.read_families(it[j], path=dir_halos + sim_name, output_format='dictionaries', output_redshift=False,
+                    min_mass=None, exclude_subhaloes=True, read_region=None, keep_boundary_contributions=False)
         
-        # Print the coordinates
-        log_message("Coordinates of the most massive halo in the last snap " + str(it[-1]) + ":", tag="halo", level=1)
+        _,_,_,_,zeta = reader.read_grids(it=it[j], path=dir_grids + sim_name, parameters_path=data_folder + '/' + sim_name + '/', digits=5,
+            read_general=True, read_patchnum=False, read_dmpartnum=False, read_patchcellextension=False,
+            read_patchcellposition=False, read_patchposition=False, read_patchparent=False, nparray=False)
+        
+        if j == len(it) - 1:
+            # Find the index of the most massive halo
+            max_mass_index = np.argmax([halo['M'] for halo in halos])
+            id_max_mass = halos[max_mass_index]['id']
+            max_halo_mass = halos[max_mass_index]['M']
+            if vir_kind == 1:
+                R_max_mass = halos[max_mass_index]['R']
+        
+        index = next((i for i, halo in enumerate(halos) if halo['id'] == id_max_mass), None)
+        
+        if index is not None:
+            coords.append((halos[index]['x'], halos[index]['y'], halos[index]['z']))
+            
+            if vir_kind == 1 and rad_kind == 1:
+                rad.append(R_max_mass) # Taking the Virial radius of the most massive halo at the last snap
+            elif vir_kind == 1 and rad_kind == 2:
+                rad.append(R_max_mass * (a0/(1 + zeta)))
+            elif vir_kind == 2 and rad_kind == 1:
+                rad.append(halos[index]['R']) # Changing the virial radius at each snap
+            elif vir_kind == 2 and rad_kind == 2:
+                rad.append(halos[index]['R'] * (a0/(1 + zeta)))
+        else:
+            coords.append(coords[-1])
+            rad.append(rad[-1])
+            if verbose:
+                log_message("No halo found in snap " + str(it[j]) + ", using the previous one.", tag="halo", level=1)
+    
+    # Reverse the lists to match the original order of snapshots
+    coords = coords[::-1]
+    rad = rad[::-1]
+    
+    if verbose and coords:
+        log_message(
+            "Coordinates of the most massive halo in the last snap " + str(it[-1]) + ":",
+            tag="halo",
+            level=1
+        )
         log_message("x: " + str(coords[-1][0]), tag="halo", level=2)
         log_message("y: " + str(coords[-1][1]), tag="halo", level=2)
         log_message("z: " + str(coords[-1][2]), tag="halo", level=2)
         log_message("Radius: " + str(rad[-1]) + " Mpc", tag="halo", level=2)
         if max_halo_mass is not None:
             log_message("Mass: " + str(max_halo_mass) + " Msun/h", tag="halo", level=2)
-
-    # Reverse the lists to match the original order of snapshots            
-    coords = coords[::-1]
-    rad = rad[::-1]
     
     return coords, rad
 
 
-def create_region(sims, it, coords, rad, size, F=1.0, reg='BOX', verbose=False):
+def create_region(sim_name, it, coords, rad, size, F=1.0, reg='BOX', verbose=False):
     '''
     Creates the boxes or spheres centered at the coordinates of the most massive halo or any other point in each snapshot.
     Automatically clips regions to simulation box boundaries and disables region reading if the clipped region
     equals the entire box.
     
     Args:
-        - sims: list of simulation names
+        - sim_name: simulation name
         - it: list of snapshots
         - coords: list of coordinates of the most massive halo in each snapshot
         - rad: list of radii of the most massive halo in each snapshot
@@ -150,86 +147,79 @@ def create_region(sims, it, coords, rad, size, F=1.0, reg='BOX', verbose=False):
     Author: Marco Molina
     '''
     
-    # Handle size as list or single value
-    if isinstance(size, list):
-        box_size = size[0]  # Assume first simulation
-    else:
-        box_size = size
-        
     # Box boundaries (simulation box is centered at origin)
-    box_min = -box_size / 2.0
-    box_max = box_size / 2.0
-    
+    box_min = -size / 2.0
+    box_max = size / 2.0
+
     Rad = []
     region_size = []
     region = []
 
-    for i in range(len(sims)):
-        for j in range(len(it)):
-            Rad.append(F*rad[i+j])
-            region_size.append(2 * Rad[-1])  # Size of the box in Mpc
+    for j in range(len(it)):
+        Rad.append(F * rad[j])
+        region_size.append(2 * Rad[-1])  # Size of the box in Mpc
+        
+        if reg == 'BOX':
+            # Calculate region boundaries
+            x1 = coords[j][0] - Rad[-1]
+            x2 = coords[j][0] + Rad[-1]
+            y1 = coords[j][1] - Rad[-1]
+            y2 = coords[j][1] + Rad[-1]
+            z1 = coords[j][2] - Rad[-1]
+            z2 = coords[j][2] + Rad[-1]
             
-            if reg == 'BOX':
-                # Calculate region boundaries
-                x1 = coords[i+j][0] - Rad[-1]
-                x2 = coords[i+j][0] + Rad[-1]
-                y1 = coords[i+j][1] - Rad[-1]
-                y2 = coords[i+j][1] + Rad[-1]
-                z1 = coords[i+j][2] - Rad[-1]
-                z2 = coords[i+j][2] + Rad[-1]
-                
-                # Clip to box boundaries
-                x1_clipped = max(x1, box_min)
-                x2_clipped = min(x2, box_max)
-                y1_clipped = max(y1, box_min)
-                y2_clipped = min(y2, box_max)
-                z1_clipped = max(z1, box_min)
-                z2_clipped = min(z2, box_max)
-                
-                # Check if clipping occurred
-                if (x1 < box_min or x2 > box_max or 
-                    y1 < box_min or y2 > box_max or 
-                    z1 < box_min or z2 > box_max):
-                    if verbose and j == 0:
-                        log_message(f"Warning: Region for snapshot {it[j]} extends beyond simulation box.", tag="region", level=1)
-                        log_message(f"Original: x=[{x1:.2f}, {x2:.2f}], y=[{y1:.2f}, {y2:.2f}], z=[{z1:.2f}, {z2:.2f}]", tag="region", level=2)
-                        log_message(f"Clipped:  x=[{x1_clipped:.2f}, {x2_clipped:.2f}], y=[{y1_clipped:.2f}, {y2_clipped:.2f}], z=[{z1_clipped:.2f}, {z2_clipped:.2f}]", tag="region", level=2)
-                
-                # Check if clipped region equals entire box (with small tolerance)
-                tolerance = 1e-6
-                region_equals_box = (
-                    abs(x1_clipped - box_min) < tolerance and abs(x2_clipped - box_max) < tolerance and
-                    abs(y1_clipped - box_min) < tolerance and abs(y2_clipped - box_max) < tolerance and
-                    abs(z1_clipped - box_min) < tolerance and abs(z2_clipped - box_max) < tolerance
-                )
-                
-                if region_equals_box:
-                    if verbose and j == 0:
-                        log_message("Region equals entire box -> disabling region filter (reading all patches)", tag="region", level=2)
-                    region.append([None])
-                else:
-                    region.append(["box", x1_clipped, x2_clipped, y1_clipped, y2_clipped, z1_clipped, z2_clipped])
-                    
-            elif reg == 'SPH':
-                # For spheres, check if radius extends beyond box
-                effective_radius = Rad[-1]
-                max_extent = max(
-                    abs(coords[i+j][0]) + effective_radius,
-                    abs(coords[i+j][1]) + effective_radius,
-                    abs(coords[i+j][2]) + effective_radius
-                )
-                
-                if max_extent > box_max:
-                    if verbose and j == 0:
-                        log_message(f"Warning: Spherical region for snapshot {it[j]} extends beyond simulation box.", tag="region", level=1)
-                        log_message(f"Center: ({coords[i+j][0]:.2f}, {coords[i+j][1]:.2f}, {coords[i+j][2]:.2f})", tag="region", level=2)
-                        log_message(f"Radius: {effective_radius:.2f} Mpc", tag="region", level=2)
-                        log_message("Region equals entire box -> disabling region filter (reading all patches)", tag="region", level=2)
-                    region.append([None])
-                else:
-                    region.append(["sphere", coords[i+j][0], coords[i+j][1], coords[i+j][2], Rad[-1]])
-            else:
+            # Clip to box boundaries
+            x1_clipped = max(x1, box_min)
+            x2_clipped = min(x2, box_max)
+            y1_clipped = max(y1, box_min)
+            y2_clipped = min(y2, box_max)
+            z1_clipped = max(z1, box_min)
+            z2_clipped = min(z2, box_max)
+            
+            # Check if clipping occurred
+            if (x1 < box_min or x2 > box_max or 
+                y1 < box_min or y2 > box_max or 
+                z1 < box_min or z2 > box_max):
+                if verbose and j == 0:
+                    log_message(f"Warning: Region for snapshot {it[j]} extends beyond simulation box.", tag="region", level=1)
+                    log_message(f"Original: x=[{x1:.2f}, {x2:.2f}], y=[{y1:.2f}, {y2:.2f}], z=[{z1:.2f}, {z2:.2f}]", tag="region", level=2)
+                    log_message(f"Clipped:  x=[{x1_clipped:.2f}, {x2_clipped:.2f}], y=[{y1_clipped:.2f}, {y2_clipped:.2f}], z=[{z1_clipped:.2f}, {z2_clipped:.2f}]", tag="region", level=2)
+            
+            # Check if clipped region equals entire box (with small tolerance)
+            tolerance = 1e-6
+            region_equals_box = (
+                abs(x1_clipped - box_min) < tolerance and abs(x2_clipped - box_max) < tolerance and
+                abs(y1_clipped - box_min) < tolerance and abs(y2_clipped - box_max) < tolerance and
+                abs(z1_clipped - box_min) < tolerance and abs(z2_clipped - box_max) < tolerance
+            )
+            
+            if region_equals_box:
+                if verbose and j == 0:
+                    log_message("Region equals entire box -> disabling region filter (reading all patches)", tag="region", level=2)
                 region.append([None])
+            else:
+                region.append(["box", x1_clipped, x2_clipped, y1_clipped, y2_clipped, z1_clipped, z2_clipped])
+                
+        elif reg == 'SPH':
+            # For spheres, check if radius extends beyond box
+            effective_radius = Rad[-1]
+            max_extent = max(
+                abs(coords[j][0]) + effective_radius,
+                abs(coords[j][1]) + effective_radius,
+                abs(coords[j][2]) + effective_radius
+            )
+            
+            if max_extent > box_max:
+                if verbose and j == 0:
+                    log_message(f"Warning: Spherical region for snapshot {it[j]} extends beyond simulation box.", tag="region", level=1)
+                    log_message(f"Center: ({coords[j][0]:.2f}, {coords[j][1]:.2f}, {coords[j][2]:.2f})", tag="region", level=2)
+                    log_message(f"Radius: {effective_radius:.2f} Mpc", tag="region", level=2)
+                    log_message("Region equals entire box -> disabling region filter (reading all patches)", tag="region", level=2)
+                region.append([None])
+            else:
+                region.append(["sphere", coords[j][0], coords[j][1], coords[j][2], Rad[-1]])
+        else:
+            region.append([None])
                 
     if verbose:      
         # Print the coordinates
@@ -241,7 +231,7 @@ def create_region(sims, it, coords, rad, size, F=1.0, reg='BOX', verbose=False):
     return region, region_size
 
 
-def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, verbose=False, debug=False):
+def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, sim_characteristics=None, verbose=False, debug=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -264,6 +254,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             - B0: Amplitude of the magnetic field.
         - bitformat: data type for the loaded fields (default is np.float32)
         - region: region coordinates to be used (default is None)
+        - sim_characteristics: Dictionary with simulation characteristics (is_cooling, is_mascletB, etc.)
         - verbose: boolean to print the data type loaded or not (default is False)
         - debug: dictionary containing the parameters for the debug mode (if False, debug mode is disabled):
         
@@ -280,14 +271,19 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             - vector_levels: levels of refinement for each patch
             - clus_rho_rho_b: density contrast in the cluster
             - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
-            - clus_cr0amr: cosmic ray energy density in the cluster
-            - clus_solapst: solenoidal fraction in the cluster
+            - clus_cr0amr: cosmic ray energy density in the cluster (or refinement flag)
+            - clus_solapst: solenoidal fraction in the cluster (or mask flag)
             - clus_kp: mask for valid patches
             - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
             - clus_B: magnetic field magnitude in the cluster
             - clus_b2: normalized magnetic field squared in the cluster
             - clus_B2: magnetic field squared in the cluster
             - clus_v2: velocity field squared in the cluster
+            - clus_pres: pressure (optional, None if not requested)
+            - clus_pot: gravitational potential (optional, None if not requested)
+            - clus_opot: old gravitational potential (optional, None if not requested)
+            - clus_temp: temperature (optional, None if not requested)
+            - clus_metalicity: metalicity (optional, None if not requested)
             - a: scale factor at the redshift zeta
             - E: E(z) function at the redshift zeta
             - H: Hubble parameter at the redshift zeta
@@ -302,6 +298,25 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
     
     if region[0] == None:
         region = None
+
+    # Get simulation characteristics (default if not provided)
+    if sim_characteristics is None:
+        sim_characteristics = {
+            "is_mascletB": True,
+            "is_cooling": False,
+            "has_cr0amr": True,
+            "has_solapst": True,
+            "output_pres": False,
+            "output_pot": False,
+            "output_opot": False,
+            "output_temp": False,
+            "output_metalicity": False
+        }
+    
+    # Log simulation characteristics if verbose
+    if verbose:
+        log_message(f"Loading data with characteristics: is_cooling={sim_characteristics.get('is_cooling', False)}, "
+                   f"is_mascletB={sim_characteristics.get('is_mascletB', True)}")
 
     if test['test'] == False:
         # Read grid data using the reader
@@ -365,54 +380,92 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
                 verbose=True
             )
 
-        # Read cluster data
+        # Read cluster data using simulation characteristics from config
+        # Config defines both what exists (is_X, has_X) and what to read (read_X)
+        clus_kwargs = reader.get_read_clus_kwargs(sim_characteristics, level, region)
         clus = reader.read_clus(
             it=it,
             path=dir_gas + sims,
             parameters_path=dir_params,
             digits=5,
-            max_refined_level=level,
-            output_delta=True,
-            output_v=True,
-            output_pres=False,
-            output_pot=False,
-            output_opot=False,
-            output_temp=False,
-            output_metalicity=False,
-            output_cr0amr=True,
-            output_solapst=True,
-            is_mascletB=True,
-            output_B=True,
-            is_cooling=False,
-            verbose=False,
-            read_region=region
+            **clus_kwargs
         )
 
-        # Unpack cluster data
-        (
-            clus_rho_rho_b,
-            clus_vx,
-            clus_vy,
-            clus_vz,
-            clus_cr0amr,
-            clus_solapst,
-            clus_mbx,
-            clus_mby,
-            clus_mbz,
-            *rest
-        ) = clus
-        # Slice cluster fields to kept patch count to stay aligned with grid_npatch
-        clus_rho_rho_b = clus_rho_rho_b[:keep_count]
-        clus_vx = clus_vx[:keep_count]
-        clus_vy = clus_vy[:keep_count]
-        clus_vz = clus_vz[:keep_count]
-        clus_cr0amr = clus_cr0amr[:keep_count]
-        clus_solapst = clus_solapst[:keep_count]
-        clus_mbx = clus_mbx[:keep_count]
-        clus_mby = clus_mby[:keep_count]
-        clus_mbz = clus_mbz[:keep_count]
-        if rest:
-            rest = [r[:keep_count] if hasattr(r, '__len__') else r for r in rest]
+        # Unpack cluster data based on what was actually read
+        clus_data = reader.unpack_clus_data(clus, clus_kwargs, region)
+        
+        # Extract the variables we need
+        clus_rho_rho_b = clus_data['delta']
+        clus_vx = clus_data['vx']
+        clus_vy = clus_data['vy']
+        clus_vz = clus_data['vz']
+        clus_cr0amr = clus_data['cr0amr']
+        clus_solapst = clus_data['solapst']
+        clus_mbx = clus_data['Bx']
+        clus_mby = clus_data['By']
+        clus_mbz = clus_data['Bz']
+        
+        # Optional variables (may be None if not requested)
+        clus_pres = clus_data['pres']
+        clus_pot = clus_data['pot']
+        clus_opot = clus_data['opot']
+        clus_temp = clus_data['temp']
+        clus_metalicity = clus_data['metalicity']
+        clus_keep_patches = clus_data['keep_patches']
+        
+        # IMPORTANT: Verify that clus data matches the expected number of patches
+        # This ensures configuration parameters are correct
+        actual_num_patches = len(clus_rho_rho_b)
+        expected_num_patches = keep_count
+        
+        if actual_num_patches != expected_num_patches:
+            # Calculate which levels are present
+            cumsum = 1
+            max_level_in_data = 0
+            for lev in range(1, len(grid_npatch)):
+                if cumsum >= actual_num_patches:
+                    break
+                cumsum += grid_npatch[lev]
+                if cumsum <= actual_num_patches:
+                    max_level_in_data = lev
+            
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"ERROR: Mismatch between grid and clus data!\n"
+                f"{'='*80}\n"
+                f"Expected patches (from grid file): {expected_num_patches}\n"
+                f"Actual patches (from clus file):   {actual_num_patches}\n"
+                f"\n"
+                f"Grid npatch per level: {grid_npatch}\n"
+                f"Maximum level in clus data: {max_level_in_data}\n"
+                f"Requested level in config: {level}\n"
+                f"\n"
+                f"SOLUTION:\n"
+                f"The 'nlevels' parameter in config.py should match the maximum refinement\n"
+                f"level available in your simulation files.\n"
+                f"\n"
+                f"Please check your simulation files and update config.py:\n"
+                f"  - If clus file only has {max_level_in_data} levels, set:\n"
+                f"      IND_PARAMS['nlevels'] = [{max_level_in_data}]\n"
+                f"      IND_PARAMS['level'] = [{max_level_in_data}]\n"
+                f"      IND_PARAMS['up_to_level'] = [{max_level_in_data}]\n"
+                f"\n"
+                f"  - Or verify that your clus files contain all {level} levels\n"
+                f"{'='*80}\n"
+            )
+            raise ValueError(error_msg)
+        
+        # Slice grid arrays to match clus data
+        grid_patchnx = grid_patchnx[:keep_count]
+        grid_patchny = grid_patchny[:keep_count]
+        grid_patchnz = grid_patchnz[:keep_count]
+        grid_patchx = grid_patchx[:keep_count]
+        grid_patchy = grid_patchy[:keep_count]
+        grid_patchz = grid_patchz[:keep_count]
+        grid_patchrx = grid_patchrx[:keep_count]
+        grid_patchry = grid_patchry[:keep_count]
+        grid_patchrz = grid_patchrz[:keep_count]
+        pare = pare[:keep_count]
 
     else:
         # Read grid data using the reader
@@ -459,30 +512,31 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
     # rho_b = 1
     
     if test['test'] == True:
-        # Read cluster data
+        # TEST MODE: Only read delta (density), skip all other fields
+        # Note: We still need to tell read_clus about file structure (is_mascletB, is_cooling)
         clus = reader.read_clus(
             it=it,
             path=dir_gas + sims,
             parameters_path=dir_params,
             digits=5,
             max_refined_level=level,
-            output_delta=True,
-            output_v=False,
-            output_pres=False,
-            output_pot=False,
-            output_opot=False,
-            output_temp=False,
-            output_metalicity=False,
-            output_cr0amr= False,
-            output_solapst= False,
-            is_mascletB=True,
-            output_B=False,
-            is_cooling=False,
+            output_delta=True,              # READ: density
+            output_v=False,                 # SKIP: velocity
+            output_pres=False,              # SKIP: pressure
+            output_pot=False,               # SKIP: potential
+            output_opot=False,              # SKIP: old potential
+            output_temp=False,              # SKIP: temperature
+            output_metalicity=False,        # SKIP: metalicity
+            output_cr0amr=False,            # SKIP: refinement flag
+            output_solapst=False,           # SKIP: solapst
+            is_mascletB=sim_characteristics.get('is_mascletB', True),  # File structure info
+            output_B=False,                 # SKIP: magnetic field
+            is_cooling=sim_characteristics.get('is_cooling', False),   # File structure info
             verbose=False,
             read_region=region
         )
 
-        # Unpack cluster data
+        # Unpack cluster data (only delta was read)
         (
             clus_rho_rho_b,
             *rest
@@ -509,13 +563,24 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             clus_vz
         ) = clus_bv
     
-    n = 1 + np.sum(grid_npatch)
+    # Calculate number of patches based on ACTUAL data returned
+    # Use the length of the clus arrays, not grid_npatch, because they may differ
+    n = len(clus_rho_rho_b)
     
     # Determine mask for valid patches
-    if region is not None and rest:
-        clus_kp = rest[0]
+    if region is not None and clus_keep_patches is not None:
+        clus_kp = clus_keep_patches
     else:
         clus_kp = np.ones(n, dtype=bool)
+    
+    # Handle None values for optional variables
+    # If cr0amr was not loaded, create default array
+    if clus_cr0amr is None:
+        clus_cr0amr = [np.ones_like(clus_rho_rho_b[p], dtype=bool) if bool(clus_kp[p]) else 0 for p in range(n)]
+    
+    # If solapst was not loaded, create default array  
+    if clus_solapst is None:
+        clus_solapst = [1 if p == 0 else (np.ones_like(clus_rho_rho_b[p], dtype=bool) if bool(clus_kp[p]) else 0) for p in range(n)]
 
     # Normalize magnetic field components
     # clus_Bx = [clus_mbx[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
@@ -597,6 +662,12 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         'clus_b2': clus_b2,
         'clus_B2': clus_B2,
         'clus_v2': clus_v2,
+        # Optional variables (may be None if not requested)
+        'clus_pres': clus_pres,
+        'clus_pot': clus_pot,
+        'clus_opot': clus_opot,
+        'clus_temp': clus_temp,
+        'clus_metalicity': clus_metalicity,
         'a': a,
         'E': E,
         'H': H,
@@ -1698,7 +1769,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
                     stencil=3, buffer=True, use_siblings=True, interpol='TSC', nghost=1, blend=False,
                     parent=False, parent_interpol=None,
-                    bitformat=np.float32, mag=False,
+                    bitformat=np.float32, mag=False, sim_characteristics=None,
                     energy_evolution=True, profiles=True, projection=True, percentiles=True, 
                     percentile_levels=(95, 90, 75, 50, 25), debug_params=None,
                     return_vectorial=False, return_induction=False, return_induction_energy=False,
@@ -1738,6 +1809,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - nghost: number of ghost cells to add for the derivatives (default is 1)
         - bitformat: data type for the fields (default is np.float32)
         - mag: boolean to compute magnitudes (default is False)
+        - sim_characteristics: Dictionary with simulation characteristics (is_cooling, is_mascletB, etc.)
         - energy_evolution: boolean to compute energy evolution (default is True)
         - profiles: boolean to compute radial profiles (default is True)
         - projection: boolean to compute uniform projection (default is True)
@@ -1778,7 +1850,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, bitformat=bitformat, region=region_coords, verbose=verbose, debug=debug_params.get("divergence", {}) and debug_params.get("patch_analysis", {}))
+    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, 
+                    bitformat=bitformat, region=region_coords, sim_characteristics=sim_characteristics,
+                    verbose=verbose, debug=debug_params.get("divergence", {}) and debug_params.get("patch_analysis", {}))
     levels = utils.create_vector_levels(data['grid_npatch'])
     dx = size/nmax
     resolution = dx / (2 ** levels)
@@ -1807,8 +1881,11 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     buffer_nghost = nghost
     if parent_mode and not blend_active:
         buffer_nghost = 0
-    if blend_active and buffer_nghost == 0:
-        buffer_nghost = boundary_width
+    
+    # Adjust buffer_nghost if blend is active and nghost was not specified
+    if blend_active:
+        if buffer_nghost == 0:
+            buffer_nghost = boundary_width
         if verbose:
             log_message(
                 f'Blend active: using buffer nghost={buffer_nghost} (stencil={stencil}) in addition to parent fill',

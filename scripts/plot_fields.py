@@ -11,6 +11,7 @@ Created by Marco Molina Pradillo
 import numpy as np
 import gc
 import os
+from datetime import datetime
 import scripts.diff as diff
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -348,7 +349,8 @@ def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=No
         
         z_info = f"z{zeta:.3f}"
         proj_info = f"proj_{projection_mode}"
-        filename = f"{run}_{title_slug}_{sim_info}_{buffer_info}_{induction_params.get('stencil','')}_{proj_info}_{z_info}.gif"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{run}_{title_slug}_{sim_info}_{buffer_info}_{induction_params.get('stencil','')}_{proj_info}_{z_info}_{timestamp}.gif"
         filepath = os.path.join(folder, filename)
         ani.save(filepath, writer='pillow', dpi=dpi)
         if verbose:
@@ -749,7 +751,8 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         boundary_info = f"ExclBound{boundary_width}px" if exclude_boundaries else ""
 
         file_title = '_'.join(base_title.split()[:3])
-        filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}_{boundary_info}.png"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}_{boundary_info}_{timestamp}.png"
         fig.savefig(filename, dpi=dpi)
         if verbose:
             print(f'Percentile evolution plot saved as: {filename}')
@@ -1135,7 +1138,8 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save main plot
         file_title = '_'.join(title.split()[:3])
-        filename1 = f'{folder}/{run}_{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}.png'
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename1 = f'{folder}/{run}_{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}_{timestamp}.png'
         fig1.savefig(filename1, dpi=dpi)
         
         if verbose:
@@ -1143,7 +1147,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save volume plot if created
         if volume_evolution:
-            filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}.png'
+            filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}_{timestamp}.png'
             fig2.savefig(filename2, dpi=dpi)
             
             if verbose:
@@ -1497,6 +1501,24 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         # Return a dummy handle for legend entry
         h_legend, = ax.plot([], [], linestyle=ls, linewidth=lw, color=color, label=label)
         return h_legend
+
+    def _auto_limits(values, scale, pad=0.10):
+        values = np.asarray(values)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return None
+        if scale == 'log':
+            values = values[values > 0]
+            if values.size == 0:
+                return None
+            vmin = np.log10(np.min(values))
+            vmax = np.log10(np.max(values))
+            span = max(vmax - vmin, 1e-6)
+            return 10 ** (vmin - pad * span), 10 ** (vmax + pad * span)
+        vmin = np.min(values)
+        vmax = np.max(values)
+        span = max(vmax - vmin, 1e-12)
+        return vmin - pad * span, vmax + pad * span
     
     for snap_i in range(len(it_indx)):
         fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
@@ -1513,6 +1535,10 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
 
         unique_handles = []
         unique_labels = []
+
+        y_left_vals = []
+        y_right_vals = []
+        y_density_vals = []
         
         # Add one explanatory legend entry: dotted means negative interval
         from matplotlib.lines import Line2D
@@ -1537,10 +1563,13 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
             if unit == units_y_1:
                 # unified signed plotting on right axis
                 _ = plot_signed(ax_right, r_pro, y, lw, ls, color, label)
+                y_right_vals.append(np.abs(np.asarray(y)))
             elif unit == units_y_3:
                 ax_density.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+                y_density_vals.append(np.asarray(y))
             else:
                 ax1.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+                y_left_vals.append(np.asarray(y))
             
         # Axis scales and labels
         if x_scale == 'log':
@@ -1573,10 +1602,25 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
 
         if ylim is not None:
             ax1.set_ylim(ylim[0], ylim[1])
+        else:
+            if y_left_vals:
+                y_left_auto = _auto_limits(np.concatenate(y_left_vals), y_scale)
+                if y_left_auto is not None:
+                    ax1.set_ylim(y_left_auto[0], y_left_auto[1])
         if rylim is not None:
             ax_right.set_ylim(rylim[0], rylim[1])
+        else:
+            if y_right_vals:
+                y_right_auto = _auto_limits(np.concatenate(y_right_vals), y_scale)
+                if y_right_auto is not None:
+                    ax_right.set_ylim(y_right_auto[0], y_right_auto[1])
         if dylim is not None:
             ax_density.set_ylim(dylim[0], dylim[1])
+        else:
+            if y_density_vals:
+                y_density_auto = _auto_limits(np.concatenate(y_density_vals), y_scale)
+                if y_density_auto is not None:
+                    ax_density.set_ylim(y_density_auto[0], y_density_auto[1])
             
         ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
 
@@ -1593,17 +1637,10 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                 unique_handles.append(hh)
                 unique_labels.append(ll)
 
-        if unique_handles and xlim is not None and ylim is not None and rylim is not None and dylim is not None:
-            # Place a fixed, two-column legend at the bottom-left of the figure.
-            # bbox_to_anchor is in figure coordinates when bbox_transform=fig1.transFigure.
-            # ncol=2 forces two columns; adjust bbox_to_anchor if you need a different offset.
+        if unique_handles:
             fig1.legend(unique_handles, unique_labels, prop=font_legend,
-                        loc='best', bbox_to_anchor=(0.49, 0.31),
-                        bbox_transform=fig1.transFigure, ncol=2, frameon=True)
-            # Slightly adjust subplot to avoid overlapping the legend or title
-            fig1.subplots_adjust(top=0.90, right=0.86)
-        else:
-            fig1.legend(unique_handles, unique_labels, prop=font_legend, ncol=2, frameon=True)
+                        loc='lower left', bbox_to_anchor=(0.02, 0.02),
+                        bbox_transform=ax1.transAxes, ncol=2, frameon=True)
 
         fig1.tight_layout()
         
@@ -1638,12 +1675,13 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         else:
             buffer_info = 'NoBuffer'
 
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         for i, fig in enumerate(figures):
             file_title = '_'.join(title.split()[:3])
-            file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get("stencil","")}_{plot_suffix}_{i}.png'
+            file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
             fig.savefig(file_name, dpi=dpi)
             if verbose:
-                print(f'Saved {i} figure: {file_name}')
+                print(f'Saved figure {i+1}/{len(figures)}: {file_name}')
 
     return figures
 
@@ -1969,14 +2007,15 @@ def distribution_check(arr, quantity, plot_params, induction_params,
                 buffer_info = 'NoBuffer'
 
             # Save analysis figure
-            file_name_analysis = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_analysis_{sim_info}_{buffer_info}_{snap_i}.png'
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_name_analysis = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_analysis_{sim_info}_{buffer_info}_{snap_i}_{timestamp}.png'
             fig_analysis.savefig(file_name_analysis, dpi=DPI)
             if verbose:
                 print(f'Saved analysis figure: {file_name_analysis}')
 
             # Save projection figure (only if generated)
             if not is_patches and fig_proj is not None:
-                file_name_proj = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_projections_{sim_info}_{buffer_info}_{snap_i}.png'
+                file_name_proj = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_projections_{sim_info}_{buffer_info}_{snap_i}_{timestamp}.png'
                 fig_proj.savefig(file_name_proj, dpi=DPI)
                 if verbose:
                     print(f'Saved projection figure: {file_name_proj}')
