@@ -12,9 +12,11 @@ from config import SCAN_PLOT_PARAMS as scan_plot_params
 from config import get_sim_characteristics
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
 from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
-from scripts.parallel_utils import process_iteration_with_logging
+from scripts.memory_utils import process_iteration_with_logging, MemoryMonitor, build_executor_kwargs
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
+import gc
+memory_monitor = MemoryMonitor(out_params)
 
 def _get_last_rad(rad_list):
     if not rad_list:
@@ -49,6 +51,8 @@ start_time = time.time()
 # ============================
 
 if __name__ == "__main__":
+    memory_monitor.start()
+    memory_monitor.log("startup", force=True)
     if out_params["parallel"]:
         print(f'**************************************************************')
         print(f"Running in parallel mode with {out_params['ncores']} cores")
@@ -79,6 +83,7 @@ if __name__ == "__main__":
             Rad.append(rad_i)
             Region_Coord.append(region_coord_i)
             Region_Size.append(region_size_i)
+        memory_monitor.log("after region build (parallel)", force=True)
         
         # Process all configured levels, one parallel batch per level
         for L, lvl in enumerate(ind_params["level"]):
@@ -98,15 +103,23 @@ if __name__ == "__main__":
             scan_meta_sim = []
             scan_meta_it = []
             scan_meta_idx = []
+            profile_indices = []  # Track which indices in grid_zeta have profiles
             first_iteration = True
+            iteration_counter = 0
 
             from concurrent.futures import ProcessPoolExecutor
             futures = []
-            with ProcessPoolExecutor(max_workers=out_params["ncores"]) as executor:
+            executor_kwargs = build_executor_kwargs(
+                out_params["ncores"],
+                out_params.get("max_tasks_per_child", None)
+            )
+            with ProcessPoolExecutor(**executor_kwargs) as executor:
                 for i, sims in enumerate(out_params["sims"]):
                     it_list = out_params["it"][i]
-                    profile_idx_set = set([it_list[k] for k in prof_plot_params["it_indx"] if -len(it_list) <= k < len(it_list)])
-                    debug_idx_set = set([it_list[k] for k in debug_params["it_indx"] if -len(it_list) <= k < len(it_list)])
+                    profile_it_indx = prof_plot_params.get("it_indx", [-1])
+                    debug_it_indx = debug_params.get("it_indx", [-1])
+                    profile_idx_set = set([it_list[k] for k in profile_it_indx if -len(it_list) <= k < len(it_list)])
+                    debug_idx_set = set([it_list[k] for k in debug_it_indx if -len(it_list) <= k < len(it_list)])
                     for j, it in enumerate(it_list):
                         profiles_flag = bool(ind_params["profiles"]) and (it in profile_idx_set)
 
@@ -160,10 +173,12 @@ if __name__ == "__main__":
                             projection=ind_params["projection"],
                             percentiles=ind_params["percentiles"],
                             percentile_levels=ind_params["percentile_levels"],
+                            divergence_filter=ind_params.get("divergence_filter"),
                             debug_params=debug_params_flag,
                             return_vectorial=ind_params["return_vectorial"],
                             return_induction=ind_params["return_induction"],
                             return_induction_energy=ind_params["return_induction_energy"],
+                            gc_worker_end=out_params.get("memory_profiling", {}).get("gc_worker_end", False),
                             verbose=out_params["verbose"],
                         )
                         futures.append(fut)
@@ -239,7 +254,11 @@ if __name__ == "__main__":
                         for key in induction_test_energy_integral.keys():
                             all_induction_test_energy_integral[key].append(induction_test_energy_integral[key])
                     if all_induction_energy_profiles is not None and induction_energy_profiles is not None:
+                        # Track that this iteration index has profiles
+                        profile_indices.append(iter_idx)
                         for key in induction_energy_profiles.keys():
+                            if key not in all_induction_energy_profiles:
+                                all_induction_energy_profiles[key] = []
                             all_induction_energy_profiles[key].append(induction_energy_profiles[key])
                     if all_induction_uniform is not None and induction_uniform is not None:
                         for key in induction_uniform.keys():
@@ -257,6 +276,17 @@ if __name__ == "__main__":
                             scan_meta_sim.append(sim_name)
                             scan_meta_it.append(iteration)
                             scan_meta_idx.append(iter_idx)
+
+                    iteration_counter += 1
+                    if memory_monitor.gc_main_each_iteration:
+                        gc.collect()
+                    memory_monitor.log(
+                        f"parallel level={lvl} sim={sim_name} it={iteration} processed={iteration_counter}",
+                        force=memory_monitor.should_log_iteration(iteration_counter)
+                    )
+                    del data, vectorial, induction, magnitudes, induction_energy
+                    del induction_energy_integral, induction_test_energy_integral
+                    del induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
             # Plotting and post-processing driven by config for this level
             if ind_params["energy_evolution"] and all_induction_energy_integral is not None:
@@ -282,9 +312,9 @@ if __name__ == "__main__":
                 # Determine how many snapshots have profiles calculated
                 num_snapshots_with_profiles = len(all_induction_energy_profiles.get('clus_b2_profile', []))
                 if num_snapshots_with_profiles > 0:
-                    # Adjust it_indx to plot all snapshots with profiles
+                    # Use the tracked profile indices to correctly map to grid_zeta
                     prof_plot_params_adjusted = prof_plot_params.copy()
-                    prof_plot_params_adjusted['it_indx'] = list(range(num_snapshots_with_profiles))
+                    prof_plot_params_adjusted['it_indx'] = profile_indices
                     plot_radial_profiles(
                         all_induction_energy_profiles,
                         prof_plot_params_adjusted, plot_ind_params,
@@ -387,6 +417,10 @@ if __name__ == "__main__":
                             folder=out_params["image_folder"]
                         )
 
+            if memory_monitor.gc_main_each_iteration:
+                gc.collect()
+            memory_monitor.log(f"after parallel level={lvl} post-processing", force=True)
+
     else:
         for L in range(len(ind_params["level"])):
             print(f'*************************')
@@ -418,6 +452,7 @@ if __name__ == "__main__":
                 Rad.append(rad_i)
                 Region_Coord.append(region_coord_i)
                 Region_Size.append(region_size_i)
+            memory_monitor.log(f"after region build (serial, level={ind_params['level'][L]})", force=True)
             
             # Initialize result dictionaries before the loop (conditional based on config)
             all_data = {}
@@ -435,15 +470,19 @@ if __name__ == "__main__":
             scan_meta_sim = []
             scan_meta_it = []
             scan_meta_idx = []
+            profile_indices = []
 
             # Flag to track first iteration for dictionary initialization
             first_iteration = True
+            iteration_counter = 0
             
             # Process each iteration in serial
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 it_list = out_params["it"][i]
-                profile_idx_set = set([it_list[k] for k in prof_plot_params["it_indx"] if -len(it_list) <= k < len(it_list)])
-                debug_idx_set = set([it_list[k] for k in debug_params["it_indx"] if -len(it_list) <= k < len(it_list)])
+                profile_it_indx = prof_plot_params.get("it_indx", [-1])
+                debug_it_indx = debug_params.get("it_indx", [-1])
+                profile_idx_set = set([it_list[k] for k in profile_it_indx if -len(it_list) <= k < len(it_list)])
+                debug_idx_set = set([it_list[k] for k in debug_it_indx if -len(it_list) <= k < len(it_list)])
                 for j, it in enumerate(it_list):
                     
                     # Print header before processing
@@ -503,10 +542,12 @@ if __name__ == "__main__":
                         projection=ind_params["projection"],
                         percentiles=ind_params["percentiles"],
                         percentile_levels=ind_params["percentile_levels"],
+                        divergence_filter=ind_params.get("divergence_filter"),
                         debug_params=debug_params_flag,
                         return_vectorial=ind_params["return_vectorial"],
                         return_induction=ind_params["return_induction"],
                         return_induction_energy=ind_params["return_induction_energy"],
+                        gc_worker_end=out_params.get("memory_profiling", {}).get("gc_worker_end", False),
                         verbose=out_params["verbose"])
                     
                     # Initialize dictionaries on first iteration
@@ -589,7 +630,10 @@ if __name__ == "__main__":
                     
                     if induction_energy_profiles is not None:
                         for key in induction_energy_profiles.keys():
+                            if key not in all_induction_energy_profiles:
+                                all_induction_energy_profiles[key] = []
                             all_induction_energy_profiles[key].append(induction_energy_profiles[key])
+                        profile_indices.append(iter_idx)
                     
                     if diver_B_percentiles is not None:
                         for key in diver_B_percentiles.keys():
@@ -608,6 +652,17 @@ if __name__ == "__main__":
                             scan_meta_sim.append(sims)
                             scan_meta_it.append(it)
                             scan_meta_idx.append(iter_idx)
+
+                    iteration_counter += 1
+                    if memory_monitor.gc_main_each_iteration:
+                        gc.collect()
+                    memory_monitor.log(
+                        f"serial level={ind_params['level'][L]} sim={sims} it={it} processed={iteration_counter}",
+                        force=memory_monitor.should_log_iteration(iteration_counter)
+                    )
+                    del data, vectorial, induction, magnitudes, induction_energy
+                    del induction_energy_integral, induction_test_energy_integral
+                    del induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
             # field = np.abs(np.sqrt(induction_uniform['uniform_MIE_compres_x']**2 + 
             #                 induction_uniform['uniform_MIE_compres_y']**2 + 
@@ -654,7 +709,7 @@ if __name__ == "__main__":
                 if num_snapshots_with_profiles > 0:
                     # Adjust it_indx to plot all snapshots with profiles
                     prof_plot_params_adjusted = prof_plot_params.copy()
-                    prof_plot_params_adjusted['it_indx'] = list(range(num_snapshots_with_profiles))
+                    prof_plot_params_adjusted['it_indx'] = profile_indices
                     plot_radial_profiles(
                         all_induction_energy_profiles,
                         prof_plot_params_adjusted, plot_ind_params,
@@ -762,6 +817,10 @@ if __name__ == "__main__":
                             save=debug_params["scan_animation"]["save"],
                             folder=out_params["image_folder"]
                         )
+
+            if memory_monitor.gc_main_each_iteration:
+                gc.collect()
+            memory_monitor.log(f"after serial level={ind_params['level'][L]} post-processing", force=True)
                     
             
             # Test evolution (using the test parameters)
@@ -794,6 +853,10 @@ if out_params["save"] == True:
     print(f"Results saved in {out_params['data_folder']}")
 else:
     print("Results not saved")
+
+memory_monitor.log("final", force=True)
+memory_monitor.stop()
+memory_monitor.summary(out_params)
     
 end_time = time.time()
 elapsed_time = end_time - start_time

@@ -28,6 +28,7 @@ from scipy.special import gamma
 from matplotlib import pyplot as plt
 import pdb
 import multiprocessing as mp
+import gc
 np.set_printoptions(linewidth=200)
 
 
@@ -779,6 +780,117 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
         log_message('Time for vector calculations in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_vector))), tag="vector", level=1)
         
     return results
+
+
+def _debug_enabled(debug_params):
+    """Check if any debug module is enabled (not counting percentile_params or other config)."""
+    if not isinstance(debug_params, dict):
+        return False
+    # Only check known debug modules, NOT config fields like percentile_params
+    known_debug_modules = {"buffer", "divergence", "field_analysis", "scan_animation"}
+    for key, value in debug_params.items():
+        if key in known_debug_modules and isinstance(value, dict) and value.get("enabled", False):
+            return True
+    return False
+
+
+def _collect_divergence_values(diver_B, kept_patches=None, use_abs=True, exclude_zeros=True):
+    vals_list = []
+    if diver_B is None:
+        return np.array([])
+    for i, patch in enumerate(diver_B):
+        if kept_patches is not None and not kept_patches[i]:
+            continue
+        if patch is None:
+            continue
+        if np.isscalar(patch):
+            val = float(patch)
+            if use_abs:
+                val = abs(val)
+            if exclude_zeros and val == 0.0:
+                continue
+            if np.isfinite(val):
+                vals_list.append(np.array([val], dtype=float))
+            continue
+        arr = np.asarray(patch, dtype=float)
+        if use_abs:
+            arr = np.abs(arr)
+        arr = arr[np.isfinite(arr)]
+        if exclude_zeros:
+            arr = arr[arr != 0.0]
+        if arr.size:
+            vals_list.append(arr.ravel())
+    if vals_list:
+        return np.concatenate(vals_list)
+    return np.array([])
+
+
+def filter_divergence_outliers(diver_B, kept_patches=None, method="mask",
+                                percentile=99, use_abs=True, exclude_zeros=True,
+                                verbose=False):
+    method = method.lower()
+    if method not in ("mask", "clip"):
+        raise ValueError("divergence_filter method must be 'mask' or 'clip'.")
+
+    vals = _collect_divergence_values(
+        diver_B,
+        kept_patches=kept_patches,
+        use_abs=use_abs,
+        exclude_zeros=exclude_zeros
+    )
+    if vals.size == 0:
+        if verbose:
+            log_message(
+                f"Divergence filter: NO values to filter (empty array after collection)",
+                tag="divergence_filter",
+                level=1
+            )
+        return diver_B, None
+
+    threshold = float(np.percentile(vals, percentile))
+    if verbose:
+        frac = float(np.mean(vals > threshold)) if vals.size else 0.0
+        log_message(
+            f"Divergence filter: method={method}, percentile={percentile}, threshold={threshold:.3e}, outlier_frac={frac:.3f}",
+            tag="divergence_filter",
+            level=1
+        )
+
+    filtered = []
+    for i, patch in enumerate(diver_B):
+        if patch is None:
+            filtered.append(patch)
+            continue
+        if kept_patches is not None and not kept_patches[i]:
+            filtered.append(0 if np.isscalar(patch) else np.zeros_like(patch))
+            continue
+        if np.isscalar(patch):
+            val = float(patch)
+            if method == "clip":
+                if use_abs:
+                    val = max(min(val, threshold), -threshold)
+                else:
+                    val = min(val, threshold)
+            else:
+                keep = abs(val) <= threshold if use_abs else val <= threshold
+                val = val if keep else 0.0
+            filtered.append(val)
+            continue
+        arr = np.asarray(patch)
+        if method == "clip":
+            if use_abs:
+                arr = np.clip(arr, -threshold, threshold)
+            else:
+                arr = np.minimum(arr, threshold)
+        else:
+            if use_abs:
+                mask = np.abs(arr) <= threshold
+            else:
+                mask = arr <= threshold
+            arr = np.where(mask, arr, 0)
+        filtered.append(arr)
+
+    return filtered, threshold
     
 
 def induction_equation(components, vectorial_quantities,
@@ -1771,9 +1883,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                     parent=False, parent_interpol=None,
                     bitformat=np.float32, mag=False, sim_characteristics=None,
                     energy_evolution=True, profiles=True, projection=True, percentiles=True, 
-                    percentile_levels=(95, 90, 75, 50, 25), debug_params=None,
+                    percentile_levels=(95, 90, 75, 50, 25), divergence_filter=None, debug_params=None,
                     return_vectorial=False, return_induction=False, return_induction_energy=False,
-                    verbose=False):
+                    gc_worker_end=False, verbose=False):
     '''
     Processes a single iteration of the cosmological magnetic induction equation calculations.
     
@@ -1815,6 +1927,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - projection: boolean to compute uniform projection (default is True)
         - percentiles: boolean to compute percentile thresholds (default is True)
         - percentile_levels: tuple of percentile thresholds to compute (default is (100, 90, 75, 50, 25))
+        - divergence_filter: dict with divergence filtering settings (default is None)
         - debug_params: dictionary with debug configuration (default is None, uses empty dict)
         - return_vectorial: boolean to return vectorial quantities dictionary (default is False)
         - return_induction: boolean to return induction equation dictionary (default is False)
@@ -1995,6 +2108,37 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 level=1
             )
 
+    diver_B_raw = vectorial.get('diver_B')
+    if divergence_filter is None:
+        divergence_filter = {}
+
+    if divergence_filter.get("enabled", False) and not _debug_enabled(debug_params):
+        method = divergence_filter.get("method", "mask")
+        percentile = divergence_filter.get("percentile", 99)
+        use_abs = divergence_filter.get("use_abs", True)
+        exclude_zeros = divergence_filter.get("exclude_zeros", True)
+        if verbose:
+            log_message(
+                f"Divergence filter: Attempting to filter with method={method}, percentile={percentile}",
+                tag="divergence_filter",
+                level=1
+            )
+        vectorial['diver_B'], _ = filter_divergence_outliers(
+            vectorial.get('diver_B'),
+            kept_patches=data['clus_kp'],
+            method=method,
+            percentile=percentile,
+            use_abs=use_abs,
+            exclude_zeros=exclude_zeros,
+            verbose=verbose
+        )
+    elif verbose and divergence_filter.get("enabled", False) and _debug_enabled(debug_params):
+        log_message(
+            f"Divergence filter: SKIPPED (debug mode active)",
+            tag="divergence_filter",
+            level=1
+        )
+
     # Magnetic Induction Equation
     
     ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
@@ -2128,7 +2272,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         exclude_zeros = percentile_params.get("exclude_zeros", True)
         
         diver_B_percentiles = compute_percentile_thresholds(
-            field_numerator=vectorial['diver_B'],
+            field_numerator=diver_B_raw,
             field_denominator=data['clus_B'],
             scale_factor=resolution,
             cr0amr=data['clus_cr0amr'],
@@ -2215,5 +2359,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     
     if verbose == True:
         log_message(f'Time for processing iteration {it} in simulation {sims}: {strftime("%H:%M:%S", gmtime(total_time_Total))}', tag="pipeline", level=1)
+
+    if gc_worker_end:
+        gc.collect()
 
     return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields

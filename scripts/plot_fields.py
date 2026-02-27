@@ -29,7 +29,62 @@ import time
 from time import strftime
 from time import gmtime
 import sys
+import hashlib
 from scripts.units import *
+
+def safe_filename(filepath, max_length=255, verbose=False):
+    """
+    Ensures the filename doesn't exceed the filesystem limit by shortening it intelligently.
+    
+    Args:
+        - filepath: Full path to the file
+        - max_length: Maximum allowed length for the filename (default 255 for most filesystems)
+        - verbose: Print information about filename shortening
+    
+    Returns:
+        - Safe filepath with shortened filename if necessary
+    
+    Author: Marco Molina
+    """
+    directory = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+    
+    # If filename is within limit, return as is
+    if len(filename) <= max_length:
+        return filepath
+    
+    # Extract extension
+    name, ext = os.path.splitext(filename)
+    
+    # Calculate how much we need to shorten
+    # Reserve space for extension, underscore, and 8-char hash
+    available_length = max_length - len(ext) - 9
+    
+    if available_length < 20:
+        # If still too long, use a very short name with hash
+        hash_obj = hashlib.md5(name.encode())
+        short_hash = hash_obj.hexdigest()[:16]
+        shortened_name = f"plot_{short_hash}"
+    else:
+        # Keep the beginning (important info like run name) and add hash at the end
+        # Try to preserve the first ~60% of available space for the start
+        keep_start = int(available_length * 0.6)
+        
+        # Add a hash to maintain uniqueness
+        hash_obj = hashlib.md5(name.encode())
+        short_hash = hash_obj.hexdigest()[:8]
+        
+        shortened_name = f"{name[:keep_start]}_{short_hash}"
+    
+    new_filename = shortened_name + ext
+    new_filepath = os.path.join(directory, new_filename)
+    
+    if verbose:
+        print(f"Warning: Filename too long ({len(filename)} chars). Shortened to {len(new_filename)} chars.")
+        print(f"Original: {filename}")
+        print(f"Shortened: {new_filename}")
+    
+    return new_filepath
         
 def zoom_animation_3D(arr, size, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Zoom', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
@@ -753,6 +808,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         file_title = '_'.join(base_title.split()[:3])
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}_{boundary_info}_{timestamp}.png"
+        filename = safe_filename(filename, verbose=verbose)
         fig.savefig(filename, dpi=dpi)
         if verbose:
             print(f'Percentile evolution plot saved as: {filename}')
@@ -1138,8 +1194,9 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save main plot
         file_title = '_'.join(title.split()[:3])
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename1 = f'{folder}/{run}_{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}_{timestamp}.png'
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename1 = f'{folder}/{run}_{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}.png'
+        filename1 = safe_filename(filename1, verbose=verbose)
         fig1.savefig(filename1, dpi=dpi)
         
         if verbose:
@@ -1147,7 +1204,8 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save volume plot if created
         if volume_evolution:
-            filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}_{timestamp}.png'
+            filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}.png'
+            filename2 = safe_filename(filename2, verbose=verbose)
             fig2.savefig(filename2, dpi=dpi)
             
             if verbose:
@@ -1296,6 +1354,13 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     factor_F = induction_params.get('F', 1.0)
     region = induction_params.get('region', None)
     units = induction_params.get('units', None)
+    
+    # Use string identifiers for axis types to avoid collisions when values are equal
+    AXIS_LEFT = 'left'      # Energy/Kinetic
+    AXIS_RIGHT = 'right'    # Induction  
+    AXIS_DENSITY = 'density' # Density
+    
+    # Map axis types to their scaling factors
     if units is None:
         units_y_1 = 1.0
         units_y_2 = 1.0
@@ -1352,19 +1417,19 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
 
     # Compute plotted arrays with units (each is a list indexed by snapshots)
     def safe_get(key):
-        return profile_data.get(key, [np.zeros(nbins) for _ in it_indx])
+        return profile_data.get(key, [np.zeros(nbins) for _ in range(len(it_indx))])
 
-    kinetic_energy_profile = [units_y_2 * safe_get('kinetic_energy_profile')[i] for i in it_indx]
-    clus_b2_profile = [units_y_2 * safe_get('clus_b2_profile')[i] for i in it_indx]
-    clus_rho_rho_b_profile = [units_y_3 * safe_get('clus_rho_rho_b_profile')[i] for i in it_indx]
-    diver_profile = [units_y_1 * safe_get('MIE_diver_B2_profile')[i] for i in it_indx]
-    compres_profile = [units_y_1 * safe_get('MIE_compres_B2_profile')[i] for i in it_indx]
-    stretch_profile = [units_y_1 * safe_get('MIE_stretch_B2_profile')[i] for i in it_indx]
-    advec_profile = [units_y_1 * safe_get('MIE_advec_B2_profile')[i] for i in it_indx]
-    drag_profile = [units_y_1 * safe_get('MIE_drag_B2_profile')[i] for i in it_indx]
-    total_profile = [units_y_1 * safe_get('MIE_total_B2_profile')[i] for i in it_indx]
-    ind_b2_profile = [units_y_1 * safe_get('ind_b2_profile')[i] for i in it_indx]
-    # post_ind_b2_profile = [units_y_1 * safe_get('post_ind_b2_profile')[i] for i in it_indx]
+    kinetic_energy_profile = [units_y_2 * safe_get('kinetic_energy_profile')[i] for i in range(len(it_indx))]
+    clus_b2_profile = [units_y_2 * safe_get('clus_b2_profile')[i] for i in range(len(it_indx))]
+    clus_rho_rho_b_profile = [units_y_3 * safe_get('clus_rho_rho_b_profile')[i] for i in range(len(it_indx))]
+    diver_profile = [units_y_1 * safe_get('MIE_diver_B2_profile')[i] for i in range(len(it_indx))]
+    compres_profile = [units_y_1 * safe_get('MIE_compres_B2_profile')[i] for i in range(len(it_indx))]
+    stretch_profile = [units_y_1 * safe_get('MIE_stretch_B2_profile')[i] for i in range(len(it_indx))]
+    advec_profile = [units_y_1 * safe_get('MIE_advec_B2_profile')[i] for i in range(len(it_indx))]
+    drag_profile = [units_y_1 * safe_get('MIE_drag_B2_profile')[i] for i in range(len(it_indx))]
+    total_profile = [units_y_1 * safe_get('MIE_total_B2_profile')[i] for i in range(len(it_indx))]
+    ind_b2_profile = [units_y_1 * safe_get('ind_b2_profile')[i] for i in range(len(it_indx))]
+    # post_ind_b2_profile = [units_y_1 * safe_get('post_ind_b2_profile')[i] for i in range(len(it_indx))]
 
     
     # Prepare data based on plot type
@@ -1411,21 +1476,21 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     
     # Components configuration: (data_list, label, color, lw, linestyle, unit)
     components_configs = [
-        # Density (units_y_3)
-        (clus_rho_rho_b_profile, 'Density Profile', "#2ca02c", line1, '-', units_y_3),
-        # Energies (units_y_2)
-        (kinetic_energy_profile, 'Kinetic Energy Density', "#17becf", line1, '-', units_y_2),
-        (clus_b2_profile, 'Magnetic Energy Density', "#1f77b4", line1, '-', units_y_2),
-        # Induction totals (units_y_1)
-        (total_profile, '...from Compact Induction', "#d62728", line1, '-', units_y_1),
-        (ind_b2_profile, '...from Itemize Induction', "#ff7f0e", line1, '--', units_y_1),
-        # (post_ind_b2_profile, '...from Post-Itemize Induction', "#ffbb78", line1, '-.', units_y_1),
-        # Individual components (units_y_1)
-        (compres_profile, 'Compression', "#9467bd", line2, '--', units_y_1),
-        (stretch_profile, 'Stretching', "#ff9896", line2, '--', units_y_1),
-        (advec_profile, 'Advection', "#e377c2", line2, '--', units_y_1),
-        (diver_profile, 'Divergence', "#c5b0d5", line2, '--', units_y_1),
-        (drag_profile, 'Cosmic Drag', "#7f7f7f", line2, '--', units_y_1)
+        # Density (AXIS_DENSITY)
+        (clus_rho_rho_b_profile, 'Density Profile', "#2ca02c", line1, '-', AXIS_DENSITY),
+        # Energies (AXIS_LEFT)
+        (kinetic_energy_profile, 'Kinetic Energy Density', "#17becf", line1, '-', AXIS_LEFT),
+        (clus_b2_profile, 'Magnetic Energy Density', "#1f77b4", line1, '-', AXIS_LEFT),
+        # Induction totals (AXIS_RIGHT)
+        (total_profile, '...from Compact Induction', "#d62728", line1, '-', AXIS_RIGHT),
+        (ind_b2_profile, '...from Itemize Induction', "#ff7f0e", line1, '--', AXIS_RIGHT),
+        # (post_ind_b2_profile, '...from Post-Itemize Induction', "#ffbb78", line1, '-.', AXIS_RIGHT),
+        # Individual components (AXIS_RIGHT)
+        (compres_profile, 'Compression', "#9467bd", line2, '--', AXIS_RIGHT),
+        (stretch_profile, 'Stretching', "#ff9896", line2, '--', AXIS_RIGHT),
+        (advec_profile, 'Advection', "#e377c2", line2, '--', AXIS_RIGHT),
+        (diver_profile, 'Divergence', "#c5b0d5", line2, '--', AXIS_RIGHT),
+        (drag_profile, 'Cosmic Drag', "#7f7f7f", line2, '--', AXIS_RIGHT)
     ]
 
     # Decide which components have data (per snapshot we check existence)
@@ -1546,7 +1611,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         unique_handles.append(neg_note)
         unique_labels.append('Negative Interval')
 
-        for (data_list, label, color, lw, ls, unit) in components_configs:
+        for (data_list, label, color, lw, ls, axis_type) in components_configs:
             if not has_nonzero(data_list, snap_i):
                 continue
 
@@ -1559,17 +1624,30 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                 if plot_type == 'interpolated' and y.size == r.size and r_pro.size != r.size:
                     y = np.interp(r_pro, r, y)
             
-            # Choose axis: left for energy/density (units_y_2), right for induction (units_y_1), density (units_y_3)
-            if unit == units_y_1:
+            # Choose axis: left for energy/kinetic, right for induction, density for density
+            if axis_type == AXIS_RIGHT:
                 # unified signed plotting on right axis
                 _ = plot_signed(ax_right, r_pro, y, lw, ls, color, label)
-                y_right_vals.append(np.abs(np.asarray(y)))
-            elif unit == units_y_3:
+                # For limits calculation, collect absolute values (plot_signed uses abs clamped to epsilon)
+                eps = induction_params.get('epsilon', 1e-30)
+                y_clean = np.asarray(y)
+                y_clean = y_clean[np.isfinite(y_clean)]
+                if y_clean.size > 0:
+                    # Apply the same transformation as plot_signed: abs + clamp to epsilon
+                    y_clamped = np.maximum(np.abs(y_clean), eps)
+                    y_right_vals.append(y_clamped)
+            elif axis_type == AXIS_DENSITY:
                 ax_density.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
-                y_density_vals.append(np.asarray(y))
-            else:
+                y_clean = np.asarray(y)
+                y_clean = y_clean[np.isfinite(y_clean)]
+                if y_clean.size > 0:
+                    y_density_vals.append(y_clean)
+            else:  # AXIS_LEFT
                 ax1.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
-                y_left_vals.append(np.asarray(y))
+                y_clean = np.asarray(y)
+                y_clean = y_clean[np.isfinite(y_clean)]
+                if y_clean.size > 0:
+                    y_left_vals.append(y_clean)
             
         # Axis scales and labels
         if x_scale == 'log':
@@ -1581,12 +1659,45 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         if xlim is not None:
             ax1.set_xlim(xlim[0], xlim[1])
 
-        # y scales
+        # y scales - set BEFORE establishing limits
         if y_scale == 'log':
             ax1.set_yscale('log')
             ax_right.set_yscale('log')
             ax_density.set_yscale('log')
 
+        # Set y-axis limits BEFORE labels to ensure proper scaling
+        if ylim is not None:
+            ax1.set_ylim(ylim[0], ylim[1])
+        else:
+            if y_left_vals:
+                y_left_auto = _auto_limits(np.concatenate(y_left_vals), y_scale)
+                if y_left_auto is not None:
+                    # Add extra space at bottom for legend (2 orders of magnitude lower)
+                    if y_scale == 'log':
+                        y_min_adjusted = y_left_auto[0] / 100.0
+                    else:
+                        span = y_left_auto[1] - y_left_auto[0]
+                        y_min_adjusted = y_left_auto[0] - 2 * span
+                    ax1.set_ylim(y_min_adjusted, y_left_auto[1])
+        
+        if rylim is not None:
+            ax_right.set_ylim(rylim[0], rylim[1])
+        else:
+            if y_right_vals:
+                y_right_concat = np.concatenate(y_right_vals)
+                y_right_auto = _auto_limits(y_right_concat, y_scale)
+                if y_right_auto is not None:
+                    ax_right.set_ylim(y_right_auto[0], y_right_auto[1])
+        
+        if dylim is not None:
+            ax_density.set_ylim(dylim[0], dylim[1])
+        else:
+            if y_density_vals:
+                y_density_auto = _auto_limits(np.concatenate(y_density_vals), y_scale)
+                if y_density_auto is not None:
+                    ax_density.set_ylim(y_density_auto[0], y_density_auto[1])
+
+        # Now set labels
         if units == energy_to_erg:
             ax1.set_ylabel('Energy Density (erg/$Mpc^{3}$)')
             ax_right.set_ylabel('Induction Density (erg/$Mpc^{3}$/s)')
@@ -1599,28 +1710,6 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
             ax1.set_ylabel('Energy Density (arb. units)')
             ax_right.set_ylabel('Induction Density (arb. units / s)')
             ax_density.set_ylabel('Density (arb. units)')
-
-        if ylim is not None:
-            ax1.set_ylim(ylim[0], ylim[1])
-        else:
-            if y_left_vals:
-                y_left_auto = _auto_limits(np.concatenate(y_left_vals), y_scale)
-                if y_left_auto is not None:
-                    ax1.set_ylim(y_left_auto[0], y_left_auto[1])
-        if rylim is not None:
-            ax_right.set_ylim(rylim[0], rylim[1])
-        else:
-            if y_right_vals:
-                y_right_auto = _auto_limits(np.concatenate(y_right_vals), y_scale)
-                if y_right_auto is not None:
-                    ax_right.set_ylim(y_right_auto[0], y_right_auto[1])
-        if dylim is not None:
-            ax_density.set_ylim(dylim[0], dylim[1])
-        else:
-            if y_density_vals:
-                y_density_auto = _auto_limits(np.concatenate(y_density_vals), y_scale)
-                if y_density_auto is not None:
-                    ax_density.set_ylim(y_density_auto[0], y_density_auto[1])
             
         ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
 
@@ -1642,7 +1731,39 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                         loc='lower left', bbox_to_anchor=(0.02, 0.02),
                         bbox_transform=ax1.transAxes, ncol=2, frameon=True)
 
+        # Call tight_layout first, then reapply limits to ensure they stick
         fig1.tight_layout()
+        
+        # Reapply y-limits after tight_layout to ensure they are not overridden
+        if ylim is not None:
+            ax1.set_ylim(ylim[0], ylim[1])
+        else:
+            if y_left_vals:
+                y_left_auto = _auto_limits(np.concatenate(y_left_vals), y_scale)
+                if y_left_auto is not None:
+                    # Add extra space at bottom for legend (2 orders of magnitude lower)
+                    if y_scale == 'log':
+                        y_min_adjusted = y_left_auto[0] / 100.0
+                    else:
+                        span = y_left_auto[1] - y_left_auto[0]
+                        y_min_adjusted = y_left_auto[0] - 2 * span
+                    ax1.set_ylim(y_min_adjusted, y_left_auto[1])
+        
+        if rylim is not None:
+            ax_right.set_ylim(rylim[0], rylim[1])
+        else:
+            if y_right_vals:
+                y_right_auto = _auto_limits(np.concatenate(y_right_vals), y_scale)
+                if y_right_auto is not None:
+                    ax_right.set_ylim(y_right_auto[0], y_right_auto[1])
+        
+        if dylim is not None:
+            ax_density.set_ylim(dylim[0], dylim[1])
+        else:
+            if y_density_vals:
+                y_density_auto = _auto_limits(np.concatenate(y_density_vals), y_scale)
+                if y_density_auto is not None:
+                    ax_density.set_ylim(y_density_auto[0], y_density_auto[1])
         
         figures.append(fig1)
         
@@ -1679,6 +1800,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         for i, fig in enumerate(figures):
             file_title = '_'.join(title.split()[:3])
             file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
+            file_name = safe_filename(file_name, verbose=verbose)
             fig.savefig(file_name, dpi=dpi)
             if verbose:
                 print(f'Saved figure {i+1}/{len(figures)}: {file_name}')
@@ -2009,6 +2131,7 @@ def distribution_check(arr, quantity, plot_params, induction_params,
             # Save analysis figure
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_name_analysis = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_analysis_{sim_info}_{buffer_info}_{snap_i}_{timestamp}.png'
+            file_name_analysis = safe_filename(file_name_analysis, verbose=verbose)
             fig_analysis.savefig(file_name_analysis, dpi=DPI)
             if verbose:
                 print(f'Saved analysis figure: {file_name_analysis}')
@@ -2016,6 +2139,7 @@ def distribution_check(arr, quantity, plot_params, induction_params,
             # Save projection figure (only if generated)
             if not is_patches and fig_proj is not None:
                 file_name_proj = f'{folder}/{run}_{title.replace(" ","_")}_{quantity}_projections_{sim_info}_{buffer_info}_{snap_i}_{timestamp}.png'
+                file_name_proj = safe_filename(file_name_proj, verbose=verbose)
                 fig_proj.savefig(file_name_proj, dpi=DPI)
                 if verbose:
                     print(f'Saved projection figure: {file_name_proj}')

@@ -28,7 +28,7 @@ IND_PARAMS = {
     "nmaz": [128, 128],
     "size": [40, 40], # Size of the box in Mpc
     "npalev": [40000, 40000],
-    "nlevels": [7, 9],
+    "nlevels": [7],
     "namrx": [32, 32],
     "namry": [32, 32],
     "namrz": [32, 32],
@@ -44,8 +44,8 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [4], # Max. level of the AMR grid to be read
-    "up_to_level": [4], # AMR level up to which calculate
+    "level": [7], # Max. level of the AMR grid to be read
+    "up_to_level": [7], # AMR level up to which calculate
     # "level": [9], # Max. level of the AMR grid to be read
     # "up_to_level": [9], # AMR level up to which calculate
     "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
@@ -68,7 +68,7 @@ IND_PARAMS = {
     "drag": True, # Process the drag induction component
     "total": True, # Process the total induction component
     "mag": False, # Calculate magnetic induction components magnitudes
-    "energy_evolution": False, # Calculate the evolution of the energy budget
+    "energy_evolution": True, # Calculate the evolution of the energy budget
     "evolution_type": 'total', # Type of evolution to calculate (total or differential)
     "derivative": 'central', # Derivative to use for the evolution (implicit, central, RK or rate)
     "profiles": True, # Calculate the profiles of the induction components
@@ -76,6 +76,13 @@ IND_PARAMS = {
     "A2U": False, # Transform the AMR grid to a uniform grid
     "percentiles": False, # Calculate percentile thresholds of the magnetic field divergence
     "percentile_levels": (95, 90, 75, 50, 25), # Percentile thresholds to compute
+    "divergence_filter": {
+        "enabled": True, # Whether to apply a filter to the divergence field based on percentile thresholds
+        "method": "mask", # "mask" or "clip" for masking or clipping values above the threshold
+        "percentile": 99, # Percentile threshold to apply for the filter (if enabled)
+        "use_abs": True, # Whether to use absolute values when applying the percentile threshold (recommended)
+        "exclude_zeros": True # Whether to exclude zero values when calculating the percentile threshold (recommended)
+    },
     "return_vectorial": False, # Return the vectorial components of the induction terms
     "return_induction": False, # Return the induction terms arrays
     "return_induction_energy": False, # Return the induction energy terms arrays
@@ -93,25 +100,44 @@ OUTPUT_PARAMS = {
     "save": True,
     "verbose": True,
     "save_terminal": True,  # Save terminal output to file
-    "bitformat": np.float32,
-    # "bitformat": np.float64,
+    # "bitformat": np.float32,
+    "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 4, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
+    # Optional empirical correction for memory estimator (1.0 = no correction).
+    # Increase (e.g. 1.3-2.0) if observed peak RAM is consistently above estimated RAM.
+    "memory_safety_factor": 1.88,
+    # Optional runtime RAM profiling in main.py
+    "memory_profiling": {
+        "enabled": False,
+        "log_interval": 1,       # Log every N processed snapshots
+        "include_children": True, # Include worker processes (parallel mode) in RAM accounting
+        "sample_seconds": 0.5,    # Sampling period for peak RAM tracking
+        "gc_main_each_iteration": True,  # Run gc.collect() in main process after each processed snapshot
+        "gc_worker_end": True     # Run gc.collect() inside each worker at end of process_iteration
+    },
+    # Recycle worker processes every N tasks in parallel mode to mitigate RAM growth
+    # (set to None to disable recycling).
+    "max_tasks_per_child": 1,
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_3_refine_profile',
-    # "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_29_evo_fix_def',
+    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_10_filter_divergence_evo_old_def',
+    # "run": f'MAGNAS_SSD_Evo_RAM_test_1_serial',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
-    # "sims": ["cluster_L40_p32_agn_sim_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
+    # "sims": ["box_L40_p32_128_l9_2026_full_box_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
     # "sims": ["cluster_B_low_res_paper_2020", "cluster_L40_p32_agn_sim_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [[1300], [500]], # For different redshift snap iterations analysis
-    "it": [1800],
+    # "it": [1700],
+    # "it": list(range(300, 601, 50)), # For different redshift snap iterations analysis
     # "it": list(range(1000, 2101, 50)) + [2119],
-    # "it": list(range(250, 2101, 50)) + [2119], # For different redshift snap iterations analysis
+    "it": list(range(250, 2101, 50)) + [2119], # For different redshift snap iterations analysis
     # "it": list(range(50, 2101, 50)) + [2119], # For different redshift snap iterations analysis
     "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    # "dir_DM": "/mnt/perdiu/scratch/",
+    # "dir_gas": "/mnt/perdiu/scratch/",
+    # "dir_grids": "/mnt/perdiu/scratch/",
     "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF/",
     "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX/",
     # "outdir": "/scratch/marcomol/output_files_PRIMAL_",
@@ -120,9 +146,8 @@ OUTPUT_PARAMS = {
     "rawdir": "raw_data_out/",
     "terminaldir": "terminal_output/",
     "ID1": "dynamo/",
-    # "ID2": "divergence_test_percentile_evo_def",
     "ID2": "divergence_deep_test",
-    # "ID2": "profiles_test",
+    # "ID2": "RAM_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
 
@@ -158,7 +183,7 @@ SIM_CHARACTERISTICS = {
         "is_cooling": False,      # This simulation has NO cooling (no temp/metalicity in file)
         "is_mascletB": True,      # This simulation has magnetic fields (Bx, By, Bz in file)
     },
-    "cluster_L40_p32_agn_sim_7_bis": {
+    "box_L40_p32_128_l9_2026_full_box_7_bis": {
         "is_cooling": True,       # This simulation HAS cooling (temp/metalicity in file)
         "is_mascletB": True,      # This simulation has magnetic fields (Bx, By, Bz in file)
     },
@@ -176,6 +201,7 @@ EVO_PLOT_PARAMS = {
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log',
+    # 'xlim': [10, 0], # None for auto
     'xlim': [2.5, 0], # None for auto
     # 'xlim': None, # None for auto
     # 'ylim': [1e57, 1e60], # For the test
@@ -195,7 +221,7 @@ EVO_PLOT_PARAMS = {
 }
 
 PROFILE_PLOT_PARAMS = {
-    'it_indx': [0],
+    'it_indx': [-1],
     # 'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
     # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
     'x_scale': 'log', # 'lin' or 'log'
@@ -206,7 +232,7 @@ PROFILE_PLOT_PARAMS = {
     'dylim': None, # None for auto
     # 'xlim': [5e-3,1e0], # None for auto
     # 'ylim': [3e53,1e65], # None for auto
-    # 'rylim': [3e39,3e47], # None for auto
+    # 'rylim': [1e-21,1e-14], # None for auto
     # 'dylim': [1e-28,1e-25], # None for auto
     'figure_size': [12, 8], # [width, height]
     'line_widths': [3, 2], # [line1, line2] for main and component lines
@@ -251,20 +277,32 @@ SCAN_PLOT_PARAMS = {
 }
 
 DEBUG_PARAMS = {
-    # ==== Iteration Selection for Debugging ====
-    # Iteration indices to enable debugging on specific snapshots
-    # Default: first and last snapshots
-    # "it_indx": [0, -1],
+    # Iteration indexes where debug modules (except percentile thresholds) are executed.
+    # Uses Python indexing over OUTPUT_PARAMS['it'] per simulation.
     "it_indx": [-1],
+    # "it_indx": [0, -1],
+    # "it_indx": list(range(len(OUTPUT_PARAMS['it']))),
     # ==== Unigrid Interpolation Mode ====
     "unigrid_interp_mode": 'DIRECT',  # 'DIRECT', 'NGP', or 'TRILINEAR'
                                        # 'DIRECT' (recommended): avoids spurious artifacts from zero-division in base grid
                                        # 'NGP': Nearest Grid Point with position calculations  
                                        # 'TRILINEAR': full trilinear interpolation (may cause artifacts at boundaries)
     # ==== Output Cleaning ====
+    # If True, divergence-related debug diagnostics use clean_field(Bx,By,Bz)
+    # to remove overlap/refinement duplicated cells before analysis.
+    "clean_divergence_fields": True,
     # If True, replace NaN/inf/outliers with zeros in debug visualizations ("sweep under the rug")
     # If False (default), preserve raw data to diagnose errors (recommended for debugging)
     "clean_output": False,
+    # ==== Percentile Threshold Debug Parameters ====
+    # Parameters for percentile-threshold calculations during data processing
+    # (these are copied into PERCENTILE_PLOT_PARAMS for plot labeling/metadata).
+    "percentile_params": {
+        "exclude_boundaries": False,  # Exclude patch boundary cells from percentile calculation
+        "boundary_width": 2,          # Number of boundary cells to exclude (if exclude_boundaries=True)
+        "exclude_zeros": False,       # Exclude zero values from percentile calculation
+        "use_filtered_divergence": False,  # Reserved (currently raw divergence is used)
+    },
     # ==== Buffer Level Check ====
     "buffer_level_check": {
         "enabled": False, # Whether to include buffer level checks during the scan or buffer test
@@ -276,12 +314,6 @@ DEBUG_PARAMS = {
         "enabled": False,  # Enable patch position diagnostics
         "verbose": True,  # Print detailed results
         "suspicious_threshold": 18,  # Threshold for flagging suspicious patch positions (in Mpc/h)
-    },
-    # ==== Percentile Calculation Parameters ====
-    "percentile_params": {
-        "exclude_boundaries": False,  # Exclude patch boundary cells from percentile calculation
-        "boundary_width": 2,          # Number of boundary cells to exclude (if exclude_boundaries=True)
-        "exclude_zeros": False,        # Exclude zero values from percentile calculation
     },
     # ==== Buffer Pipeline Debug ====
     "buffer": {
@@ -600,26 +632,122 @@ max_nmaz_index = int(np.argmax(IND_PARAMS["nmaz"]))
 base_cells = IND_PARAMS["nmax"][max_nmax_index] * IND_PARAMS["nmay"][max_nmay_index] * IND_PARAMS["nmaz"][max_nmaz_index]
 array_size_bytes = base_cells * np.dtype(OUTPUT_PARAMS["bitformat"]).itemsize
 
-# Estimate total memory footprint (considering multiple fields: Bx, By, Bz, vx, vy, vz, derivatives, etc.)
-# Typical run uses ~6 fields for input + ~10 for derivatives/outputs = ~16 arrays
-estimated_arrays_count = 16
+# AMR-aware multiplier using decreasing refined volume per level.
+# This avoids unrealistic full-box 8^L scaling while keeping a conservative safety margin.
+base_refined_fraction_l1 = 0.08  # Typical refined volume fraction at level 1
+refined_fraction_decay = 0.55    # Refined fraction decreases with level
+refinement_multiplier = 1.0
+cum_refined_fraction = 1.0
 
-# AMR refinement increases peak array sizes locally; we apply a conservative multiplier
-# Note: true AMR does not fill the whole domain at finest level, so we scale by a small coverage factor
-amr_coverage_factor = 0.10  # 10% default coverage at finest levels (safety bias)
-refinement_multiplier = (2 ** (3 * max_level)) * amr_coverage_factor if max_level > 0 else 1.0
-refinement_multiplier = max(refinement_multiplier, 1.0)
+for level in range(1, max_level + 1):
+    level_refined_fraction = base_refined_fraction_l1 * (refined_fraction_decay ** (level - 1))
+    cum_refined_fraction *= level_refined_fraction
+    refinement_multiplier += (8 ** level) * cum_refined_fraction
 
-estimated_memory_gb = ((array_size_bytes * refinement_multiplier) * estimated_arrays_count) / (1024 ** 3)
+# Additional AMR complexity correction from patch budget (npalev, patch size, max level).
+max_npalev = max(IND_PARAMS["npalev"]) if isinstance(IND_PARAMS["npalev"], list) else IND_PARAMS["npalev"]
+max_namrx = max(IND_PARAMS["namrx"]) if isinstance(IND_PARAMS["namrx"], list) else IND_PARAMS["namrx"]
+max_namry = max(IND_PARAMS["namry"]) if isinstance(IND_PARAMS["namry"], list) else IND_PARAMS["namry"]
+max_namrz = max(IND_PARAMS["namrz"]) if isinstance(IND_PARAMS["namrz"], list) else IND_PARAMS["namrz"]
+patch_cell_ratio = (max_npalev * max_namrx * max_namry * max_namrz) / max(base_cells, 1)
+amr_complexity_multiplier = 1.0 + 3.0 * np.log10(1.0 + patch_cell_ratio) * (1.0 + 0.15 * max_level)
+
+# Keep estimate in a realistic but conservative range.
+refinement_multiplier = min(max(refinement_multiplier, amr_complexity_multiplier, 1.0), 40.0)
+
+single_array_gb = array_size_bytes / (1024 ** 3)
+total_snapshots = OUTPUT_PARAMS.get("total_iterations", sum(len(it_list) for it_list in OUTPUT_PARAMS["it"]))
+
+enabled_components = sum(bool(IND_PARAMS["components"].get(k, False)) for k in IND_PARAMS["components"])
+
+# Worker memory model: arrays live concurrently during process_iteration in each subprocess.
+worker_arrays = 10  # Core loaded fields + masks + geometry helpers
+if IND_PARAMS.get("buffer", False):
+    worker_arrays += 8
+if IND_PARAMS.get("parent", False):
+    worker_arrays += 3
+if IND_PARAMS.get("blend", False):
+    worker_arrays += 4
+worker_arrays += max(4, 2 * enabled_components)
+
+if IND_PARAMS.get("energy_evolution", False):
+    worker_arrays += 6
+if IND_PARAMS.get("profiles", False):
+    worker_arrays += 4
+if IND_PARAMS.get("percentiles", False):
+    worker_arrays += 3
+if IND_PARAMS.get("projection", False):
+    worker_arrays += 8
+if IND_PARAMS.get("mag", False):
+    worker_arrays += 3
+
+if DEBUG_PARAMS.get("field_analysis", {}).get("enabled", False):
+    worker_arrays += 10
+if DEBUG_PARAMS.get("scan_animation", {}).get("enabled", False):
+    worker_arrays += 6
+if DEBUG_PARAMS.get("buffer", {}).get("enabled", False) or DEBUG_PARAMS.get("divergence", {}).get("enabled", False):
+    worker_arrays += 6
+
+# Retained memory model in parent process (accumulated across snapshots).
+retained_amr_arrays_per_snapshot = 0
+if IND_PARAMS.get("return_vectorial", False):
+    retained_amr_arrays_per_snapshot += max(6, enabled_components)
+if IND_PARAMS.get("return_induction", False):
+    retained_amr_arrays_per_snapshot += max(6, enabled_components)
+if IND_PARAMS.get("return_induction_energy", False):
+    retained_amr_arrays_per_snapshot += max(7, enabled_components + 1)
+if IND_PARAMS.get("projection", False):
+    retained_amr_arrays_per_snapshot += 3
+if IND_PARAMS.get("mag", False):
+    retained_amr_arrays_per_snapshot += 2
+if DEBUG_PARAMS.get("field_analysis", {}).get("enabled", False):
+    retained_amr_arrays_per_snapshot += 4
+if DEBUG_PARAMS.get("scan_animation", {}).get("enabled", False):
+    retained_amr_arrays_per_snapshot += 2
+
+retained_meta_gb_per_snapshot = 0.01
+if IND_PARAMS.get("energy_evolution", False):
+    retained_meta_gb_per_snapshot += 0.01
+if IND_PARAMS.get("profiles", False):
+    retained_meta_gb_per_snapshot += 0.02
+if IND_PARAMS.get("percentiles", False):
+    retained_meta_gb_per_snapshot += 0.01
+
+estimated_worker_memory_gb_raw = single_array_gb * refinement_multiplier * worker_arrays
+estimated_retained_memory_gb_raw = total_snapshots * (
+    single_array_gb * refinement_multiplier * retained_amr_arrays_per_snapshot + retained_meta_gb_per_snapshot
+)
+
+memory_safety_factor = max(1.0, float(OUTPUT_PARAMS.get("memory_safety_factor", 1.0)))
+estimated_worker_memory_gb = estimated_worker_memory_gb_raw * memory_safety_factor
+estimated_retained_memory_gb = estimated_retained_memory_gb_raw * memory_safety_factor
 
 print(f"\n{'='*60}")
 print(f"MEMORY ESTIMATION")
 print(f"{'='*60}")
 print(f"Base grid size: {IND_PARAMS['nmax'][max_nmax_index]} x {IND_PARAMS['nmay'][max_nmay_index]} x {IND_PARAMS['nmaz'][max_nmaz_index]}")
-print(f"Single array size: {array_size_bytes / (1024 ** 3):.3f} GB")
-print(f"Estimated total memory usage (AMR-aware): {estimated_memory_gb:.2f} GB")
-mem_ratio = (estimated_memory_gb / ram_capacity_gb)
-print(f"Memory usage ratio: {100 * mem_ratio:.1f}% of total RAM")
+print(f"Single array size: {single_array_gb:.3f} GB")
+print(f"Worker concurrent arrays (estimated): {worker_arrays}")
+print(f"Retained AMR arrays per snapshot (estimated): {retained_amr_arrays_per_snapshot}")
+print(f"AMR refinement multiplier: x{refinement_multiplier:.2f}")
+print(
+    "Workload profile (current config): "
+    f"buffer={IND_PARAMS.get('buffer', False)}, "
+    f"parent={IND_PARAMS.get('parent', False)}, "
+    f"blend={IND_PARAMS.get('blend', False)}, "
+    f"profiles={IND_PARAMS.get('profiles', False)}, "
+    f"percentiles={IND_PARAMS.get('percentiles', False)}, "
+    f"projection={IND_PARAMS.get('projection', False)}, "
+    f"debug_field_analysis={DEBUG_PARAMS.get('field_analysis', {}).get('enabled', False)}, "
+    f"debug_scan_animation={DEBUG_PARAMS.get('scan_animation', {}).get('enabled', False)}"
+)
+print("Note: RAM estimates are scenario-specific and valid for the current configuration profile.")
+if memory_safety_factor > 1.0:
+    print(f"Empirical safety factor: x{memory_safety_factor:.2f}")
+    print(f"Estimated worker memory (raw): {estimated_worker_memory_gb_raw:.2f} GB")
+    print(f"Estimated retained memory (raw): {estimated_retained_memory_gb_raw:.2f} GB")
+print(f"Estimated worker memory per subprocess: {estimated_worker_memory_gb:.2f} GB")
+print(f"Estimated retained memory across snapshots: {estimated_retained_memory_gb:.2f} GB")
 
 # Decide on parallelization strategy
 print(f"\n{'='*60}")
@@ -629,6 +757,7 @@ print(f"{'='*60}")
 # Automatic recommendation based on memory and CPU availability
 recommended_parallel = False
 recommended_ncores = OUTPUT_PARAMS["ncores"]  # Default from config
+mem_ratio = estimated_worker_memory_gb / max(ram_capacity_gb, 1e-12)
 
 # Determine core reservation based on risk
 reserve_ratio = 0.0
@@ -644,26 +773,42 @@ else:
 
 reserved_cores = max(OUTPUT_PARAMS["Save_Cores"], int(cpu_physical * reserve_ratio))
 available_cores = max(1, cpu_physical - reserved_cores)
+max_parallel_workers = min(available_cores, total_snapshots)
+estimated_peak_serial_gb = estimated_retained_memory_gb + estimated_worker_memory_gb
+estimated_peak_parallel_gb = estimated_retained_memory_gb + estimated_worker_memory_gb * max_parallel_workers
+peak_mem_ratio = (estimated_peak_parallel_gb / ram_capacity_gb)
+
+# Expose estimator internals for runtime calibration/reporting in main.py
+OUTPUT_PARAMS["estimated_worker_memory_gb"] = estimated_worker_memory_gb
+OUTPUT_PARAMS["estimated_retained_memory_gb"] = estimated_retained_memory_gb
+OUTPUT_PARAMS["estimated_peak_serial_gb"] = estimated_peak_serial_gb
+OUTPUT_PARAMS["estimated_peak_parallel_gb"] = estimated_peak_parallel_gb
+OUTPUT_PARAMS["estimated_parallel_workers"] = max_parallel_workers
+OUTPUT_PARAMS["estimated_peak_mem_ratio"] = peak_mem_ratio
+
+print(f"Estimated peak RAM (serial): {estimated_peak_serial_gb:.2f} GB")
+print(f"Estimated peak RAM (parallel x{max_parallel_workers} workers): {estimated_peak_parallel_gb:.2f} GB")
+print(f"Estimated peak memory ratio (parallel): {100 * peak_mem_ratio:.1f}% of total RAM")
 
 # High memory usage (>40% RAM): recommend parallelization to distribute load across iterations
-if mem_ratio >= 0.60:
-    print(f"⚠️  Extreme memory risk detected ({estimated_memory_gb:.2f} GB ≥ 60% of {ram_capacity_gb:.2f} GB)")
+if peak_mem_ratio >= 0.60:
+    print(f"⚠️  Extreme memory risk detected ({estimated_peak_parallel_gb:.2f} GB ≥ 60% of {ram_capacity_gb:.2f} GB)")
     print(f"   Recommendation: Prefer SERIAL or minimal parallelism to avoid OOM/segfaults")
-    recommended_parallel = available_cores > 1 and len(OUTPUT_PARAMS["it"]) > 1
-    recommended_ncores = min(available_cores, max(1, len(OUTPUT_PARAMS["it"]) // 2))
+    recommended_parallel = available_cores > 1 and total_snapshots > 1
+    recommended_ncores = min(available_cores, max(1, total_snapshots // 2))
     print(f"   Reserved cores: {reserved_cores}; Recommended cores: {recommended_ncores}")
-elif mem_ratio >= 0.40:
-    print(f"⚠️  High memory usage detected ({estimated_memory_gb:.2f} GB > 40% of {ram_capacity_gb:.2f} GB)")
+elif peak_mem_ratio >= 0.40:
+    print(f"⚠️  High memory usage detected ({estimated_peak_parallel_gb:.2f} GB > 40% of {ram_capacity_gb:.2f} GB)")
     print(f"   Recommendation: Use parallel processing to handle multiple iterations efficiently")
     recommended_parallel = True
-    recommended_ncores = min(available_cores, len(OUTPUT_PARAMS["it"]))  # Don't exceed number of iterations
+    recommended_ncores = min(available_cores, total_snapshots)  # Don't exceed number of snapshots
     print(f"   Reserved cores: {reserved_cores}; Recommended cores: {recommended_ncores}")
     
 # Low memory, multiple iterations: can benefit from parallelization
-elif len(OUTPUT_PARAMS["it"]) > 1:
-    print(f"✓ Memory usage is manageable ({estimated_memory_gb:.2f} GB < 40% of {ram_capacity_gb:.2f} GB)")
-    print(f"  {len(OUTPUT_PARAMS['it'])} iterations to process")
-    recommended_ncores = min(available_cores, len(OUTPUT_PARAMS["it"]))
+elif total_snapshots > 1:
+    print(f"✓ Memory usage is manageable ({estimated_peak_parallel_gb:.2f} GB < 40% of {ram_capacity_gb:.2f} GB)")
+    print(f"  {total_snapshots} snapshots to process")
+    recommended_ncores = min(available_cores, total_snapshots)
     if recommended_ncores > 1:
         print(f"  Recommendation: Parallel processing can speed up execution")
         print(f"  Recommended cores: {recommended_ncores}")
@@ -678,6 +823,10 @@ else:
     recommended_parallel = False
 
 # Interactive configuration
+# If only 1 core is recommended, automatically use serial mode
+if recommended_parallel and recommended_ncores == 1:
+    recommended_parallel = False
+
 if recommended_parallel:
     ask = input(f"\nUse parallel processing with {recommended_ncores} cores? (y/n) [recommended]: ").strip().lower()
     if ask == 'y' or ask == '':  # Default to yes

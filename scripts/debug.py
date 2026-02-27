@@ -977,7 +977,9 @@ def compare_divergence_methods(clus_Bx, clus_By, clus_Bz, grid_npatch, clus_kp,
                                grid_irr, dir_params, size, nmax,
                                use_buffer=False, nghost=1, interpol='TSC',
                                parent_interpol=None,
-                               use_siblings=True, blend=False, parent_mode=False, stencil=3, verbose=True):
+                               use_siblings=True, blend=False, parent_mode=False, stencil=3,
+                               clean_final_div=False, clus_cr0amr=None, clus_solapst=None,
+                               up_to_level=None, verbose=True):
     '''
     Compare divergence calculation methods for magnetic fields.
 
@@ -1013,6 +1015,24 @@ def compare_divergence_methods(clus_Bx, clus_By, clus_Bz, grid_npatch, clus_kp,
     if parent_interpol is None:
         parent_interpol = interpol
     parent_use_siblings = False
+
+    def _maybe_clean_final_div(div_field):
+        if not clean_final_div:
+            return div_field
+        if clus_cr0amr is None or clus_solapst is None:
+            return div_field
+        try:
+            clean_level = up_to_level if up_to_level is not None else 1000
+            return utils.clean_field(div_field, clus_cr0amr, clus_solapst, grid_npatch,
+                                     up_to_level=clean_level)
+        except Exception as e:
+            if verbose:
+                log_message(
+                    f'clean_field failed on final divergence field, using raw divergence. Reason: {e}',
+                    tag="divergence",
+                    level=0
+                )
+            return div_field
     
     parent_active = bool(parent_mode) and not blend
 
@@ -1119,8 +1139,10 @@ def compare_divergence_methods(clus_Bx, clus_By, clus_Bz, grid_npatch, clus_kp,
                     patchnx, patchny, patchnz,
                     boundary_width=blend_boundary, kept_patches=clus_kp
                 )
+                div_pipeline = _maybe_clean_final_div(div_pipeline)
                 pipeline_stats, div_B_flat = _stats_from_div(div_pipeline, 'pipeline method (blend)')
             else:
+                div_pipeline = _maybe_clean_final_div(div_pipeline)
                 pipeline_stats, div_B_flat = _stats_from_div(div_pipeline, 'pipeline method (with buffer)')
         else:
             # Pipeline method with parent frontier fill
@@ -1135,11 +1157,13 @@ def compare_divergence_methods(clus_Bx, clus_By, clus_Bz, grid_npatch, clus_kp,
                 interpol=parent_interpol, use_siblings=parent_use_siblings,
                 kept_patches=clus_kp
             )[0]
+            div_pipeline = _maybe_clean_final_div(div_pipeline)
             pipeline_stats, div_B_flat = _stats_from_div(div_pipeline, 'pipeline method (parent fill)')
     else:
         # Pipeline method WITHOUT buffer (extrapolation)
         div_pipeline = diff.divergence(clus_Bx, clus_By, clus_Bz,
                                        dx, grid_npatch, clus_kp, stencil=stencil)
+        div_pipeline = _maybe_clean_final_div(div_pipeline)
         pipeline_stats, div_B_flat = _stats_from_div(div_pipeline, 'pipeline method (extrapolation)')
 
     if mean_B_magnitude > 0:
@@ -1208,6 +1232,7 @@ def compare_divergence_methods(clus_Bx, clus_By, clus_Bz, grid_npatch, clus_kp,
     div_inline, div_Bx3, div_By3, div_Bz3 = divergence_inline(
         clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp
     )
+    div_inline = _maybe_clean_final_div(div_inline)
     inline_stats, div_B_flat3 = _stats_from_div(div_inline, 'inline method')
 
     if mean_B_magnitude > 0:
@@ -1265,6 +1290,7 @@ def compare_divergence_methods(clus_Bx, clus_By, clus_Bz, grid_npatch, clus_kp,
     div_periodic, div_Bx, div_By, div_Bz = divergence_periodic(
         clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp
     )
+    div_periodic = _maybe_clean_final_div(div_periodic)
     periodic_stats, div_B_flat2 = _stats_from_div(div_periodic, 'periodic method')
 
     if mean_B_magnitude > 0:
@@ -1320,7 +1346,9 @@ def diagnose_buffer_vs_extrapolation(clus_Bx, clus_By, clus_Bz, grid_npatch, clu
                                      patchrx, patchry, patchrz, patchpare,
                                      grid_irr, size, nmax, dx, nghost=1,
                                      interpol='TSC', stencil=3, use_siblings=True, blend=False,
-                                     parent_interpol=None, parent_mode=False, verbose=True):
+                                     parent_interpol=None, parent_mode=False,
+                                     clean_final_div=False, clus_cr0amr=None, clus_solapst=None,
+                                     up_to_level=None, verbose=True):
     '''
     MAIN DIAGNOSTIC: Compare buffer vs. extrapolation divergence in detail.
     
@@ -1357,6 +1385,24 @@ def diagnose_buffer_vs_extrapolation(clus_Bx, clus_By, clus_Bz, grid_npatch, clu
         parent_interpol = interpol
     parent_use_siblings = False
 
+    def _maybe_clean_final_div(div_field):
+        if not clean_final_div:
+            return div_field
+        if clus_cr0amr is None or clus_solapst is None:
+            return div_field
+        try:
+            clean_level = up_to_level if up_to_level is not None else 1000
+            return utils.clean_field(div_field, clus_cr0amr, clus_solapst, grid_npatch,
+                                     up_to_level=clean_level)
+        except Exception as e:
+            if verbose:
+                log_message(
+                    f'clean_field failed on final divergence field, using raw divergence. Reason: {e}',
+                    tag="buffer_comp",
+                    level=0
+                )
+            return div_field
+
     parent_active = bool(parent_mode) and not blend
 
     if verbose:
@@ -1381,6 +1427,7 @@ def diagnose_buffer_vs_extrapolation(clus_Bx, clus_By, clus_Bz, grid_npatch, clu
         log_message(f'Computing divergence WITHOUT buffer (extrapolation)...', tag="buffer_comp", level=2)
     
     div_no_buffer = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil=stencil)
+    div_no_buffer = _maybe_clean_final_div(div_no_buffer)
     stats_no_buffer = _extract_divergence_stats(div_no_buffer, clus_kp, grid_npatch,
                                                 verbose=verbose, tag="buffer_comp",
                                                 label=f"No buffer (stencil-{stencil})")
@@ -1451,6 +1498,8 @@ def diagnose_buffer_vs_extrapolation(clus_Bx, clus_By, clus_Bz, grid_npatch, clu
             kept_patches=clus_kp
         )[0]
         label = f"Parent fill ({parent_interpol}, stencil-{stencil})"
+
+    div_with_buffer = _maybe_clean_final_div(div_with_buffer)
     
     # Now div_with_buffer has same dimensions as div_no_buffer
     stats_with_buffer = _extract_divergence_stats(div_with_buffer, clus_kp, grid_npatch,
@@ -2528,6 +2577,26 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
     results = {}
     pipeline_debug_results_local = pipeline_debug_results
     scan_pack_local = scan_pack
+
+    # Build cleaned magnetic fields for divergence diagnostics (remove overlaps/refinement duplicates)
+    Bx_debug = data['clus_Bx']
+    By_debug = data['clus_By']
+    Bz_debug = data['clus_Bz']
+    use_clean_divergence_fields = bool(debug_params.get("clean_divergence_fields", True))
+    if verbose:
+        if use_clean_divergence_fields:
+            log_message(
+                "Divergence diagnostics use RAW B-fields for buffer/parent operations; "
+                "clean_field is applied only to final divergence fields before analysis",
+                tag="divergence",
+                level=1
+            )
+        else:
+            log_message(
+                "Divergence diagnostics use raw fields end-to-end (clean_divergence_fields=False)",
+                tag="divergence",
+                level=1
+            )
     
     # Buffer diagnostics
     if debug_params.get("buffer", {}).get("enabled", False):
@@ -2591,7 +2660,7 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
             stencil_size = ind_params.get("stencil", 3)
             
             results['divergence'] = compare_divergence_methods(
-                data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                Bx_debug, By_debug, Bz_debug,
                 data['grid_npatch'], data['clus_kp'],
                 data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                 data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
@@ -2601,6 +2670,10 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
                 parent_interpol=parent_interpol_method,
                 use_siblings=use_siblings, blend=blend_method, parent_mode=parent_mode_flag,
                 stencil=stencil_size,
+                clean_final_div=use_clean_divergence_fields,
+                clus_cr0amr=data.get('clus_cr0amr', None),
+                clus_solapst=data.get('clus_solapst', None),
+                up_to_level=up_to_level,
                 verbose=debug_params.get("divergence", {}).get("verbose", False)
             )
     
@@ -2623,7 +2696,7 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
             blend_method = ind_params.get("blend", False)
             try:
                 ghost_results = diagnose_ghost_cell_values(
-                    data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                    Bx_debug, By_debug, Bz_debug,
                     data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                     data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
                     data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
@@ -2660,7 +2733,7 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
             
             try:
                 buffer_comp = diagnose_buffer_vs_extrapolation(
-                    data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                    Bx_debug, By_debug, Bz_debug,
                     data['grid_npatch'], data['clus_kp'],
                     data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                     data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
@@ -2669,6 +2742,10 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
                     nghost=nghost, interpol=interpol_method, stencil=stencil_size, blend=blend_method,
                     parent_interpol=parent_interpol_method,
                     parent_mode=parent_mode_flag,
+                    clean_final_div=use_clean_divergence_fields,
+                    clus_cr0amr=data.get('clus_cr0amr', None),
+                    clus_solapst=data.get('clus_solapst', None),
+                    up_to_level=up_to_level,
                     use_siblings=use_siblings,
                     verbose=debug_params.get("buffer_vs_extrapolation", {}).get("verbose", False)
                 )
@@ -2705,7 +2782,7 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
                 if effective_nghost > 0:
                     # Add buffer
                     buffered = buff.add_ghost_buffer(
-                        [data['clus_Bx'], data['clus_By'], data['clus_Bz']], data['grid_npatch'],
+                        [Bx_debug, By_debug, Bz_debug], data['grid_npatch'],
                         data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                         data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
                         data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
@@ -2726,7 +2803,7 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
 
                     if blend_method:
                         div_parent = diff.divergence(
-                            data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                            Bx_debug, By_debug, Bz_debug,
                             dx, data['grid_npatch'], data['clus_kp'], stencil=stencil_size
                         )
                         div_parent = buff.add_ghost_buffer(
@@ -2745,7 +2822,7 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
                         )
                 else:
                     div_field = diff.divergence(
-                        data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                        Bx_debug, By_debug, Bz_debug,
                         dx, data['grid_npatch'], data['clus_kp'], stencil=stencil_size
                     )
                     div_field = buff.add_ghost_buffer(
@@ -2761,9 +2838,22 @@ def run_debug_diagnostics(sim_name, snapshot_it, data, size, nmax, up_to_level,
                 # Calculate divergence WITHOUT buffer (extrapolation)
                 stencil_size = ind_params.get("stencil", 3)
                 div_field = diff.divergence(
-                    data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+                    Bx_debug, By_debug, Bz_debug,
                     dx, data['grid_npatch'], data['clus_kp'], stencil=stencil_size
                 )
+
+            if use_clean_divergence_fields:
+                try:
+                    div_field = utils.clean_field(
+                        div_field, data['clus_cr0amr'], data['clus_solapst'],
+                        data['grid_npatch'], up_to_level=up_to_level
+                    )
+                except Exception as e:
+                    log_message(
+                        f"clean_field failed on final spatial-divergence field, using raw divergence. Reason: {e}",
+                        tag="spatial_div",
+                        level=0
+                    )
             
             spatial_results = diagnose_divergence_spatial_distribution(
                 div_field, data['grid_npatch'], data['clus_kp'],
@@ -3059,7 +3149,7 @@ def main():
     try:
         if ind_params.get("region") in ["BOX", "SPH"]:
             coords, rad = find_most_massive_halo(
-                [sim_name],
+                sim_name,
                 [snapshot_it],
                 ind_params["a0"],
                 out_params["dir_halos"],
