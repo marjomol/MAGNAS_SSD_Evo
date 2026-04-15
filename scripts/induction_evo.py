@@ -276,9 +276,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             - clus_solapst: solenoidal fraction in the cluster (or mask flag)
             - clus_kp: mask for valid patches
             - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
-            - clus_B: magnetic field magnitude in the cluster
-            - clus_b2: normalized magnetic field squared in the cluster
-            - clus_B2: magnetic field squared in the cluster
+            - clus_B: normalized magnetic field magnitude in the cluster
+            - clus_B2: normalized magnetic field squared in the cluster
+            - clus_b2: magnetic field squared in the cluster
             - clus_v2: velocity field squared in the cluster
             - clus_pres: pressure (optional, None if not requested)
             - clus_pot: gravitational potential (optional, None if not requested)
@@ -356,6 +356,14 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             pare,
             *_
         ) = grid
+
+        if verbose:
+            log_message(
+                f'Load order check: requested_it={it}, loaded_grid_irr={grid_irr}, '
+                f'grid_time={grid_time:.6g}, grid_zeta={grid_zeta:.6g}',
+                tag="order",
+                level=1
+            )
         
         # Only keep patches up to the desired AMR level and slice patch arrays accordingly
         grid_npatch[level+1:] = 0
@@ -588,6 +596,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
     # clus_By = [clus_mby[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
     # clus_Bz = [clus_mbz[p] / np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
     
+    # B field was already normalized in the files, so we can directly assign it to Bx, By, Bz
     clus_Bx = [clus_mbx[p] if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_By = [clus_mby[p] if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_Bz = [clus_mbz[p] if bool(clus_kp[p]) else 0 for p in range(n)]
@@ -605,6 +614,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             verbose=debug_verbose
         )
     
+    # We denormalize the magnetic field components to get the physical magnetic field in code units
     clus_bx = [clus_mbx[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_by = [clus_mby[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_bz = [clus_mbz[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
@@ -659,6 +669,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         'clus_Bx': clus_Bx,
         'clus_By': clus_By,
         'clus_Bz': clus_Bz,
+        'clus_bx': clus_bx,
+        'clus_by': clus_by,
+        'clus_bz': clus_bz,
         'clus_B': clus_B,
         'clus_b2': clus_b2,
         'clus_B2': clus_B2,
@@ -937,7 +950,7 @@ def induction_equation(components, vectorial_quantities,
     
     ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
     ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
-    
+
     ### We compute here each contribution to the magnetic field induction.
     
     start_time_induction_terms = time.time() # Record the start time
@@ -1126,7 +1139,7 @@ def induction_equation_energy(components, induction_equation,
 
     ## The kinetic energy.
 
-    if clus_rho_rho_b:
+    if components.get('kinetic_energy', True) and clus_rho_rho_b:
         results['kinetic_energy_density'] = [((1/2) * clus_rho_rho_b[p] * clus_v2[p]) if bool(clus_kp[p]) else 0 for p in range(n)]
     else:
         results['kinetic_energy_density'] = zero
@@ -1139,6 +1152,78 @@ def induction_equation_energy(components, induction_equation,
         log_message('Time for calculating the energy induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_energy_terms))), tag="induction_energy", level=1)
         
     return results
+
+
+def production_dissipation_fields(components, induction_energy,
+                                clus_kp, grid_npatch, grid_irr,
+                                verbose=False):
+    '''
+    Splits each scalar induction-energy component into production (positive) and
+    dissipation (negative) parts cell-wise.
+
+    For each component Gamma_i this builds:
+        - Gamma_i_plus  = max(Gamma_i, 0)
+        - Gamma_i_minus = max(-Gamma_i, 0)
+
+    Args:
+        - components: dictionary of enabled induction components
+        - induction_energy: dictionary produced by induction_equation_energy
+        - clus_kp: mask for valid patches
+        - grid_npatch: number of patches in the grid
+        - grid_irr: snapshot index
+        - verbose: whether to print timing information
+
+    Returns:
+        - results: dictionary with patch-wise arrays for production/dissipation terms
+
+    Author: Marco Molina
+    '''
+
+    start_time_pd_terms = time.time()
+
+    n = 1 + np.sum(grid_npatch)
+    zero = [0] * n
+
+    if clus_kp is None:
+        clus_kp = np.ones(n, dtype=bool)
+
+    results = {}
+
+    term_specs = [
+        ('divergence', 'MIE_diver_B2'),
+        ('compression', 'MIE_compres_B2'),
+        ('stretching', 'MIE_stretch_B2'),
+        ('advection', 'MIE_advec_B2'),
+        ('drag', 'MIE_drag_B2'),
+        ('total', 'MIE_total_B2')
+    ]
+
+    for key, prefix in term_specs:
+        if not components.get(key, False):
+            results[f'{prefix}_prod'] = zero
+            results[f'{prefix}_diss'] = zero
+            continue
+        results[f'{prefix}_prod'] = [
+            np.maximum(induction_energy[prefix][pidx], 0.0) if bool(clus_kp[pidx]) else 0
+            for pidx in range(n)
+        ]
+        results[f'{prefix}_diss'] = [
+            np.maximum(-induction_energy[prefix][pidx], 0.0) if bool(clus_kp[pidx]) else 0
+            for pidx in range(n)
+        ]
+
+    end_time_pd_terms = time.time()
+    total_time_pd_terms = end_time_pd_terms - start_time_pd_terms
+
+    if verbose:
+        log_message(
+            'Time for production/dissipation split in snap ' + str(grid_irr) + ': ' +
+            str(strftime("%H:%M:%S", gmtime(total_time_pd_terms))),
+            tag="prod_diss",
+            level=1
+        )
+
+    return results
     
 
 def induction_vol_integral(components, induction_energy, clus_b2,
@@ -1147,7 +1232,10 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                             grid_patchrx, grid_patchry, grid_patchrz,
                             grid_patchnx, grid_patchny, grid_patchnz,
                             it, sims, nmax, size, coords, region_coords, rad,
-                            units =1, verbose=False):
+                            units =1, production_dissipation=None,
+                            rho_b=None,
+                            volume_coordinates='physical', normalize_by_volume=False,
+                            verbose=False):
     '''
     Computes the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
     This is done according to the derived equation and compared to the actual magnetic energy integrated along the studied volume. The kinetic energy
@@ -1182,6 +1270,10 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         - region_coords: coordinates defining the region of interest
         - rad: radius of the grid
         - units: factor to convert the units multiplied by the final result (default is 1)
+        - production_dissipation: dict or bool to enable production/dissipation integral outputs
+        - rho_b: background density at the snapshot. Used when production_dissipation['normalized'] is False
+        - volume_coordinates: 'physical' or 'comoving' integration differential for dV
+        - normalize_by_volume: if True, divide each field integral by total integration volume
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
@@ -1201,53 +1293,127 @@ def induction_vol_integral(components, induction_energy, clus_b2,
     ## Here we compute the volume integral of the magnetic energy density and its components
     
     start_time_induction = time.time() # Record the start time
-    
-    ### Preallocate all possible outputs as zeros
-    
-    n = 1 + np.sum(grid_npatch)
-    zero = [0] * n
-    
+
     results = {}
-    
-    for key, prefix in [
+
+    component_specs = [
         ('divergence', 'MIE_diver_B2'),
         ('compression', 'MIE_compres_B2'),
         ('stretching', 'MIE_stretch_B2'),
         ('advection', 'MIE_advec_B2'),
         ('drag', 'MIE_drag_B2'),
         ('total', 'MIE_total_B2')
-    ]:
+    ]
+
+    def _integrate_field(field, vol=False):
+        return utils.vol_integral(
+            field, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
+            grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
+            size, nmax, coords, region_coords, rad, a0_masclet, units,
+            kept_patches=clus_kp, vol=vol,
+            volume_coordinates=volume_coordinates,
+            normalize_by_volume=normalize_by_volume
+        )
+    
+    for key, prefix in component_specs:
         if components.get(key, False):
-            results[f'int_{prefix}'] = utils.vol_integral(induction_energy[prefix], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
-                                                            grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                            size, nmax, coords, region_coords, rad, a0_masclet, units, kept_patches=clus_kp)
+            results[f'int_{prefix}'] = _integrate_field(induction_energy[prefix])
     
             if verbose == True:
                 log_message(f'Snap {it} in {sims}: {key} energy density volume integral done', tag="integral", level=1)
         else:
-            results[f'int_{prefix}'] = zero
+            results[f'int_{prefix}'] = 0.0
+
+    pd_enabled = False
+    if isinstance(production_dissipation, dict):
+        pd_enabled = bool(production_dissipation.get('enabled', False))
+    elif production_dissipation is not None:
+        pd_enabled = bool(production_dissipation)
+
+    if pd_enabled:
+        rho_factor = 1.0
+        if isinstance(production_dissipation, dict):
+            if not production_dissipation.get('normalized', True):
+                try:
+                    rho_factor = float(rho_b)
+                except (TypeError, ValueError):
+                    rho_factor = 1.0
+                    if verbose:
+                        log_message(
+                            f"Snap {it} in {sims}: invalid rho_b for physical P/D scaling; falling back to normalized scaling.",
+                            tag="integral",
+                            level=1
+                        )
+
+        pd_specs = [
+            ('divergence', 'MIE_diver_B2', 'itemized'),
+            ('compression', 'MIE_compres_B2', 'itemized'),
+            ('stretching', 'MIE_stretch_B2', 'itemized'),
+            ('advection', 'MIE_advec_B2', 'itemized'),
+            ('drag', 'MIE_drag_B2', 'itemized'),
+            ('total', 'MIE_total_B2', 'compact')
+        ]
+
+        total_prod = 0.0
+        total_diss = 0.0
+
+        for key, prefix, pd_mode in pd_specs:
+            if components.get(key, False):
+                if pd_mode == 'itemized':
+                    p_i = rho_factor * _integrate_field(induction_energy[f'{prefix}_prod'])
+                    d_i = rho_factor * _integrate_field(induction_energy[f'{prefix}_diss'])
+                    results[f'int_{prefix}_prod'] = p_i
+                    results[f'int_{prefix}_diss'] = d_i
+                    total_prod += float(p_i)
+                    total_diss += float(d_i)
+                else:
+                    # Compact split from MIE_total_B2 is stored under dedicated keys.
+                    results[f'int_{prefix}_prod_compact'] = rho_factor * _integrate_field(induction_energy[f'{prefix}_prod'])
+                    results[f'int_{prefix}_diss_compact'] = rho_factor * _integrate_field(induction_energy[f'{prefix}_diss'])
+            else:
+                if pd_mode == 'itemized':
+                    results[f'int_{prefix}_prod'] = 0.0
+                    results[f'int_{prefix}_diss'] = 0.0
+                else:
+                    results[f'int_{prefix}_prod_compact'] = 0.0
+                    results[f'int_{prefix}_diss_compact'] = 0.0
+
+        # Itemized totals are defined as sum of component integrals by construction.
+        results['int_MIE_total_B2_prod_itemized'] = total_prod
+        results['int_MIE_total_B2_diss_itemized'] = total_diss
+
+        results['int_PD_iota'] = 0.0 if total_prod <= 0.0 else (total_prod - total_diss) / total_prod
+
+        for key, prefix, pd_mode in pd_specs:
+            if pd_mode != 'itemized':
+                continue
+            p_i = float(results[f'int_{prefix}_prod'])
+            d_i = float(results[f'int_{prefix}_diss'])
+            results[f'int_PD_frac_{prefix}_prod'] = 0.0 if total_prod <= 0.0 else p_i / total_prod
+            results[f'int_PD_frac_{prefix}_diss'] = 0.0 if total_diss <= 0.0 else d_i / total_diss
     
-    if induction_energy['kinetic_energy_density']:
-        results['int_kinetic_energy'] = utils.vol_integral(induction_energy['kinetic_energy_density'], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
-                                                            grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                            size, nmax, coords, region_coords, rad, a0_masclet, units, kept_patches=clus_kp)
+    if components.get('kinetic_energy', True) and induction_energy['kinetic_energy_density']:
+        results['int_kinetic_energy'] = _integrate_field(induction_energy['kinetic_energy_density'])
         if verbose == True:
             log_message(f'Snap {it} in {sims}: Kinetic energy density volume integral done', tag="integral", level=1)
     else:
-        results['int_kinetic_energy'] = zero
+        results['int_kinetic_energy'] = 0.0
         
-    if clus_b2:
-        results['int_b2'] = utils.vol_integral(clus_b2, grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
-                                                grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                                size, nmax, coords, region_coords, rad, a0_masclet, units, kept_patches=clus_kp)
+    if components.get('magnetic_energy', True) and clus_b2:
+        results['int_b2'] = _integrate_field(clus_b2)
         if verbose == True:
             log_message(f'Snap {it} in {sims}: Magnetic energy density volume integral done', tag="integral", level=1)
     else:
-        results['int_b2'] = zero
-    
-    results['volume'] = utils.vol_integral(induction_energy[prefix], grid_zeta, clus_cr0amr, clus_solapst, grid_npatch, up_to_level,
-                                            grid_patchrx, grid_patchry, grid_patchrz, grid_patchnx, grid_patchny, grid_patchnz,
-                                            size, nmax, coords, region_coords, rad, a0_masclet, units, kept_patches=clus_kp, vol=True)
+        results['int_b2'] = 0.0
+
+    # Use a stable reference field for volume integration (content is ignored when vol=True).
+    if components.get('total', False):
+        volume_ref = induction_energy['MIE_total_B2']
+    else:
+        first_active = next((pfx for key, pfx in component_specs if components.get(key, False)), None)
+        volume_ref = induction_energy[first_active] if first_active is not None else clus_b2
+
+    results['volume'] = _integrate_field(volume_ref, vol=True)
 
     end_time_induction = time.time()
 
@@ -1260,12 +1426,14 @@ def induction_vol_integral(components, induction_energy, clus_b2,
 
 
 def induction_energy_integral_evolution(components, induction_energy_integral,
-                                        evolution_type, derivative, rho_b,
-                                        grid_time, grid_zeta, verbose=False):
+                                        derivative, rho_b,
+                                        grid_time, grid_zeta,
+                                        normalized=False, verbose=False):
     '''
     Given the volume integrals of the magnetic energy density and its components at different redshifts,
-    computes the evolution of the magnetic integrated energy and that of its components for their further representation
-    attending to the time derivative prediction from the induction equation.
+    computes both total (integrated) and differential (rate of change) evolution of the magnetic integrated energy 
+    and that of its components for their further representation attending to the time derivative prediction from 
+    the induction equation.
     
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
@@ -1280,32 +1448,46 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
             - int_kinetic_energy: volume integral of the kinetic energy density
             - int_b2: volume integral of the magnetic energy density
             - volume: volume of the studied region
-        - evolution_type: type of evolution to compute ('total' or 'differential')
-        - derivative: type of derivative to compute ('RK' for Runge-Kutta, 'implicit' for implicit differences,
-                    'central' for central differences, 'rate' for rate of change)
+        - derivative: type of derivative to compute ('RK' for Runge-Kutta,
+                'implicit_forward' for forward-implicit predictor,
+            'central' for central differences,
+            'alpha_fit' for least-squares calibrated explicit predictor,
+            'rate' for rate of change).
         - rho_b: density contrast of the simulation
         - grid_time: time grid for the simulation
         - grid_zeta: redshift grid for the simulation
+        - normalized: True to remove rho_b from magnetic evolution outputs, False to keep the current rho_b-scaled evolution
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
-        - results: dictionary containing the evolution of the magnetic energy density and its components:
-            - evo_MIE_diver_B2: evolution of the null divergence of the magnetic field energy
-            - evo_MIE_compres_B2: evolution of the compressive component
-            - evo_MIE_stretch_B2: evolution of the stretching component
-            - evo_MIE_advec_B2: evolution of the advection component
-            - evo_MIE_drag_B2: evolution of the cosmic drag component
-            - evo_MIE_total_B2: evolution of the total magnetic induction energy
-            - evo_kinetic_energy: evolution of the kinetic energy density
-            - evo_b2: evolution of the magnetic energy density
-            - evo_ind_b2: evolution of the integrated magnetic energy from the induction equation
-            - evo_volume: evolution of the volume of the studied region
+        - results: dictionary containing the evolution of BOTH total and differential magnetic energy density and its components:
+            - evo_MIE_diver_B2: total evolution of the null divergence of the magnetic field energy
+            - evo_MIE_diver_B2_diff: differential evolution of the null divergence of the magnetic field energy
+            - evo_MIE_compres_B2: total evolution of the compressive component
+            - evo_MIE_compres_B2_diff: differential evolution of the compressive component
+            - evo_MIE_stretch_B2: total evolution of the stretching component
+            - evo_MIE_stretch_B2_diff: differential evolution of the stretching component
+            - evo_MIE_advec_B2: total evolution of the advection component
+            - evo_MIE_advec_B2_diff: differential evolution of the advection component
+            - evo_MIE_drag_B2: total evolution of the cosmic drag component
+            - evo_MIE_drag_B2_diff: differential evolution of the cosmic drag component
+            - evo_MIE_total_B2: total evolution of the total magnetic induction energy
+            - evo_MIE_total_B2_diff: differential evolution of the total magnetic induction energy
+            - evo_kinetic_energy: total evolution of the kinetic energy density
+            - evo_kinetic_energy_diff: differential evolution of the kinetic energy density
+            - evo_b2: total evolution of the magnetic energy density
+            - evo_b2_diff: differential evolution of the magnetic energy density
+            - evo_ind_b2: total evolution of the integrated magnetic energy from the induction equation
+            - evo_ind_b2_diff: differential evolution of the integrated magnetic energy from the induction equation
+            - evo_volume_phi: physical volume evolution
+            - evo_volume_co: comoving volume evolution
             
     Author: Marco Molina
     '''
     
-    assert evolution_type in ['total', 'differential'], "evolution_type must be 'total' or 'differential'"
-    assert derivative in ['RK', 'implicit', 'central', 'rate'], "derivative must be 'RK', 'implicit', 'central' or 'rate'"
+    assert derivative in ['RK', 'implicit_forward', 'central', 'alpha_fit', 'rate'], \
+        "derivative must be 'RK', 'implicit_forward', 'central', 'alpha_fit', or 'rate'"
+    assert isinstance(normalized, bool), "normalized must be a boolean (True or False)"
     
     ## Here we compute the evolution of the magnetic energy density and its components
     
@@ -1315,6 +1497,63 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
     zero = [0] * (n+1)
     
     results = {}
+
+    rho_b_arr = np.asarray(rho_b if rho_b is not None else np.ones(n + 1, dtype=float), dtype=float)
+    if rho_b_arr.ndim == 0:
+        rho_b_arr = np.full(n + 1, float(rho_b_arr), dtype=float)
+    rho_factor = rho_b_arr if not normalized else np.ones_like(rho_b_arr, dtype=float)
+    rho_denominator = rho_b_arr if normalized else np.ones_like(rho_b_arr, dtype=float)
+    
+    # Calculate scale factor (a_{i+1}/a_i)^3 = ((1+z_i)/(1+z_{i+1}))^3
+    # This accounts for the expansion factor in comoving volume integrals
+    gz = np.asarray(grid_zeta, dtype=float)
+    scale_factor = np.ones(n, dtype=float)
+    # scale_factor = (a0_masclet / (1 + gz)) ** (1/3) if len(gz) > 1 else np.ones(n, dtype=float)
+    # scale_factor = ((1 + gz[1:]) / (1 + gz[:-1])) ** 3 if len(gz) > 1 else np.ones(n, dtype=float)
+    # scale_factor = ((1 + gz[1:]) / (1 + gz[:-1])) ** 4 if len(gz) > 1 else np.ones(n, dtype=float)
+    # scale_factor = ((1 + gz[1:]) / (1 + gz[:-1])) if len(gz) > 1 else np.ones(n, dtype=float)
+    print(f"Evolution scale factor: {scale_factor}")
+
+    if verbose:
+        gt = np.asarray(grid_time, dtype=float)
+        gz = np.asarray(grid_zeta, dtype=float)
+        rb = rho_b_arr
+        dt = np.diff(gt) if len(gt) > 1 else np.array([], dtype=float)
+        log_message(
+            f'Evolution input check: derivative={derivative}, '
+            f'n_snap={len(gt)}, n_steps={n}',
+            tag="evolution",
+            level=1
+        )
+        if len(gt) > 0:
+            log_message(
+                f'grid_time endpoints: [{gt[0]:.6g}, {gt[-1]:.6g}] | '
+                f'grid_zeta endpoints: [{gz[0]:.6g}, {gz[-1]:.6g}]',
+                tag="evolution",
+                level=2
+            )
+        if len(dt) > 0:
+            log_message(
+                f'dt range: min={np.min(dt):.6g}, max={np.max(dt):.6g}',
+                tag="evolution",
+                level=2
+            )
+            if len(dt) > 6:
+                dt_head = ", ".join(f"{v:.4g}" for v in dt[:3])
+                dt_tail = ", ".join(f"{v:.4g}" for v in dt[-3:])
+                log_message(
+                    f'dt preview: head=[{dt_head}] tail=[{dt_tail}]',
+                    tag="evolution",
+                    level=2
+                )
+        int_b2 = np.asarray(induction_energy_integral.get('int_b2', []), dtype=float)
+        if len(int_b2) > 0 and len(rb) > 0:
+            log_message(
+                f'int_b2 endpoints: [{int_b2[0]:.6g}, {int_b2[-1]:.6g}] | '
+                f'rho_b endpoints: [{rb[0]:.6g}, {rb[-1]:.6g}]',
+                tag="evolution",
+                level=2
+            )
     
     main_keys = ["divergence", "compression", "stretching", "advection", "drag"]
     if all(components.get(k, False) for k in main_keys):
@@ -1327,7 +1566,40 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
                                                     for i in range(n+1)]
     else:
         components["induction"] = False
-    
+
+    alpha_fit_value = None
+    if derivative == 'alpha_fit' and components.get("induction", False):
+        int_b2_arr = np.asarray(induction_energy_integral.get('int_b2', []), dtype=float)
+        int_ind_arr = np.asarray(induction_energy_integral.get('int_ind_b2', []), dtype=float)
+        gt = np.asarray(grid_time, dtype=float)
+        rb = rho_b_arr
+        gz = np.asarray(grid_zeta, dtype=float)
+        sf = scale_factor  # scale factor
+
+        if len(int_b2_arr) == n + 1 and len(int_ind_arr) >= n and len(gt) == n + 1 and len(rb) == n + 1:
+            dt = gt[1:] - gt[:-1]
+            x = rb[1:] * dt * int_ind_arr[:n]
+            # Updated equation: y = E_{n+1} - (rho_{n+1}/rho_n) * scale_factor * E_n
+            y = int_b2_arr[1:] - sf * (rb[1:] / rb[:-1]) * int_b2_arr[:-1]
+
+            valid = np.isfinite(x) & np.isfinite(y)
+            valid &= np.abs(x) > 0
+            if np.any(valid):
+                x_v = x[valid]
+                y_v = y[valid]
+                denom = np.dot(x_v, x_v)
+                if denom > 0:
+                    alpha_fit_value = float(np.dot(x_v, y_v) / denom)
+                    results['alpha_fit'] = alpha_fit_value
+                    if verbose:
+                        y_pred = alpha_fit_value * x_v
+                        mse = float(np.mean((y_pred - y_v) ** 2)) if len(y_v) > 0 else np.nan
+                        log_message(
+                            f"Alpha fit (least squares): alpha={alpha_fit_value:.6g}, samples={len(x_v)}, mse={mse:.6g}",
+                            tag="evolution",
+                            level=1
+                        )
+
     for key, prefix in [
         ('divergence', 'MIE_diver_B2'),
         ('compression', 'MIE_compres_B2'),
@@ -1337,54 +1609,143 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
         ('total', 'MIE_total_B2'),
         ('induction', 'ind_b2')
     ]:
-        if evolution_type == 'total':
-            if components.get(key, False):
-                if derivative == 'RK':
-                    results[f'evo_{prefix}'] = diff.integrate_energy(grid_time, induction_energy_integral[f'int_b2'][0],
-                                                                rho_b, induction_energy_integral[f'int_{prefix}'])
-                elif derivative == 'central':
-                    results[f'evo_{prefix}'] = [(rho_b[i+1] * ((1/rho_b[i]) * (induction_energy_integral[f'int_b2'][i]) +
-                    2 * (grid_time[i+1] - grid_time[i]) * (induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
-                elif derivative == 'implicit':
-                    results[f'evo_{prefix}'] = [((rho_b[i+2]/rho_b[i+1]) * induction_energy_integral[f'int_b2'][i+1] +
-                    2 * rho_b[i+2] * (grid_time[i+2] - grid_time[i+1]) * (induction_energy_integral[f'int_{prefix}'][i+1] +
-                    ((grid_time[i+2] - grid_time[i+1])/(grid_time[i+2] - grid_time[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
-                    induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n-1)]
-                elif derivative == 'rate':
-                    results[f'evo_{prefix}'] = [(rho_b[i+1] * ((1/rho_b[i]) * (induction_energy_integral[f'int_b2'][i]) +
-                    (grid_time[i+1] - grid_time[i]) * (induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
-                if verbose == True:
-                    log_message(f'Energy evolution: {key} volume energy integral evolution done', tag="evolution", level=1)
-            else:
-                results[f'evo_{prefix}'] = zero
-            
-
-        elif evolution_type == 'differential':
-            if components.get(key, False):
-                if derivative == 'RK':
-                    results[f'evo_{prefix}'] = [2 * (induction_energy_integral[f'int_{prefix}'][i]) for i in range(n)]
-                elif derivative == 'central':
-                    results[f'evo_{prefix}'] = [2 * (induction_energy_integral[f'int_{prefix}'][i]) for i in range(n)]
-                elif derivative == 'implicit':
-                    results[f'evo_{prefix}'] = [2 * ((induction_energy_integral[f'int_{prefix}'][i+1] + ((grid_time[i+2] -
-                    grid_time[i+1])/(grid_time[i+2] - grid_time[i])) * (induction_energy_integral[f'int_{prefix}'][i+2] -
-                    induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n-1)]
-                elif derivative == 'rate':
-                    results[f'evo_{prefix}'] = [induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i] for i in range(n)]
-                if verbose == True:
-                    log_message(f'Energy evolution: {key} energy integral evolution done', tag="evolution", level=1)
-            else:
-                results[f'evo_{prefix}'] = zero
+        # Total Evolution
+        if components.get(key, False):
+            if derivative == 'RK':
+                results[f'evo_{prefix}'] = diff.integrate_energy(grid_time, induction_energy_integral[f'int_b2'][0],
+                                                            rho_factor, induction_energy_integral[f'int_{prefix}'])
+            elif derivative == 'central':
+                results[f'evo_{prefix}'] = [(rho_factor[i+1] * ((1/rho_b[i]) * scale_factor[i] * (induction_energy_integral[f'int_b2'][i]) +
+                2 * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
+            elif derivative == 'implicit_forward':
+                results[f'evo_{prefix}'] = [
+                    (
+                        (rho_factor[i+1] / rho_b[i]) * scale_factor[i] * induction_energy_integral['int_b2'][i]
+                        + 2 * rho_b[i+1] * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (
+                            induction_energy_integral[f'int_{prefix}'][i]
+                            + ((grid_time[i+1] - grid_time[i]) / (grid_time[i+1] - grid_time[i-1]))
+                            * (induction_energy_integral[f'int_{prefix}'][i+1] - induction_energy_integral[f'int_{prefix}'][i-1])
+                        )
+                    )
+                    for i in range(1, n)
+                ]
+            elif derivative == 'rate':
+                results[f'evo_{prefix}'] = [(rho_factor[i+1] * ((1/rho_b[i]) * scale_factor[i] * (induction_energy_integral[f'int_b2'][i]) +
+                (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
+            elif derivative == 'alpha_fit':
+                alpha = alpha_fit_value if alpha_fit_value is not None else 2.0
+                results[f'evo_{prefix}'] = [
+                    (
+                        rho_factor[i+1] * (
+                            scale_factor[i] * (induction_energy_integral['int_b2'][i] / rho_b[i])
+                            + alpha * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * induction_energy_integral[f'int_{prefix}'][i]
+                        )
+                    )
+                    for i in range(n)
+                ]
+            if verbose == True:
+                log_message(f'Energy evolution: total {key} volume energy integral evolution done', tag="evolution", level=1)
+        else:
+            results[f'evo_{prefix}'] = zero
+        
+        # Differential Evolution
+        if components.get(key, False):
+            if derivative == 'RK' or derivative == 'central':
+                results[f'evo_{prefix}_diff'] = [2 * scale_factor[i] * rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i] for i in range(n)]
+            elif derivative == 'implicit_forward':
+                results[f'evo_{prefix}_diff'] = [
+                    2 * scale_factor[i] * (
+                        rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i]
+                        + ((grid_time[i+1] - grid_time[i]) / (grid_time[i+1] - grid_time[i-1]))
+                        * (rho_factor[i+1] * induction_energy_integral[f'int_{prefix}'][i+1] - rho_factor[i-1] * induction_energy_integral[f'int_{prefix}'][i-1])
+                    )
+                    for i in range(1, n)
+                ]
+            elif derivative == 'rate':
+                results[f'evo_{prefix}_diff'] = [scale_factor[i] * (rho_factor[i+1] * induction_energy_integral[f'int_{prefix}'][i+1] + rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i]) for i in range(n)]
+            elif derivative == 'alpha_fit':
+                alpha = alpha_fit_value if alpha_fit_value is not None else 2.0
+                results[f'evo_{prefix}_diff'] = [alpha * scale_factor[i] * rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i] for i in range(n)]
+            if verbose == True:
+                log_message(f'Energy evolution: differential {key} energy integral evolution done', tag="evolution", level=1)
+        else:
+            results[f'evo_{prefix}_diff'] = [0.0 for _ in range(n)]
     
-    if evolution_type == 'total':
-        results['evo_b2'] = [induction_energy_integral['int_b2'][i] for i in range(n+1)]
-        results['evo_kinetic_energy'] = [rho_b[i] * induction_energy_integral['int_kinetic_energy'][i] for i in range(n+1)]
-    elif evolution_type == 'differential':
-        results['evo_b2'] = [(1/((grid_time[i+1] - grid_time[i]))) * (induction_energy_integral['int_b2'][i+1]/rho_b[i+1] - induction_energy_integral['int_b2'][i]/rho_b[i]) for i in range(n)]
-        results['evo_kinetic_energy'] = [(1/(grid_time[i+1] - grid_time[i])) * ((rho_b[i+1] * induction_energy_integral['int_kinetic_energy'][i+1]) - (rho_b[i] * induction_energy_integral['int_kinetic_energy'][i])) for i in range(n)]
+    
+    # Calculate magnetic energy and kinetic energy for both total and differential evolution
+    if components.get('magnetic_energy', True):
+        # Total: direct value normalized by rho_denominator
+        results['evo_b2'] = [induction_energy_integral['int_b2'][i] / rho_denominator[i] for i in range(n+1)]
+        # Differential: time derivative
+        results['evo_b2_diff'] = [
+            1/((grid_time[i+1] - grid_time[i])) * (
+                (induction_energy_integral['int_b2'][i+1] / rho_denominator[i+1]) -
+                (induction_energy_integral['int_b2'][i] / rho_denominator[i]))
+            for i in range(n)
+        ]
+    else:
+        results['evo_b2'] = [0.0 for _ in range(n+1)]
+        results['evo_b2_diff'] = [0.0 for _ in range(n)]
+    
+    if components.get('kinetic_energy', True):
+        # Total: scaled by rho_factor
+        results['evo_kinetic_energy'] = [rho_factor[i] * induction_energy_integral['int_kinetic_energy'][i] for i in range(n+1)]
+        # Differential: time derivative with rho_factor scaling
+        results['evo_kinetic_energy_diff'] = [
+            (1/(grid_time[i+1] - grid_time[i])) * (
+                rho_factor[i+1] * induction_energy_integral['int_kinetic_energy'][i+1] -
+                rho_factor[i] * induction_energy_integral['int_kinetic_energy'][i])
+            for i in range(n)
+        ]
+    else:
+        results['evo_kinetic_energy'] = [0.0 for _ in range(n+1)]
+        results['evo_kinetic_energy_diff'] = [0.0 for _ in range(n)]
+    
     
     if verbose == True:
         log_message('Energy evolution: magnetic and kinetic energy integral evolution done', tag="evolution", level=1)
+
+    if verbose and derivative == 'central' and 'evo_ind_b2' in results:
+        pred = np.asarray(results['evo_ind_b2'], dtype=float)
+        meas = np.asarray(results.get('evo_b2', []), dtype=float)
+        src = np.asarray(induction_energy_integral.get('int_ind_b2', []), dtype=float)
+        gt = np.asarray(grid_time, dtype=float)
+        gz = np.asarray(grid_zeta, dtype=float)
+        rb = np.asarray(rho_b, dtype=float)
+
+        if len(pred) == n and len(meas) == n + 1 and len(src) >= n:
+            sample_idx = sorted(set([0, min(1, n - 1), max(n - 1, 0)]))
+
+            # Add points around measured and predicted maxima to inspect local lag.
+            if n > 2:
+                idx_meas = int(np.argmax(meas[1:])) + 1
+                idx_pred = int(np.argmax(pred))
+                sample_idx.extend([max(0, idx_meas - 1), max(0, idx_meas - 2), idx_pred])
+                sample_idx = sorted(set(i for i in sample_idx if 0 <= i < n))
+
+            for i in sample_idx:
+                ratio = pred[i] / meas[i + 1] if meas[i + 1] != 0 else np.nan
+
+                log_message(
+                    "Central indexing check: "
+                    f"i={i} -> pred_idx={i} maps to measured_idx={i+1}; "
+                    f"t_i={gt[i]:.6g}, t_i1={gt[i+1]:.6g}, "
+                    f"z_i={gz[i]:.6g}, z_i1={gz[i+1]:.6g}, "
+                    f"int_ind_i={src[i]:.6g}, rho_i={rb[i]:.6g}, rho_i1={rb[i+1]:.6g}, "
+                    f"pred={pred[i]:.6g}, meas_next={meas[i+1]:.6g}, pred/meas_next={ratio:.6g}",
+                    tag="evolution",
+                    level=2
+                )
+
+            ratio_all = np.divide(pred, meas[1:], out=np.full_like(pred, np.nan), where=meas[1:] != 0)
+            finite_ratio = ratio_all[np.isfinite(ratio_all)]
+            if len(finite_ratio) > 0:
+                log_message(
+                    f'Central ratio summary: min={np.min(finite_ratio):.6g}, '
+                    f'median={np.median(finite_ratio):.6g}, max={np.max(finite_ratio):.6g}',
+                    tag="evolution",
+                    level=2
+                )
             
     results['evo_volume_phi'] = [(induction_energy_integral['volume'][i]) for i in range(n+1)]
     results['evo_volume_co'] = [(induction_energy_integral['volume'][i] / ((1/(1+grid_zeta[i]))**3)) for i in range(n+1)]
@@ -1513,7 +1874,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     # else:
     #     results['post_ind_b2_profile'] = zero
     
-    if induction_energy['kinetic_energy_density']:
+    if components.get('kinetic_energy', True) and induction_energy['kinetic_energy_density']:
         _, profile = utils.radial_profile_vw(field=induction_energy['kinetic_energy_density'], cr0amr=clus_cr0amr,
                                                 solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
                                                 clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
@@ -1525,7 +1886,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     else:
         results['kinetic_energy_profile'] = zero
         
-    if clus_b2:
+    if components.get('magnetic_energy', True) and clus_b2:
         _, profile = utils.radial_profile_vw(field=clus_b2, cr0amr=clus_cr0amr,
                                         solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
                                         clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
@@ -1882,8 +2243,10 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                     stencil=3, buffer=True, use_siblings=True, interpol='TSC', nghost=1, blend=False,
                     parent=False, parent_interpol=None,
                     bitformat=np.float32, mag=False, sim_characteristics=None,
+                    energy_evolution_config=None,
                     energy_evolution=True, profiles=True, projection=True, percentiles=True, 
                     percentile_levels=(95, 90, 75, 50, 25), divergence_filter=None, debug_params=None,
+                    production_dissipation=None,
                     return_vectorial=False, return_induction=False, return_induction_energy=False,
                     gc_worker_end=False, verbose=False):
     '''
@@ -1922,6 +2285,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - bitformat: data type for the fields (default is np.float32)
         - mag: boolean to compute magnitudes (default is False)
         - sim_characteristics: Dictionary with simulation characteristics (is_cooling, is_mascletB, etc.)
+        - energy_evolution_config: dictionary with energy evolution options
+            (evolution_type, derivative, volume_coordinates, normalize_by_volume)
         - energy_evolution: boolean to compute energy evolution (default is True)
         - profiles: boolean to compute radial profiles (default is True)
         - projection: boolean to compute uniform projection (default is True)
@@ -1929,6 +2294,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - percentile_levels: tuple of percentile thresholds to compute (default is (100, 90, 75, 50, 25))
         - divergence_filter: dict with divergence filtering settings (default is None)
         - debug_params: dictionary with debug configuration (default is None, uses empty dict)
+        - production_dissipation: dict with production/dissipation options
         - return_vectorial: boolean to return vectorial quantities dictionary (default is False)
         - return_induction: boolean to return induction equation dictionary (default is False)
         - return_induction_energy: boolean to return induction energy dictionary (default is False)
@@ -1949,6 +2315,12 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     '''
 
     start_time_Total = time.time() # Record the start time
+
+    if energy_evolution_config is None:
+        energy_evolution_config = {
+            "volume_coordinates": "physical",
+            "normalize_by_volume": False,
+        }
 
     # Initialize debug parameters if not provided
     if debug_params is None:
@@ -2143,9 +2515,19 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     
     ## In this section we are going to compute the cosmological induction equation and its components, calculating them with the results obtained before.
     ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
+
+    pd_enabled = False
+    if isinstance(production_dissipation, dict):
+        pd_enabled = bool(production_dissipation.get('enabled', False))
+    elif production_dissipation is not None:
+        pd_enabled = bool(production_dissipation)
     
     # Determine if induction needs to be calculated based on downstream dependencies
-    compute_induction = return_induction or energy_evolution or profiles or projection or mag or percentiles
+    # Production/dissipation requires induction -> induction_energy -> integrals.
+    compute_induction = (
+        return_induction or return_induction_energy or
+        energy_evolution or profiles or projection or mag or percentiles or pd_enabled
+    )
     
     if compute_induction:
         induction, magnitudes = induction_equation(components, vectorial,
@@ -2165,7 +2547,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This will be usefull to calculate volumetric integrals and energy budgets as the quantities involved are scalars.
     
     # Determine if induction_energy needs to be calculated
-    compute_induction_energy = return_induction_energy or energy_evolution or profiles
+    compute_induction_energy = return_induction_energy or energy_evolution or profiles or pd_enabled
     
     if compute_induction_energy and induction is not None:
         induction_energy = induction_equation_energy(components, induction,
@@ -2180,7 +2562,24 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         elif verbose and not compute_induction_energy:
             log_message('Induction energy skipped (not required by any enabled output).', tag="pipeline", level=1)
     
-    if energy_evolution and induction_energy is not None:
+    if pd_enabled and induction_energy is not None:
+        pd_fields = production_dissipation_fields(
+            components,
+            induction_energy,
+            data['clus_kp'],
+            data['grid_npatch'],
+            data['grid_irr'],
+            verbose=verbose
+        )
+        induction_energy.update(pd_fields)
+    else:
+        if verbose == True:
+            if not pd_enabled:
+                log_message('Production/disipation set to False, skipping production/dissipation fields calculation.', tag="pipeline", level=1)
+            elif induction_energy is None:
+                log_message('Production/disipation fields skipped (induction energy not available).', tag="pipeline", level=1)
+
+    if (energy_evolution or pd_enabled) and induction_energy is not None:
         # Volume Integral of the Magnetic Induction Equation
     
         ## Here we compute the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
@@ -2193,7 +2592,11 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                                 data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                                 data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                                 it, sims, nmax, size, coords, region_coords, rad,
-                                units=1, verbose=verbose)
+                                units=1, production_dissipation=production_dissipation,
+                                rho_b=data.get('rho_b', None),
+                                volume_coordinates=energy_evolution_config.get('volume_coordinates', 'physical'),
+                                normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False) if energy_evolution else production_dissipation.get('normalize_by_volume', False) if pd_enabled else False,
+                                verbose=verbose)
         
         if test['test'] == True:
             
@@ -2205,16 +2608,21 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                         data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                         data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                         it, sims, nmax, size, coords, region_coords, rad,
-                        units=1, verbose=verbose)
+                        units=1, production_dissipation=production_dissipation,
+                        rho_b=data.get('rho_b', None),
+                        volume_coordinates=energy_evolution_config.get('volume_coordinates', 'physical'),
+                        normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False) if energy_evolution else production_dissipation.get('normalize_by_volume', False) if pd_enabled else False,
+                        verbose=verbose)
         else:
             induction_test_energy_integral = None
-        
     else:
         induction_energy_integral = None
         induction_test_energy_integral = None
         if verbose == True:
-            if not energy_evolution:
-                log_message('Energy evolution is set to False, skipping volume integral of the magnetic induction equation.', tag="pipeline", level=1)
+            if not energy_evolution and not pd_enabled:
+                log_message('Energy evolution and production/dissipation are disabled, skipping volume integral of the magnetic induction equation.', tag="pipeline", level=1)
+            elif not energy_evolution and pd_enabled:
+                log_message('Energy evolution is set to False, skipping volume integral evolution of the magnetic energy induction equation.', tag="pipeline", level=1)
             elif induction_energy is None:
                 log_message('Energy evolution skipped (induction_energy not available).', tag="pipeline", level=1)
             
@@ -2339,6 +2747,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             debug_fields = None
         
     data = {
+        'grid_irr': data['grid_irr'],
         'grid_time': data['grid_time'],
         'grid_zeta': data['grid_zeta'],
         'rho_b': data['rho_b'],

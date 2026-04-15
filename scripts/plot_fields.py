@@ -211,9 +211,10 @@ def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=No
     time = induction_params.get('time', 0.0)
     level = induction_params.get('level', 0)
     up_to_level = induction_params.get('up_to_level', level)
-    buffer = induction_params.get('buffer', True)
-    interpol = induction_params.get('interpol', 'TSC')
-    stencil = induction_params.get('stencil', 3)
+    diff_cfg = induction_params.get('differentiation', {})
+    buffer = diff_cfg.get('buffer', True)
+    interpol = diff_cfg.get('interpol', 'TSC')
+    stencil = diff_cfg.get('stencil', 3)
 
     # Extract volume parameters (if scanning multiple volumes)
     vol_idx = volume_params.get('vol_idx', 0) if volume_params else 0
@@ -389,14 +390,15 @@ def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=No
         sim_info = f"L{induction_params.get('up_to_level','')}_{induction_params.get('F','')}_{induction_params.get('vir_kind','')}vir_{induction_params.get('rad_kind','')}rad_{induction_params.get('region','None')}Region"
         
         # Buffer info: distinguish between buffered, no-buffer (test), and data-only (no buffer applied)
-        buffer_flag = induction_params.get('buffer', False)
-        if 'buffer' in induction_params and not buffer_flag:
+        diff_cfg = induction_params.get('differentiation', {})
+        buffer_flag = diff_cfg.get('buffer', False)
+        if 'buffer' in diff_cfg and not buffer_flag:
             # Explicitly marked as no-buffer for testing
             buffer_info = 'RawLevels_NoBuf'
         elif buffer_flag:
-            parent_flag = induction_params.get('parent', False)
-            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
-            buffer_info = f"Buffered_{induction_params.get('interpol','')}_siblings_{induction_params.get('use_siblings', False)}"
+            parent_flag = diff_cfg.get('parent', False)
+            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol',''))
+            buffer_info = f"Buffered_{diff_cfg.get('interpol','')}_siblings_{diff_cfg.get('use_siblings', False)}"
             if parent_flag:
                 buffer_info += f"_parent_{parent_interpol}"
         else:
@@ -405,7 +407,7 @@ def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=No
         z_info = f"z{zeta:.3f}"
         proj_info = f"proj_{projection_mode}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{run}_{title_slug}_{sim_info}_{buffer_info}_{induction_params.get('stencil','')}_{proj_info}_{z_info}_{timestamp}.gif"
+        filename = f"{run}_{title_slug}_{sim_info}_{buffer_info}_{diff_cfg.get('stencil','')}_{proj_info}_{z_info}_{timestamp}.gif"
         filepath = os.path.join(folder, filename)
         ani.save(filepath, writer='pillow', dpi=dpi)
         if verbose:
@@ -425,7 +427,7 @@ def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolutio
             - y_scale: 'lin' or 'log' for y axis scale
             - xlim: [xlimo, xlimf] or None for auto
             - ylim: [ylimo, ylimf] or None for auto
-            - cancel_limits: bool to flip the x axis (useful for zeta)
+            - cancel_limits: if True, ignore manual xlim/ylim; zeta axis inversion is handled by caller
             - x_axis: 'zeta' or 'years'
             - evolution_type: 'total' or 'differential'
             - font: font properties for labels
@@ -481,7 +483,11 @@ def should_plot_component(data, threshold=1e-30):
             
         Author: Marco Molina
         '''
-        arr = np.asarray(data)
+        arr = np.asarray(data, dtype=float)
+        # Ignore NaN/inf when deciding if a curve has meaningful values.
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return False
         return np.any(np.abs(arr) > threshold)
 
 
@@ -793,10 +799,11 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         axis_info = f"{x_axis}_{x_scale}_{y_scale}"
         limit_info = f"{xlim[0] if xlim else 'auto'}_{ylim[0] if ylim else 'auto'}_{ylim[1] if ylim else 'auto'}"
         sim_info = f"{induction_params.get('up_to_level','')}_{induction_params.get('F','')}_{induction_params.get('vir_kind','')}vir_{induction_params.get('rad_kind','')}rad_{induction_params.get('region','None')}Region"
-        if induction_params.get('buffer', False) == True:
-            parent_flag = induction_params.get('parent', False)
-            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
-            buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings", False)}'
+        diff_cfg = induction_params.get('differentiation', {})
+        if diff_cfg.get('buffer', False) == True:
+            parent_flag = diff_cfg.get('parent', False)
+            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol',''))
+            buffer_info = f'Buffered_{diff_cfg.get("interpol","")}_siblings_{diff_cfg.get("use_siblings", False)}'
             if parent_flag:
                 buffer_info += f'_parent_{parent_interpol}'
         else:
@@ -807,7 +814,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
 
         file_title = '_'.join(base_title.split()[:3])
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get('stencil','')}_{boundary_info}_{timestamp}.png"
+        filename = f"{folder}/{run}_{file_title}_percentile_evo_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get('stencil','')}_{boundary_info}_{timestamp}.png"
         filename = safe_filename(filename, verbose=verbose)
         fig.savefig(filename, dpi=dpi)
         if verbose:
@@ -820,17 +827,22 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     return fig
         
         
+
+
 def plot_integral_evolution(evolution_data, plot_params, induction_params,
                             grid_t, grid_zeta, rad,
                             verbose=True, save=False, folder=None):
     """
     Plot the evolution of the integrated magnetic energy and its induction components attending to the time derivative prediction from the induction equation.
+    Shows total and differential evolutions simultaneously.
     
     Args:
         - evolution_data: dictionary containing the evolution data from induction_energy_integral_evolution()
+                         (contains both total and differential data with _diff suffix for diff)
         - plot_params: dictionary containing plotting parameters:
-            - evolution_type: 'total' or 'differential'
-            - derivative: 'RK', 'central', 'implicit' or 'rate'
+            - plot_total: True to plot total (integrated) energy evolution
+            - plot_differential: True to plot differential (rate of change) energy evolution
+            - derivative: 'RK', 'central', 'implicit_forward', 'alpha_fit' or 'rate'
             - x_axis: 'zeta' or 'years'
             - x_scale: 'lin' or 'log'
             - y_scale: 'lin' or 'log'
@@ -859,7 +871,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         - folder: folder to save plots (if None, uses current directory)
         
     Returns:
-        - List of figure objects
+        - Dictionary with 'total' and/or 'differential' keys containing figure objects
         
     Author: Marco Molina
     """
@@ -871,17 +883,28 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     assert plot_params.get('smoothing_sigma', 1.10) > 0, "smoothing_sigma must be a positive number"
     assert plot_params.get('x_axis', 'zeta') in ['zeta', 'years'], "x_axis must be 'zeta' or 'years'"
     
+    # Read plot_total and plot_differential flags
+    plot_total = plot_params.get('plot_total', True)
+    plot_differential = plot_params.get('plot_differential', True)
+    assert plot_total or plot_differential, "At least one of plot_total or plot_differential must be True"
+    
     # Extract parameters from plot_params
-    evolution_type = plot_params['evolution_type']
+    derivative = plot_params['derivative']
     derivative = plot_params['derivative']
     x_axis = plot_params['x_axis']
     if x_axis == 'zeta':
         assert len(grid_zeta) > 0, "grid_zeta must not be empty when x_axis is 'zeta'"
-        assert plot_params.get('interpolation points', 5000) > 0, "interpolation_points must be a positive integer"
+        assert plot_params.get('interpolation_points', 5000) > 0, "interpolation_points must be a positive integer"
     elif x_axis == 'years':
         assert len(grid_t) > 0, "grid_t must not be empty when x_axis is 'years'"
-        assert plot_params.get('interpolation points', 500) > 0, "interpolation_points must be a positive integer"
+        assert plot_params.get('interpolation_points', 500) > 0, "interpolation_points must be a positive integer"
+    
+    # Determine which evolution type to plot based on flags and available data
+    # For now, if plot_differential is True and has data, use differential; else use total
+    evolution_type = 'differential' if plot_differential and 'evo_b2_diff' in evolution_data else 'total'
+    data_suffix = '_diff' if evolution_type == 'differential' else ''
     x_scale = plot_params['x_scale']
+    y_scale = plot_params['y_scale']
     y_scale = plot_params['y_scale']
     xlim = plot_params.get('xlim', None)
     ylim = plot_params.get('ylim', None)
@@ -905,6 +928,9 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     units = induction_params['units']
     factor_F = induction_params['F']
     region = induction_params['region']
+    components_cfg = induction_params.get('components', {})
+    plot_magnetic_energy = bool(components_cfg.get('magnetic_energy', True))
+    plot_kinetic_energy = bool(components_cfg.get('kinetic_energy', True))
     
     # Set up matplotlib parameters
     plt.rcParams.update({
@@ -913,7 +939,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         'axes.titlesize': 18,
         'xtick.labelsize': 14,
         'ytick.labelsize': 14,
-        'legend.fontsize': 14,
+        'legend.fontsize': 10,
         'figure.titlesize': 20
     })
     
@@ -933,8 +959,12 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     font_legend.set_weight('normal')
     font_legend.set_size(12)
     
-    y_title = 1.005
+    y_title = 1.05
     line1, line2 = line_widths
+    component_threshold = plot_params.get(
+        'component_threshold',
+        0.0 if evolution_type == 'differential' else induction_params.get('differentiation', {}).get('epsilon', 1e-30)
+    )
     
     # Prepare time and redshift arrays
     if x_axis == 'zeta':
@@ -944,50 +974,50 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     else: # years
         t = [grid_t[i] * time_to_yr for i in range(len(grid_t))]
     
-    # Extract evolution data with units
-    if evolution_type == 'differential':
+    # Extract evolution data with units (using data_suffix for dynamic key selection)
+    if evolution_type == 'differential' and units!= 1.0:
         units = units / time_to_s
     
     # Get the appropriate data arrays based on evolution_type and derivative
     if evolution_type == 'total':
         index_O, index_F = 0, len(grid_t)
-        if derivative == 'RK':
-            index_o, index_f = 0, len(grid_t)
-            plotid = 'RK_total'
-        elif derivative == 'central':
-            index_o, index_f = 1, len(grid_t)
-            plotid = 'central_total'
-        elif derivative == 'rate':
-            index_o, index_f = 1, len(grid_t)
-            plotid = 'rate_total'
-        else:  # implicit
-            index_o, index_f = 2, len(grid_t)
-            plotid = 'implicit_total'
+        kind = 'total'
     else:  # differential
         index_O, index_F = 1, len(grid_t)
-        if derivative == 'RK':
-            index_o, index_f = 0, len(grid_t)
-            plotid = 'RK_differential'
-        elif derivative == 'central':
-            index_o, index_f = 1, len(grid_t)
-            plotid = 'central_differential'
-        elif derivative == 'rate':
-            index_o, index_f = 1, len(grid_t)
-            plotid = 'rate_differential'
-        else:  # implicit
-            index_o, index_f = 2, len(grid_t)
-            plotid = 'implicit_differential'
+        kind = 'differential'
+        
+    if derivative == 'RK':
+        index_o, index_f = 0, len(grid_t)
+        plotid = f'RK_{kind}'
+    elif derivative == 'central':
+        # Central total predictor yields E_{i+1}; compare against measured support [1:]
+        index_o, index_f = 1, len(grid_t)
+        plotid = f'central_{kind}'
+    elif derivative == 'alpha_fit':
+        # Calibrated explicit predictor yields E_{i+1}; compare against measured support [1:]
+        index_o, index_f = 1, len(grid_t)
+        plotid = f'alpha_fit_{kind}'
+    elif derivative == 'rate':
+        # Rate predictor also targets the next snapshot E_{i+1}.
+        index_o, index_f = 1, len(grid_t)
+        plotid = f'rate_{kind}'
+    elif derivative == 'implicit_forward':
+        # Forward-implicit branch starts at k=1 and predicts E_{k+1} -> support [2:]
+        index_o, index_f = 2, len(grid_t)
+        plotid = f'implicit_forward_{kind}'
+    else:
+        raise ValueError(f"Unsupported derivative for evolution plotting: {derivative}")
     
-    # Extract component data with units
-    n1 = [units * evolution_data['evo_b2'][i] for i in range(len(evolution_data['evo_b2']))]
-    n0 = [units * evolution_data['evo_ind_b2'][i] for i in range(len(evolution_data['evo_ind_b2']))]
-    diver_work = [units * evolution_data['evo_MIE_diver_B2'][i] for i in range(len(evolution_data['evo_MIE_diver_B2']))]
-    compres_work = [units * evolution_data['evo_MIE_compres_B2'][i] for i in range(len(evolution_data['evo_MIE_compres_B2']))]
-    stretch_work = [units * evolution_data['evo_MIE_stretch_B2'][i] for i in range(len(evolution_data['evo_MIE_stretch_B2']))]
-    advec_work = [units * evolution_data['evo_MIE_advec_B2'][i] for i in range(len(evolution_data['evo_MIE_advec_B2']))]
-    drag_work = [units * evolution_data['evo_MIE_drag_B2'][i] for i in range(len(evolution_data['evo_MIE_drag_B2']))]
-    total_work = [units * evolution_data['evo_MIE_total_B2'][i] for i in range(len(evolution_data['evo_MIE_total_B2']))]
-    kinetic_work = [units * evolution_data['evo_kinetic_energy'][i] for i in range(len(evolution_data['evo_kinetic_energy']))]
+    # Extract component data with units (use dynamic keys based on data_suffix)
+    n1 = [units * evolution_data[f'evo_b2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_b2{data_suffix}']))]
+    n0 = [units * evolution_data[f'evo_ind_b2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_ind_b2{data_suffix}']))]
+    diver_work = [units * evolution_data[f'evo_MIE_diver_B2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_MIE_diver_B2{data_suffix}']))]
+    compres_work = [units * evolution_data[f'evo_MIE_compres_B2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_MIE_compres_B2{data_suffix}']))]
+    stretch_work = [units * evolution_data[f'evo_MIE_stretch_B2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_MIE_stretch_B2{data_suffix}']))]
+    advec_work = [units * evolution_data[f'evo_MIE_advec_B2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_MIE_advec_B2{data_suffix}']))]
+    drag_work = [units * evolution_data[f'evo_MIE_drag_B2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_MIE_drag_B2{data_suffix}']))]
+    total_work = [units * evolution_data[f'evo_MIE_total_B2{data_suffix}'][i] for i in range(len(evolution_data[f'evo_MIE_total_B2{data_suffix}']))]
+    kinetic_work = [units * evolution_data[f'evo_kinetic_energy{data_suffix}'][i] for i in range(len(evolution_data[f'evo_kinetic_energy{data_suffix}']))]
     
     # Volume data
     volume_phi = evolution_data['evo_volume_phi']
@@ -1009,26 +1039,29 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         plot_suffix = f'_smoothed_sigma_{smoothing_sigma}'
         
     elif plot_type == 'interpolated':
+        # Use a common valid domain so all interpolated curves are aligned.
+        common_i0 = max(index_O, index_o)
+        common_i1 = min(index_F, index_f)
         # Create interpolations
         if x_axis == 'years':
             x_data = t
-            x_new = np.linspace(min(t[index_o:index_f]), max(t[index_o:index_f]), 
+            x_new = np.linspace(min(t[common_i0:common_i1]), max(t[common_i0:common_i1]), 
                                     num=interpolation_points['years'], endpoint=True)
         else:  # zeta
             x_data = z
-            x_new = np.linspace(max(z[index_o:index_f]), min(z[index_o:index_f]), 
+            x_new = np.linspace(max(z[common_i0:common_i1]), min(z[common_i0:common_i1]), 
                                     num=interpolation_points['zeta'], endpoint=True)
         
         # Create interpolation functions
-        n1_interp = interp1d(x_data[index_O:index_F], n1[index_O:index_F], kind=interpolation_kind)
-        n0_interp = interp1d(x_data[index_o:index_f], n0, kind=interpolation_kind)
-        diver_work_interp = interp1d(x_data[index_o:index_f], diver_work, kind=interpolation_kind)
-        compres_work_interp = interp1d(x_data[index_o:index_f], compres_work, kind=interpolation_kind)
-        stretch_work_interp = interp1d(x_data[index_o:index_f], stretch_work, kind=interpolation_kind)
-        advec_work_interp = interp1d(x_data[index_o:index_f], advec_work, kind=interpolation_kind)
-        drag_work_interp = interp1d(x_data[index_o:index_f], drag_work, kind=interpolation_kind)
-        total_work_interp = interp1d(x_data[index_o:index_f], total_work, kind=interpolation_kind)
-        kinetic_work_interp = interp1d(x_data[index_O:index_F], kinetic_work[index_O:index_F], kind=interpolation_kind)
+        n1_interp = interp1d(x_data[common_i0:common_i1], n1[common_i0:common_i1], kind=interpolation_kind)
+        n0_interp = interp1d(x_data[common_i0:common_i1], n0[common_i0:common_i1], kind=interpolation_kind)
+        diver_work_interp = interp1d(x_data[common_i0:common_i1], diver_work[common_i0:common_i1], kind=interpolation_kind)
+        compres_work_interp = interp1d(x_data[common_i0:common_i1], compres_work[common_i0:common_i1], kind=interpolation_kind)
+        stretch_work_interp = interp1d(x_data[common_i0:common_i1], stretch_work[common_i0:common_i1], kind=interpolation_kind)
+        advec_work_interp = interp1d(x_data[common_i0:common_i1], advec_work[common_i0:common_i1], kind=interpolation_kind)
+        drag_work_interp = interp1d(x_data[common_i0:common_i1], drag_work[common_i0:common_i1], kind=interpolation_kind)
+        total_work_interp = interp1d(x_data[common_i0:common_i1], total_work[common_i0:common_i1], kind=interpolation_kind)
+        kinetic_work_interp = interp1d(x_data[common_i0:common_i1], kinetic_work[common_i0:common_i1], kind=interpolation_kind)
         
         # Use interpolated data
         x_data = x_new
@@ -1069,19 +1102,78 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         index_F_plot = index_F
         index_o_plot = index_o
         index_f_plot = index_f
+
+    if verbose:
+        axis_values = np.asarray(x_data)
+        axis_label = 'z' if x_axis == 'zeta' else 't_yr'
+
+        def _range_from_indices(yvals, i0, i1):
+            ylen = len(yvals)
+            upper = min(i1, len(axis_values), ylen)
+            lower = max(0, min(i0, upper))
+            if upper <= lower:
+                return f'empty (idx=[{i0}:{i1}], len_y={ylen}, len_x={len(axis_values)})'
+            return (
+                f'idx=[{lower}:{upper}] '
+                f'{axis_label}:[{axis_values[lower]:.6g}, {axis_values[upper-1]:.6g}] '
+                f'len={upper-lower} (len_y={ylen})'
+            )
+
+        def _range_from_offset(yvals, i0, i1):
+            # y[0] is mapped to x[i0], useful for derivative-predicted arrays.
+            ylen = len(yvals)
+            lower = max(0, min(i0, len(axis_values)))
+            upper = min(i1, len(axis_values), i0 + ylen)
+            if upper <= lower:
+                return f'empty (idx=[{i0}:{i1}], len_y={ylen}, len_x={len(axis_values)})'
+            return (
+                f'idx=[{lower}:{upper}] '
+                f'{axis_label}:[{axis_values[lower]:.6g}, {axis_values[upper-1]:.6g}] '
+                f'len={upper-lower} (len_y={ylen}, y_offset={i0})'
+            )
+
+        print(f'Plotting debug... x_axis={x_axis}, plot_type={plot_type}, derivative={derivative}')
+        print(f'Plotting debug... base axis len={len(axis_values)}, range {axis_label}:[{axis_values[0]:.6g}, {axis_values[-1]:.6g}]')
+        if plot_magnetic_energy:
+            print(f'Plotting debug... Magnetic Energy (n1): {_range_from_indices(n1_data, index_O_plot, index_F_plot)}')
+        if plot_kinetic_energy:
+            print(f'Plotting debug... Kinetic Energy: {_range_from_indices(kinetic_work_data, index_O_plot, index_F_plot)}')
+        print(f'Plotting debug... Itemized Prediction (n0): {_range_from_offset(n0_data, index_o_plot, index_f_plot)}')
+        print(f'Plotting debug... Compact Prediction (total): {_range_from_offset(total_work_data, index_o_plot, index_f_plot)}')
+        print(f'Plotting debug... Compression: {_range_from_offset(compres_work_data, index_o_plot, index_f_plot)}')
+        print(f'Plotting debug... Stretching: {_range_from_offset(stretch_work_data, index_o_plot, index_f_plot)}')
+        print(f'Plotting debug... Advection: {_range_from_offset(advec_work_data, index_o_plot, index_f_plot)}')
+        print(f'Plotting debug... Divergence: {_range_from_offset(diver_work_data, index_o_plot, index_f_plot)}')
+        print(f'Plotting debug... Cosmic Drag: {_range_from_offset(drag_work_data, index_o_plot, index_f_plot)}')
     
     # Create figures list
     figures = []
     
     # Main evolution plot
     fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
+
+    def _slice_xy(xvals, yvals, i0, i1):
+        """Return aligned x/y slices, clipped to valid bounds of both arrays."""
+        nxy = min(len(xvals), len(yvals))
+        i0c = max(0, min(i0, nxy))
+        i1c = max(i0c, min(i1, nxy))
+        return xvals[i0c:i1c], yvals[i0c:i1c]
+
+    def _slice_xy_with_offset(xvals, yvals, i0, i1):
+        """Map y[0] to x[i0] and clip by i1 and array bounds."""
+        i0c = max(0, min(i0, len(xvals)))
+        i1c = min(i1, len(xvals), i0 + len(yvals))
+        i1c = max(i0c, i1c)
+        count = i1c - i0c
+        return xvals[i0c:i1c], yvals[:count]
     
     # Track which components were plotted
     components_plotted = []
     
     # Kinetic energy
-    if should_plot_component(kinetic_work_data):
-        ax1.plot(x_data[index_O_plot:index_F_plot], kinetic_work_data[index_O_plot:index_F_plot], 
+    xk, yk = _slice_xy(x_data, kinetic_work_data, index_O_plot, index_F_plot)
+    if plot_kinetic_energy and should_plot_component(yk, threshold=component_threshold):
+        ax1.plot(xk, yk, 
                 linewidth=line1, label='Kinetic Energy', color='#17becf')
         components_plotted.append('kinetic')
     
@@ -1090,23 +1182,29 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         label = 'Magnetic Energy'
     else:
         label = 'Magnetic Energy Induction'
-    ax1.plot(x_data[index_O_plot:index_F_plot], n1_data[index_O_plot:index_F_plot], 
-            linewidth=line1, label=label, color='#1f77b4')
+
+    x1, y1 = _slice_xy(x_data, n1_data, index_O_plot, index_F_plot)
+    if plot_magnetic_energy and should_plot_component(y1, threshold=component_threshold):
+        ax1.plot(x1, y1, 
+                linewidth=line1, label=label, color='#1f77b4')
+        components_plotted.append('magnetic_energy')
         
     # Total work (compacted)
-    if should_plot_component(total_work_data):
-        ax1.plot(x_data[index_o_plot:index_f_plot], total_work_data, '-', 
-                linewidth=line1, label='...from Compact Induction', color='#d62728')
+    xt, yt = _slice_xy_with_offset(x_data, total_work_data, index_o_plot, index_f_plot)
+    if should_plot_component(yt, threshold=component_threshold):
+        ax1.plot(xt, yt, '-', 
+                linewidth=line1, label='...from Compact Induction', color='#800020')
         components_plotted.append('total')
 
     # Induction prediction (plot if has data)
-    if should_plot_component(n0_data):
+    x0, y0 = _slice_xy_with_offset(x_data, n0_data, index_o_plot, index_f_plot)
+    if should_plot_component(y0, threshold=component_threshold):
         if evolution_type == 'total':
             label = '...from Itemize Induction'
         else:
             label = 'Predicted Induction'
-        ax1.plot(x_data[index_o_plot:index_f_plot], n0_data, '--',
-                linewidth=line1, label=label, color='#ff7f0e')
+        ax1.plot(x0, y0, '--',
+            linewidth=line1, label=label, color='#ff7f0e')
 
     # Individual components with their colors
     component_configs = [
@@ -1118,13 +1216,57 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     ]
     
     for data, label, color in component_configs:
-        if should_plot_component(data):
-            ax1.plot(x_data[index_o_plot:index_f_plot], data, '--', 
+        xc, yc = _slice_xy_with_offset(x_data, data, index_o_plot, index_f_plot)
+        if should_plot_component(yc, threshold=component_threshold):
+            ax1.plot(xc, yc, '--', 
                     linewidth=line2, label=label, color=color)
             components_plotted.append(label.lower())
+
+    if verbose and evolution_type == 'total':
+        # Quantify temporal lag between measured magnetic energy and predictions.
+        xm, ym = _slice_xy(x_data, n1_data, index_O_plot, index_F_plot)
+        xp_item, yp_item = _slice_xy_with_offset(x_data, n0_data, index_o_plot, index_f_plot)
+        xp_comp, yp_comp = _slice_xy_with_offset(x_data, total_work_data, index_o_plot, index_f_plot)
+
+        # Recompute effective starts to translate local peak indices into global snapshot indices.
+        nxy_meas = min(len(x_data), len(n1_data))
+        start_meas = max(0, min(index_O_plot, nxy_meas))
+        start_pred = max(0, min(index_o_plot, len(x_data)))
+
+        def _peak_info(xv, yv):
+            if len(yv) == 0:
+                return None
+            ip = int(np.nanargmax(np.asarray(yv)))
+            return ip, float(xv[ip]), float(yv[ip])
+
+        peak_m = _peak_info(xm, ym)
+        peak_i = _peak_info(xp_item, yp_item)
+        peak_c = _peak_info(xp_comp, yp_comp)
+
+        if peak_m and peak_i:
+            global_m = start_meas + peak_m[0]
+            global_i = start_pred + peak_i[0]
+            print(
+                "Plotting debug... Peak lag (itemized vs measured): "
+                f"d_idx_local={peak_i[0]-peak_m[0]}, d_idx_global={global_i-global_m}, "
+                f"d_{axis_label}={peak_i[1]-peak_m[1]:.6g}, "
+                f"measured_{axis_label}={peak_m[1]:.6g}, itemized_{axis_label}={peak_i[1]:.6g}, "
+                f"idx_measured_global={global_m}, idx_itemized_global={global_i}"
+            )
+        if peak_m and peak_c:
+            global_m = start_meas + peak_m[0]
+            global_c = start_pred + peak_c[0]
+            print(
+                "Plotting debug... Peak lag (compact vs measured): "
+                f"d_idx_local={peak_c[0]-peak_m[0]}, d_idx_global={global_c-global_m}, "
+                f"d_{axis_label}={peak_c[1]-peak_m[1]:.6g}, "
+                f"measured_{axis_label}={peak_m[1]:.6g}, compact_{axis_label}={peak_c[1]:.6g}, "
+                f"idx_measured_global={global_m}, idx_compact_global={global_c}"
+            )
     
     setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font)
-    ax1.legend(prop=font_legend)
+    ax1.grid(alpha=0.3)
+    ax1.legend(prop=font_legend, ncol=2)
 
     if region == 'None':
         plot_title = f'{title} - {np.round(induction_params["size"][0]/2)} Mpc'
@@ -1133,10 +1275,10 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
 
     if evolution_type != 'total':
         plot_title = plot_title.replace('Evolution', 'Induction Evolution')
-    plt.title(plot_title, y=y_title, fontproperties=font_title)
+    ax1.set_title(plot_title, y=y_title, fontproperties=font_title)
     
     if cancel_limits and x_axis == 'zeta':
-        plt.gca().invert_xaxis()
+        ax1.invert_xaxis()
     fig1.tight_layout()
     figures.append(fig1)
     
@@ -1145,22 +1287,22 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         fig2, ax2 = plt.subplots(figsize=figure_size, dpi=dpi)
         
         if x_axis == 'years':
-            ax2.set_xlabel('Time (yr)')
+            ax2.set_xlabel('Time (yr)', fontproperties=font)
             ax2.plot(t, volume_phi, linewidth=line1, label='Physical')
             ax2.plot(t, volume_co, linewidth=line1, label='Comoving')
             ax2.set_xscale('log')
         else:  # zeta
-            ax2.set_xlabel('Redshift (z)')
+            ax2.set_xlabel('Redshift (z)', fontproperties=font)
             ax2.plot(z, volume_phi, linewidth=line1, label='Physical')
             ax2.plot(z, volume_co, linewidth=line1, label='Comoving')
             ax2.set_xscale('log')
-            ax2.invert_xaxis()
         
-        ax2.set_ylabel('Integration Volume')
-        ax2.legend(fontsize='small')
+        ax2.set_ylabel('Integration Volume', fontproperties=font)
+        ax2.legend(prop=font_legend)
         ax2.set_yscale('log')
+        ax2.grid(alpha=0.3)
         
-        plt.title('Integrated Volume')
+        ax2.set_title('Integrated Volume', y=y_title, fontproperties=font_title)
         fig2.tight_layout()
         figures.append(fig2)
     
@@ -1183,10 +1325,11 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         else:
             limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
             
-        if induction_params['buffer'] == True:
-            parent_flag = induction_params.get('parent', False)
-            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
-            buffer_info = f'Buffered_{induction_params["interpol"]}_siblings_{induction_params["use_siblings"]}'
+        diff_cfg = induction_params.get('differentiation', {})
+        if diff_cfg.get('buffer', False) == True:
+            parent_flag = diff_cfg.get('parent', False)
+            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol',''))
+            buffer_info = f'Buffered_{diff_cfg.get("interpol", "")}_siblings_{diff_cfg.get("use_siblings", False)}'
             if parent_flag:
                 buffer_info += f'_parent_{parent_interpol}'
         else:
@@ -1195,7 +1338,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         # Save main plot
         file_title = '_'.join(title.split()[:3])
         # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename1 = f'{folder}/{run}_{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}{plot_suffix}.png'
+        filename1 = f'{folder}/{run}_{file_title}_integrated_energy_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}_{plotid}{plot_suffix}.png'
         filename1 = safe_filename(filename1, verbose=verbose)
         fig1.savefig(filename1, dpi=dpi)
         
@@ -1204,7 +1347,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         
         # Save volume plot if created
         if volume_evolution:
-            filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params["stencil"]}_{plotid}.png'
+            filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}_{plotid}.png'
             filename2 = safe_filename(filename2, verbose=verbose)
             fig2.savefig(filename2, dpi=dpi)
             
@@ -1215,10 +1358,12 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         for i, sim in enumerate(induction_params.get('sims', ['default'])):
             if derivative == 'RK':
                 n_iter = len(induction_params.get('it', [0]))
-            elif derivative == 'central' or derivative == 'rate':
+            elif derivative == 'central' or derivative == 'alpha_fit' or derivative == 'rate':
                 n_iter = len(induction_params.get('it', [0])) - 1
-            else:  # implicit
+            elif derivative == 'implicit_forward':
                 n_iter = len(induction_params.get('it', [0])) - 2
+            else:
+                n_iter = 0
             if n_iter > 0:
                 for j in range(min(n_iter, len(n0_data))):
                     print(f'Simulation: {sim} | Iteration: {j}')
@@ -1238,6 +1383,332 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                     print(f'Total work (compacted): {total_work_data[min(i+j, len(total_work_data)-1)]}')
                     print(f'Kinetic energy: {kinetic_work_data[min(i+j, len(kinetic_work_data)-1)]}')
     
+    return figures
+
+
+def plot_production_dissipation_evolution(pd_data, plot_params, induction_params,
+                                        grid_t, grid_zeta,
+                                        verbose=True, save=False, folder=None):
+    '''
+    Plot production/dissipation evolution from precomputed volumetric integrals.
+
+    Args:
+        - pd_data: dictionary with integrated production/dissipation arrays over snapshots
+        - plot_params: dictionary with plotting options
+        - induction_params: dictionary with simulation metadata
+        - grid_t: time grid
+        - grid_zeta: redshift grid
+        - verbose: whether to print progress
+        - save: whether to save figures
+        - folder: output folder
+
+    Returns:
+        - list of matplotlib figure objects
+
+    Author: Marco Molina
+    '''
+
+    required_keys = [
+        'int_MIE_total_B2_prod_itemized',
+        'int_MIE_total_B2_diss_itemized'
+    ]
+    if not all(k in pd_data for k in required_keys):
+        if verbose:
+            print('Production/dissipation plot skipped: required integrated keys are missing')
+        return []
+
+    x_axis = plot_params.get('x_axis', 'zeta')
+    x_scale = plot_params.get('x_scale', 'lin')
+    y_scale = plot_params.get('y_scale', 'log')
+    xlim = plot_params.get('xlim', None)
+    ylim = plot_params.get('ylim', None)
+    cancel_limits = plot_params.get('cancel_limits', False)
+    figure_size = plot_params.get('figure_size', [12, 8])
+    line_widths = plot_params.get('line_widths', [3.0, 2.0])
+    title = plot_params.get('title', 'Production and Dissipation Evolution')
+    dpi = plot_params.get('dpi', 300)
+    run = plot_params.get('run', '_')
+    plot_total_prod_diss = plot_params.get('plot_total_prod_diss', True)
+    plot_absolute = plot_params.get('plot_absolute', True)
+    plot_fractional = plot_params.get('plot_fractional', True)
+    plot_net = plot_params.get('plot_net', False)
+    normalized = plot_params.get('normalized', induction_params.get('production_dissipation', {}).get('normalized', True))
+    normalize_by_volume = induction_params.get(induction_params.get('production_dissipation', {}).get('normalize_by_volume', False))
+    if not isinstance(normalized, bool):
+        normalized = True
+    if not isinstance(normalize_by_volume, bool):
+        normalize_by_volume = False
+    epsilon = induction_params.get('differentiation', {}).get('epsilon', 1e-30)
+
+    # Match style with latest plot functions (e.g. radial profiles)
+    plt.rcParams.update({
+        'font.size': 16,
+        'axes.labelsize': 16,
+        'axes.titlesize': 18,
+        'xtick.labelsize': 14,
+        'ytick.labelsize': 14,
+        'legend.fontsize': 10,
+        'figure.titlesize': 20
+    })
+
+    font = FontProperties()
+    font.set_style('normal')
+    font.set_weight('normal')
+    font.set_size(12)
+
+    font_title = FontProperties()
+    font_title.set_style('normal')
+    font_title.set_weight('bold')
+    font_title.set_size(24)
+
+    font_legend = FontProperties()
+    font_legend.set_style('normal')
+    font_legend.set_weight('normal')
+    font_legend.set_size(12)
+
+    y_title = 1.05
+
+    line_main = line_widths[0]
+    line_comp = line_widths[1] if len(line_widths) > 1 else line_widths[0]
+
+    if x_axis == 'years':
+        x = np.array([grid_t[i] * time_to_yr for i in range(len(grid_t))], dtype=float)
+        xlabel = 'Time (yr)'
+    else:
+        x = np.array([grid_zeta[i] for i in range(len(grid_zeta))], dtype=float)
+        if x.size and x[-1] < 0:
+            x[-1] = abs(x[-1])
+        xlabel = 'Redshift (z)'
+
+    # Itemized totals: sum of per-term production/dissipation contributions.
+    itemized_prod = np.asarray(pd_data['int_MIE_total_B2_prod_itemized'], dtype=float)
+    itemized_diss = np.asarray(pd_data['int_MIE_total_B2_diss_itemized'], dtype=float)
+    itemized_net = itemized_prod - itemized_diss
+
+    compact_prod = None
+    compact_diss = None
+    if 'int_MIE_total_B2_prod_compact' in pd_data and 'int_MIE_total_B2_diss_compact' in pd_data:
+        compact_prod = np.asarray(pd_data['int_MIE_total_B2_prod_compact'], dtype=float)
+        compact_diss = np.asarray(pd_data['int_MIE_total_B2_diss_compact'], dtype=float)
+    compact_net = None if compact_prod is None or compact_diss is None else (compact_prod - compact_diss)
+
+    # Component palette used in plot_radial_profiles
+    component_map = [
+        ('MIE_compres_B2', 'Compression', '#9467bd', 'comp'),
+        ('MIE_stretch_B2', 'Stretching', '#ff9896', 'str'),
+        ('MIE_advec_B2', 'Advection', '#e377c2', 'adv'),
+        ('MIE_diver_B2', 'Divergence', '#c5b0d5', 'div'),
+        ('MIE_drag_B2', 'Cosmic Drag', '#7f7f7f', 'drag')
+    ]
+
+    if verbose:
+        try:
+            if compact_prod is not None and compact_diss is not None:
+                # Primary comparison: itemized-sum totals vs compact-total split.
+                rel_prod_comp = np.nanmax(np.abs(itemized_prod - compact_prod) / np.maximum(np.abs(compact_prod), epsilon))
+                rel_diss_comp = np.nanmax(np.abs(itemized_diss - compact_diss) / np.maximum(np.abs(compact_diss), epsilon))
+                print(f'Production/dissipation totals: itemized-sum vs compact-split (max rel diff P={rel_prod_comp:.3e}, D={rel_diss_comp:.3e}). Expected differences as compact totals internalize per-component cancellations.')
+            if compact_net is not None:
+                rel_net = np.nanmax(np.abs(itemized_net - compact_net) / np.maximum(np.abs(compact_net), epsilon))
+                print(f'Production/dissipation net: itemized vs compact (max rel diff N={rel_net:.3e}). Expected convergent net results.')
+        except Exception:
+            pass
+
+    figures = []
+
+    # Absolute production/dissipation rates
+    if plot_absolute:
+        fig_abs, ax_abs = plt.subplots(figsize=figure_size, dpi=dpi)
+        if plot_total_prod_diss:
+            ax_abs.plot(x, itemized_prod, '-', linewidth=line_main, color='#2ca02c', label='Total Production (itemized sum)')
+            ax_abs.plot(x, itemized_diss, '-', linewidth=line_main, color='#d62728', label='Total Dissipation (itemized sum)')
+        ax_abs.plot(x, itemized_net, '--', linewidth=line_main, color='#ff7f0e', label='Net (itemized) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
+
+        if compact_prod is not None and compact_diss is not None:
+            if plot_total_prod_diss:
+                ax_abs.plot(x, compact_prod, '-.', linewidth=line_comp, color='#2ca02c', label='Total Production (compact)')
+                ax_abs.plot(x, compact_diss, '-.', linewidth=line_comp, color='#d62728', label='Total Dissipation (compact)')
+        if compact_net is not None:
+            ax_abs.plot(x, compact_net, '-', linewidth=line_main, color='#800020', label='Net (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
+
+        for prefix, label, color, sym in component_map:
+            prod_key = f'int_{prefix}_prod'
+            diss_key = f'int_{prefix}_diss'
+            if prod_key in pd_data:
+                arr_p = np.asarray(pd_data[prod_key], dtype=float)
+                if should_plot_component(arr_p):
+                    ax_abs.plot(x, arr_p, '--', linewidth=line_comp, color=color, label=rf'{label} $P_{{\mathrm{{{sym}}}}}$')
+            if diss_key in pd_data:
+                arr_d = np.asarray(pd_data[diss_key], dtype=float)
+                if should_plot_component(arr_d):
+                    ax_abs.plot(x, arr_d, ':', linewidth=line_comp, color=color, label=rf'{label} $D_{{\mathrm{{{sym}}}}}$')
+
+        ax_abs.set_xlabel(xlabel, fontproperties=font)
+        norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
+        vol_suffix = r' / Volume' if normalize_by_volume else ''
+        ax_abs.set_ylabel(f'Integrated Production / Dissipation{norm_suffix}{vol_suffix}', fontproperties=font)
+        if x_scale == 'log':
+            ax_abs.set_xscale('log')
+            if x_axis == 'years':
+                ax_abs.set_xlabel('Time log[yr]', fontproperties=font)
+            else:
+                ax_abs.set_xlabel('Redshift log[z]', fontproperties=font)
+        if y_scale == 'log':
+            ax_abs.set_yscale('log')
+            ax_abs.set_ylabel(f'Integrated Production / Dissipation log{norm_suffix}{vol_suffix}', fontproperties=font)
+        if not cancel_limits and xlim:
+            ax_abs.set_xlim(xlim[0], xlim[1])
+        if not cancel_limits and ylim:
+            ax_abs.set_ylim(ylim[0], ylim[1])
+        if cancel_limits and x_axis == 'zeta':
+            ax_abs.invert_xaxis()
+
+        ax_abs.grid(alpha=0.3)
+        ax_abs.set_title(title, y=y_title, fontproperties=font_title)
+        ax_abs.legend(prop=font_legend, ncol=2)
+        fig_abs.tight_layout()
+        figures.append(fig_abs)
+
+    # Fractional contributions and net efficiency
+    if plot_fractional:
+        fig_frac, ax_frac = plt.subplots(figsize=figure_size, dpi=dpi)
+
+        for prefix, label, color, sym in component_map:
+            frac_p_key = f'int_PD_frac_{prefix}_prod'
+            frac_d_key = f'int_PD_frac_{prefix}_diss'
+            if frac_p_key in pd_data:
+                arr_fp = np.asarray(pd_data[frac_p_key], dtype=float)
+                if should_plot_component(arr_fp, threshold=epsilon):
+                    ax_frac.plot(x, arr_fp, '--', linewidth=line_comp, color=color, label=rf'{label} $p_{{\mathrm{{{sym}}}}}$')
+            if frac_d_key in pd_data:
+                arr_fd = np.asarray(pd_data[frac_d_key], dtype=float)
+                if should_plot_component(arr_fd, threshold=epsilon):
+                    ax_frac.plot(x, -arr_fd, ':', linewidth=line_comp, color=color, label=rf'{label} $d_{{\mathrm{{{sym}}}}}$')
+
+        if 'int_PD_iota' in pd_data:
+            iota = np.asarray(pd_data['int_PD_iota'], dtype=float)
+            ax_frac.plot(x, iota, '-', linewidth=line_main, color='#1f77b4', label=r'Net Efficiency $\iota$')
+
+        ax_frac.set_xlabel(xlabel, fontproperties=font)
+        ax_frac.set_ylabel('Fractional Contribution (+prod / -diss)', fontproperties=font)
+        if x_scale == 'log':
+            ax_frac.set_xscale('log')
+            if x_axis == 'years':
+                ax_frac.set_xlabel('Time log[yr]', fontproperties=font)
+            else:
+                ax_frac.set_xlabel('Redshift log[z]', fontproperties=font)
+        if not cancel_limits and xlim:
+            ax_frac.set_xlim(xlim[0], xlim[1])
+        ax_frac.set_ylim(-1.05, 1.05)
+        if cancel_limits and x_axis == 'zeta':
+            ax_frac.invert_xaxis()
+
+        ax_frac.grid(alpha=0.3)
+        ax_frac.set_title(f'{title} (Fractions)', y=y_title, fontproperties=font_title)
+        ax_frac.legend(prop=font_legend, ncol=2)
+        fig_frac.tight_layout()
+        figures.append(fig_frac)
+
+    # Net contributions: per-component net and total net curves
+    if plot_net:
+        fig_net, ax_net = plt.subplots(figsize=figure_size, dpi=dpi)
+
+        for prefix, label, color, sym in component_map:
+            prod_key = f'int_{prefix}_prod'
+            diss_key = f'int_{prefix}_diss'
+            if prod_key in pd_data and diss_key in pd_data:
+                arr_p = np.asarray(pd_data[prod_key], dtype=float)
+                arr_d = np.asarray(pd_data[diss_key], dtype=float)
+                net_i = arr_p - arr_d
+                if should_plot_component(net_i, threshold=epsilon):
+                    ax_net.plot(x, net_i, '--', linewidth=line_comp, color=color, label=rf'{label} $N_{{\mathrm{{{sym}}}}}$')
+
+        ax_net.plot(x, itemized_net, '--', linewidth=line_main, color='#ff7f0e', label='Net total (itemized)')
+        if compact_net is not None:
+            ax_net.plot(x, compact_net, '-', linewidth=line_main, color='#800020', label='Net total (compact)')
+
+        ax_net.set_xlabel(xlabel, fontproperties=font)
+        norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
+        vol_suffix = r' / Volume' if normalize_by_volume else ''
+        ax_net.set_ylabel(f'Integrated Net Contribution{norm_suffix}{vol_suffix}', fontproperties=font)
+        if x_scale == 'log':
+            ax_net.set_xscale('log')
+            if x_axis == 'years':
+                ax_net.set_xlabel('Time log[yr]', fontproperties=font)
+            else:
+                ax_net.set_xlabel('Redshift log[z]', fontproperties=font)
+        if not cancel_limits and xlim:
+            ax_net.set_xlim(xlim[0], xlim[1])
+        if not cancel_limits and ylim:
+            ax_net.set_ylim(ylim[0], ylim[1])
+        if cancel_limits and x_axis == 'zeta':
+            ax_net.invert_xaxis()
+
+        ax_net.grid(alpha=0.3)
+        ax_net.set_title(f'{title} (Net)', y=y_title, fontproperties=font_title)
+        ax_net.legend(prop=font_legend, ncol=2)
+        fig_net.tight_layout()
+        figures.append(fig_net)
+
+    if save and figures:
+        if folder is None:
+            folder = os.getcwd()
+
+        sim_info = f'{induction_params["up_to_level"]}_{induction_params["F"]}_{induction_params["vir_kind"]}vir_{induction_params["rad_kind"]}rad_{induction_params["region"]}Region'
+        axis_info = f'{x_axis}_{x_scale}_{y_scale}'
+        if cancel_limits:
+            limit_info = 'cancel_limits'
+        else:
+            limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
+        diff_cfg = induction_params.get('differentiation', {})
+        if diff_cfg.get('buffer', False) == True:
+            parent_flag = diff_cfg.get('parent', False)
+            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol', ''))
+            buffer_info = f'Buffered_{diff_cfg.get("interpol", "")}_siblings_{diff_cfg.get("use_siblings", False)}'
+            if parent_flag:
+                buffer_info += f'_parent_{parent_interpol}'
+        else:
+            buffer_info = 'NoBuffer'
+
+        base_title = '_'.join(title.split()[:4])
+        units_info = f'pd_{"physical" if not normalized else "normalized"}'
+        if plot_absolute and len(figures) >= 1:
+            fname_abs = f'{folder}/{run}_{base_title}_prod_diss_abs_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_abs = safe_filename(fname_abs, verbose=verbose)
+            figures[0].savefig(fname_abs, dpi=dpi)
+            if verbose:
+                print(f'Plotting... Production/Dissipation absolute plot saved as: {fname_abs}')
+
+        abs_idx = 0 if plot_absolute else None
+        frac_idx = None
+        net_idx = None
+        next_idx = 0
+        if plot_absolute:
+            abs_idx = next_idx
+            next_idx += 1
+        if plot_fractional:
+            frac_idx = next_idx
+            next_idx += 1
+        if plot_net:
+            net_idx = next_idx
+
+        if frac_idx is not None and len(figures) > frac_idx:
+            fname_frac = f'{folder}/{run}_{base_title}_prod_diss_frac_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_frac = safe_filename(fname_frac, verbose=verbose)
+            figures[frac_idx].savefig(fname_frac, dpi=dpi)
+            if verbose:
+                print(f'Plotting... Production/Dissipation fractional plot saved as: {fname_frac}')
+
+        if net_idx is not None and len(figures) > net_idx:
+            fname_net = f'{folder}/{run}_{base_title}_prod_diss_net_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_net = safe_filename(fname_net, verbose=verbose)
+            figures[net_idx].savefig(fname_net, dpi=dpi)
+            if verbose:
+                print(f'Plotting... Production/Dissipation net plot saved as: {fname_net}')
+
+    if verbose and figures:
+        print('Plotting... Production/Dissipation evolution plots created')
+
     return figures
 
 def plot_radial_profiles(profile_data, plot_params, induction_params,
@@ -1787,10 +2258,11 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         axis_info = f'{x_scale}_{y_scale}'
         limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
 
-        if induction_params.get('buffer', False) == True:
-            parent_flag = induction_params.get('parent', False)
-            parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
-            buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings","")}'
+        diff_cfg = induction_params.get('differentiation', {})
+        if diff_cfg.get('buffer', False) == True:
+            parent_flag = diff_cfg.get('parent', False)
+            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol',''))
+            buffer_info = f'Buffered_{diff_cfg.get("interpol","")}_siblings_{diff_cfg.get("use_siblings","")}'
             if parent_flag:
                 buffer_info += f'_parent_{parent_interpol}'
         else:
@@ -1799,7 +2271,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         for i, fig in enumerate(figures):
             file_title = '_'.join(title.split()[:3])
-            file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{induction_params.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
+            file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
             file_name = safe_filename(file_name, verbose=verbose)
             fig.savefig(file_name, dpi=dpi)
             if verbose:
@@ -2119,10 +2591,11 @@ def distribution_check(arr, quantity, plot_params, induction_params,
             sim_info = f'{induction_params.get("up_to_level","")}_{induction_params.get("F","")}_{induction_params.get("vir_kind","")}vir_{induction_params.get("rad_kind","")}rad_{induction_params.get("region","")}Region'
             if is_patches:
                 sim_info += '_AMR'
-            if induction_params.get('buffer', False):
-                parent_flag = induction_params.get('parent', False)
-                parent_interpol = induction_params.get('parent_interpol', induction_params.get('interpol',''))
-                buffer_info = f'Buffered_{induction_params.get("interpol","")}_siblings_{induction_params.get("use_siblings", False)}'
+            diff_cfg = induction_params.get('differentiation', {})
+            if diff_cfg.get('buffer', False):
+                parent_flag = diff_cfg.get('parent', False)
+                parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol',''))
+                buffer_info = f'Buffered_{diff_cfg.get("interpol","")}_siblings_{diff_cfg.get("use_siblings", False)}'
                 if parent_flag:
                     buffer_info += f'_parent_{parent_interpol}'
             else:

@@ -113,6 +113,123 @@ _start_early_capture()
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+def ensure_temporal_order(all_data, series_dicts=None, index_lists=None, verbose=False):
+    """
+    Ensure aggregated snapshot series are ordered by increasing grid_time.
+
+    If order is already correct, this is a no-op. If not, all list-like
+    series with snapshot length are reordered consistently.
+    """
+    if series_dicts is None:
+        series_dicts = []
+    if index_lists is None:
+        index_lists = []
+
+    times = np.asarray(all_data.get('grid_time', []), dtype=float)
+    zetas = np.asarray(all_data.get('grid_zeta', []), dtype=float)
+    irr = np.asarray(all_data.get('grid_irr', []), dtype=float)
+    n = len(times)
+
+    if n <= 1:
+        return False
+
+    order = np.argsort(times)
+    is_sorted = np.array_equal(order, np.arange(n))
+
+    if verbose:
+        t_increasing = bool(np.all(np.diff(times) > 0)) if n > 1 else True
+        zeta_status = "ok"
+        if len(zetas) != n:
+            zeta_status = "missing_or_mismatch"
+        z_decreasing = bool(np.all(np.diff(zetas) < 0)) if len(zetas) == n and n > 1 else None
+        irr_status = "ok"
+        if len(irr) != n:
+            irr_status = "missing_or_mismatch"
+        irr_strict_increasing = None
+        irr_non_decreasing = None
+        bad_irr_non_decreasing = []
+        irr_diff = np.array([], dtype=float)
+        if len(irr) == n and n > 1:
+            irr_diff = np.diff(irr)
+            valid_mask = np.isfinite(irr_diff)
+            if np.any(valid_mask):
+                irr_strict_increasing = bool(np.all(irr_diff[valid_mask] > 0))
+                irr_non_decreasing = bool(np.all(irr_diff[valid_mask] >= 0))
+            bad_irr_non_decreasing = np.where((~np.isfinite(irr_diff)) | (irr_diff < 0))[0].tolist()
+        elif len(irr) == n and n <= 1:
+            irr_strict_increasing = True
+            irr_non_decreasing = True
+        print(
+            "[order] Snapshot order check: "
+            f"time_increasing={t_increasing}, zeta_decreasing={z_decreasing}, "
+            f"irr_strict_increasing={irr_strict_increasing}, "
+            f"irr_non_decreasing={irr_non_decreasing}, already_sorted={is_sorted}, "
+            f"len(time)={n}, len(zeta)={len(zetas)}, len(irr)={len(irr)}, "
+            f"zeta_status={zeta_status}, irr_status={irr_status}"
+        )
+        if len(irr) == n and n > 0:
+            print(
+                "[order] Endpoints: "
+                f"irr=[{int(irr[0])}, {int(irr[-1])}], "
+                f"time=[{times[0]:.6g}, {times[-1]:.6g}], "
+                f"zeta=[{zetas[0]:.6g}, {zetas[-1]:.6g}]"
+            )
+            if len(irr) > 6:
+                irr_head = ", ".join(str(int(v)) for v in irr[:3])
+                irr_tail = ", ".join(str(int(v)) for v in irr[-3:])
+                print(f"[order] grid_irr preview: head=[{irr_head}] tail=[{irr_tail}]")
+            if bad_irr_non_decreasing:
+                preview = bad_irr_non_decreasing[:5]
+                print(f"[order] grid_irr decreasing/invalid points (first): {preview}")
+                for idx in preview:
+                    left = irr[idx] if idx < len(irr) else np.nan
+                    right = irr[idx + 1] if idx + 1 < len(irr) else np.nan
+                    d_irr = irr_diff[idx] if idx < len(irr_diff) else np.nan
+                    d_t = (times[idx + 1] - times[idx]) if idx + 1 < len(times) else np.nan
+                    print(
+                        "[order]   pair detail: "
+                        f"idx={idx}, irr_i={left}, irr_i1={right}, d_irr={d_irr}, d_time={d_t:.6g}"
+                    )
+        elif len(irr) != n:
+            print(
+                "[order] grid_irr diagnostics skipped: "
+                f"len(grid_irr)={len(irr)} does not match len(grid_time)={n}"
+            )
+
+    if is_sorted:
+        return False
+
+    if verbose:
+        print("[order] Reordering aggregated series by increasing grid_time")
+
+    def _reorder_list_like(obj):
+        if isinstance(obj, list) and len(obj) == n:
+            return [obj[idx] for idx in order]
+        return obj
+
+    for key, value in list(all_data.items()):
+        all_data[key] = _reorder_list_like(value)
+
+    for dct in series_dicts:
+        if dct is None:
+            continue
+        for key, value in list(dct.items()):
+            dct[key] = _reorder_list_like(value)
+
+    rank = np.empty(n, dtype=int)
+    rank[order] = np.arange(n)
+
+    for idx_list in index_lists:
+        if idx_list is None:
+            continue
+        for ii in range(len(idx_list)):
+            old_idx = idx_list[ii]
+            if isinstance(old_idx, (int, np.integer)) and 0 <= int(old_idx) < n:
+                idx_list[ii] = int(rank[int(old_idx)])
+
+    return True
+
 # Ensure project root is on sys.path so `scripts.*` imports work
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent

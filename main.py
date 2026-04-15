@@ -2,31 +2,23 @@ import numpy as np
 import time
 import atexit
 import scripts.utils as utils
+import scripts.debug as debug_module
 from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
 from config import EVO_PLOT_PARAMS as evo_plot_params
+from config import PROD_DISS_PLOT_PARAMS as prod_diss_plot_params
 from config import PROFILE_PLOT_PARAMS as prof_plot_params
 from config import DEBUG_PARAMS as debug_params
 from config import PERCENTILE_PLOT_PARAMS as percentile_plot_params
 from config import SCAN_PLOT_PARAMS as scan_plot_params
 from config import get_sim_characteristics
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
-from scripts.plot_fields import plot_integral_evolution, plot_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
+from scripts.plot_fields import plot_integral_evolution, plot_production_dissipation_evolution, plot_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
 from scripts.memory_utils import process_iteration_with_logging, MemoryMonitor, build_executor_kwargs
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
 import gc
 memory_monitor = MemoryMonitor(out_params)
-
-def _get_last_rad(rad_list):
-    if not rad_list:
-        return 0
-    if isinstance(rad_list[0], (list, tuple, np.ndarray)):
-        for sim_rad in reversed(rad_list):
-            if sim_rad:
-                return sim_rad[-1]
-        return 0
-    return rad_list[-1]
 
 _log_cm = None
 if out_params.get("save_terminal", False):
@@ -53,6 +45,9 @@ start_time = time.time()
 if __name__ == "__main__":
     memory_monitor.start()
     memory_monitor.log("startup", force=True)
+    diff_params = ind_params["differentiation"]
+    return_params = ind_params["return"]
+    percentile_params_cfg = ind_params["percentiles"]
     if out_params["parallel"]:
         print(f'**************************************************************')
         print(f"Running in parallel mode with {out_params['ncores']} cores")
@@ -89,15 +84,16 @@ if __name__ == "__main__":
         for L, lvl in enumerate(ind_params["level"]):
             # Initialize result dictionaries for this level based on what's enabled
             all_data = {}
-            all_vectorial = {} if ind_params["return_vectorial"] else None
-            all_induction = {} if ind_params["return_induction"] else None
-            all_magnitudes = {} if ind_params["mag"] else None
-            all_induction_energy = {} if ind_params["return_induction_energy"] else None
-            all_induction_energy_integral = {} if ind_params["energy_evolution"] else None
-            all_induction_test_energy_integral = {} if ind_params["energy_evolution"] else None
-            all_induction_energy_profiles = {} if ind_params["profiles"] else None
-            all_induction_uniform = {} if ind_params["projection"] else None
-            all_diver_B_percentiles = {} if ind_params["percentiles"] else None
+            all_vectorial = {} if return_params["return_vectorial"] else None
+            all_induction = {} if return_params["return_induction"] else None
+            all_magnitudes = {} if return_params["mag"] else None
+            all_induction_energy = {} if return_params["return_induction_energy"] else None
+            need_integrals = ind_params["energy_evolution"]["enabled"] or ind_params.get("production_dissipation", {}).get("enabled", False)
+            all_induction_energy_integral = {} if need_integrals else None
+            all_induction_test_energy_integral = {} if need_integrals else None
+            all_induction_energy_profiles = {} if return_params["profiles"] else None
+            all_induction_uniform = {} if return_params["projection"] else None
+            all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
             scan_meta_sim = []
@@ -121,7 +117,7 @@ if __name__ == "__main__":
                     profile_idx_set = set([it_list[k] for k in profile_it_indx if -len(it_list) <= k < len(it_list)])
                     debug_idx_set = set([it_list[k] for k in debug_it_indx if -len(it_list) <= k < len(it_list)])
                     for j, it in enumerate(it_list):
-                        profiles_flag = bool(ind_params["profiles"]) and (it in profile_idx_set)
+                        profiles_flag = bool(return_params["profiles"]) and (it in profile_idx_set)
 
                         # Always apply percentile_params to all snapshots, but keep other debug
                         # settings only for selected iterations
@@ -157,27 +153,29 @@ if __name__ == "__main__":
                             units=ind_params["units"],
                             nbins=ind_params["nbins"][i],
                             logbins=ind_params["logbins"],
-                            stencil=ind_params["stencil"],
-                            buffer=ind_params["buffer"],
-                            use_siblings=ind_params["use_siblings"],
-                            interpol=ind_params["interpol"],
-                            nghost=ind_params["nghost"],
-                            blend=ind_params.get("blend", False),
-                            parent=ind_params.get("parent", False),
-                            parent_interpol=ind_params.get("parent_interpol", ind_params["interpol"]),
+                            stencil=diff_params["stencil"],
+                            buffer=diff_params["buffer"],
+                            use_siblings=diff_params["use_siblings"],
+                            interpol=diff_params["interpol"],
+                            nghost=diff_params["nghost"],
+                            blend=diff_params.get("blend", False),
+                            parent=diff_params.get("parent", False),
+                            parent_interpol=diff_params.get("parent_interpol", diff_params["interpol"]),
                             bitformat=out_params["bitformat"],
-                            mag=ind_params["mag"],
+                            mag=return_params["mag"],
                             sim_characteristics=sim_characteristics,
-                            energy_evolution=ind_params["energy_evolution"],
+                            energy_evolution_config=ind_params["energy_evolution"],
+                            energy_evolution=ind_params["energy_evolution"]["enabled"],
                             profiles=profiles_flag,
-                            projection=ind_params["projection"],
-                            percentiles=ind_params["percentiles"],
-                            percentile_levels=ind_params["percentile_levels"],
+                            projection=return_params["projection"],
+                            percentiles=percentile_params_cfg["enabled"],
+                            percentile_levels=percentile_params_cfg["percentile_levels"],
                             divergence_filter=ind_params.get("divergence_filter"),
                             debug_params=debug_params_flag,
-                            return_vectorial=ind_params["return_vectorial"],
-                            return_induction=ind_params["return_induction"],
-                            return_induction_energy=ind_params["return_induction_energy"],
+                            production_dissipation=ind_params.get("production_dissipation"),
+                            return_vectorial=return_params["return_vectorial"],
+                            return_induction=return_params["return_induction"],
+                            return_induction_energy=return_params["return_induction_energy"],
                             gc_worker_end=out_params.get("memory_profiling", {}).get("gc_worker_end", False),
                             verbose=out_params["verbose"],
                         )
@@ -288,25 +286,63 @@ if __name__ == "__main__":
                     del induction_energy_integral, induction_test_energy_integral
                     del induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
+            # Enforce consistent temporal ordering before any evolution/plot step.
+            debug_module.ensure_temporal_order(
+                all_data,
+                series_dicts=[
+                    all_vectorial,
+                    all_induction,
+                    all_magnitudes,
+                    all_induction_energy,
+                    all_induction_energy_integral,
+                    all_induction_test_energy_integral,
+                    all_induction_energy_profiles,
+                    all_induction_uniform,
+                    all_diver_B_percentiles,
+                    all_debug_fields,
+                ],
+                index_lists=[profile_indices, scan_meta_idx],
+                verbose=out_params["verbose"],
+            )
+
             # Plotting and post-processing driven by config for this level
-            if ind_params["energy_evolution"] and all_induction_energy_integral is not None:
+            if ind_params["energy_evolution"]["enabled"] and all_induction_energy_integral is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
                 induction_energy_integral_evo = induction_energy_integral_evolution(
                     ind_params["components"], all_induction_energy_integral,
-                    ind_params['evolution_type'], ind_params['derivative'],
+                    ind_params['energy_evolution']['derivative'],
                     all_data['rho_b'], all_data['grid_time'], all_data['grid_zeta'],
+                    normalized=ind_params['energy_evolution'].get('normalized', False),
                     verbose=out_params["verbose"])
                 plot_integral_evolution(
                     induction_energy_integral_evo,
                     evo_plot_params, plot_ind_params,
                     all_data['grid_time'], all_data['grid_zeta'],
-                    _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                    utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                     folder=out_params['image_folder']
                 )
                 print(f"Ploting " + evo_plot_params["title"] + f" completed (level {lvl}).")
 
-            if ind_params["profiles"] and all_induction_energy_profiles is not None:
+            if ind_params.get("production_dissipation", {}).get("enabled", False) and all_induction_energy_integral is not None:
+                plot_ind_params = ind_params.copy()
+                plot_ind_params["up_to_level"] = lvl
+                pd_figs = plot_production_dissipation_evolution(
+                    all_induction_energy_integral,
+                    prod_diss_plot_params,
+                    plot_ind_params,
+                    all_data['grid_time'],
+                    all_data['grid_zeta'],
+                    verbose=out_params['verbose'],
+                    save=out_params['save'],
+                    folder=out_params['image_folder']
+                )
+                if pd_figs:
+                    print(f"Ploting " + prod_diss_plot_params["title"] + f" completed (level {lvl}).")
+                else:
+                    print(f"Ploting " + prod_diss_plot_params["title"] + f" skipped (level {lvl}, no valid integrated P/D data).")
+
+            if return_params["profiles"] and all_induction_energy_profiles is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
                 # Determine how many snapshots have profiles calculated
@@ -319,12 +355,12 @@ if __name__ == "__main__":
                         all_induction_energy_profiles,
                         prof_plot_params_adjusted, plot_ind_params,
                         all_data['grid_time'], all_data['grid_zeta'],
-                        _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                        utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                         folder=out_params['image_folder']                
                     )
                     print(f"Ploting " + prof_plot_params["title"] + f" completed (level {lvl}).")
 
-            if ind_params["percentiles"] and all_diver_B_percentiles is not None:
+            if percentile_params_cfg["enabled"] and all_diver_B_percentiles is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
                 plot_percentile_evolution(
@@ -351,7 +387,7 @@ if __name__ == "__main__":
                         continue
                     distribution_check(all_debug_fields[field_key], quantity, debug_params, local_ind_params,
                                     all_data['grid_time'], all_data['grid_zeta'],
-                                    _get_last_rad(Rad), ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
+                                    utils.get_last_rad(Rad), ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
                                     clean=debug_params.get("field_analysis", {}).get("clean_field", False), verbose=out_params["verbose"], save=out_params["save"],
                                     folder=out_params["image_folder"])
                     print(f"Ploting distribution check for " + quantity + f" completed (level {lvl}).")
@@ -456,15 +492,16 @@ if __name__ == "__main__":
             
             # Initialize result dictionaries before the loop (conditional based on config)
             all_data = {}
-            all_vectorial = {} if ind_params["return_vectorial"] else None
-            all_induction = {} if ind_params["return_induction"] else None
-            all_magnitudes = {} if ind_params["mag"] else None
-            all_induction_energy = {} if ind_params["return_induction_energy"] else None
-            all_induction_energy_integral = {} if ind_params["energy_evolution"] else None
-            all_induction_test_energy_integral = {} if ind_params["energy_evolution"] else None
-            all_induction_energy_profiles = {} if ind_params["profiles"] else None
-            all_induction_uniform = {} if ind_params["projection"] else None
-            all_diver_B_percentiles = {} if ind_params["percentiles"] else None
+            all_vectorial = {} if return_params["return_vectorial"] else None
+            all_induction = {} if return_params["return_induction"] else None
+            all_magnitudes = {} if return_params["mag"] else None
+            all_induction_energy = {} if return_params["return_induction_energy"] else None
+            need_integrals = ind_params["energy_evolution"]["enabled"] or ind_params.get("production_dissipation", {}).get("enabled", False)
+            all_induction_energy_integral = {} if need_integrals else None
+            all_induction_test_energy_integral = {} if need_integrals else None
+            all_induction_energy_profiles = {} if return_params["profiles"] else None
+            all_induction_uniform = {} if return_params["projection"] else None
+            all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
             scan_meta_sim = []
@@ -526,27 +563,29 @@ if __name__ == "__main__":
                         units=ind_params["units"],
                         nbins=ind_params["nbins"][i],
                         logbins=ind_params["logbins"],
-                        stencil=ind_params["stencil"],
-                        buffer=ind_params["buffer"],
-                        use_siblings=ind_params["use_siblings"],
-                        interpol=ind_params["interpol"],
-                        nghost=ind_params["nghost"],
-                        blend=ind_params.get("blend", False),
-                        parent=ind_params.get("parent", False),
-                        parent_interpol=ind_params.get("parent_interpol", ind_params["interpol"]),
+                        stencil=diff_params["stencil"],
+                        buffer=diff_params["buffer"],
+                        use_siblings=diff_params["use_siblings"],
+                        interpol=diff_params["interpol"],
+                        nghost=diff_params["nghost"],
+                        blend=diff_params.get("blend", False),
+                        parent=diff_params.get("parent", False),
+                        parent_interpol=diff_params.get("parent_interpol", diff_params["interpol"]),
                         bitformat=out_params["bitformat"],
-                        mag=ind_params["mag"],
+                        mag=return_params["mag"],
                         sim_characteristics=sim_characteristics,
-                        energy_evolution=ind_params["energy_evolution"],
-                        profiles=ind_params["profiles"] if it in profile_idx_set else False,
-                        projection=ind_params["projection"],
-                        percentiles=ind_params["percentiles"],
-                        percentile_levels=ind_params["percentile_levels"],
+                        energy_evolution_config=ind_params["energy_evolution"],
+                        energy_evolution=ind_params["energy_evolution"]["enabled"],
+                        profiles=return_params["profiles"] if it in profile_idx_set else False,
+                        projection=return_params["projection"],
+                        percentiles=percentile_params_cfg["enabled"],
+                        percentile_levels=percentile_params_cfg["percentile_levels"],
                         divergence_filter=ind_params.get("divergence_filter"),
                         debug_params=debug_params_flag,
-                        return_vectorial=ind_params["return_vectorial"],
-                        return_induction=ind_params["return_induction"],
-                        return_induction_energy=ind_params["return_induction_energy"],
+                        production_dissipation=ind_params.get("production_dissipation"),
+                        return_vectorial=return_params["return_vectorial"],
+                        return_induction=return_params["return_induction"],
+                        return_induction_energy=return_params["return_induction_energy"],
                         gc_worker_end=out_params.get("memory_profiling", {}).get("gc_worker_end", False),
                         verbose=out_params["verbose"])
                     
@@ -664,6 +703,25 @@ if __name__ == "__main__":
                     del induction_energy_integral, induction_test_energy_integral
                     del induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
+            # Enforce consistent temporal ordering before any evolution/plot step.
+            debug_module.ensure_temporal_order(
+                all_data,
+                series_dicts=[
+                    all_vectorial,
+                    all_induction,
+                    all_magnitudes,
+                    all_induction_energy,
+                    all_induction_energy_integral,
+                    all_induction_test_energy_integral,
+                    all_induction_energy_profiles,
+                    all_induction_uniform,
+                    all_diver_B_percentiles,
+                    all_debug_fields,
+                ],
+                index_lists=[profile_indices, scan_meta_idx],
+                verbose=out_params["verbose"],
+            )
+
             # field = np.abs(np.sqrt(induction_uniform['uniform_MIE_compres_x']**2 + 
             #                 induction_uniform['uniform_MIE_compres_y']**2 + 
             #                 induction_uniform['uniform_MIE_compres_z']**2))
@@ -675,13 +733,14 @@ if __name__ == "__main__":
             #         Save=True, DPI=out_params["dpi"], run=out_params["run"] + f'_Level_{ind_params["up_to_level"]}', folder=out_params["image_folder"])
             
             # Actual evolution calculation
-            if ind_params["energy_evolution"] == False:
+            if ind_params["energy_evolution"]["enabled"] == False:
                 print("Energy evolution calculation is disabled in the configuration. Skipping evolution plots.")
             else:
                 induction_energy_integral_evo = induction_energy_integral_evolution(
                     ind_params["components"], all_induction_energy_integral,
-                    ind_params['evolution_type'], ind_params['derivative'],
+                    ind_params['energy_evolution']['derivative'],
                     all_data['rho_b'], all_data['grid_time'], all_data['grid_zeta'],
+                    normalized=ind_params['energy_evolution'].get('normalized', False),
                     verbose=out_params["verbose"])
                 
                 # Create local params with current level for plotting
@@ -692,13 +751,33 @@ if __name__ == "__main__":
                     induction_energy_integral_evo,
                     evo_plot_params, plot_ind_params,
                     all_data['grid_time'], all_data['grid_zeta'],
-                    _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                    utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                     folder=out_params['image_folder']
                 )
 
                 print(f"Ploting " + evo_plot_params["title"] + " completed.")
+
+            if ind_params.get("production_dissipation", {}).get("enabled", False) == False:
+                print("Production/dissipation analysis is disabled in the configuration. Skipping P/D plots.")
+            else:
+                plot_ind_params = ind_params.copy()
+                plot_ind_params["up_to_level"] = ind_params["level"][L]
+                pd_figs = plot_production_dissipation_evolution(
+                    all_induction_energy_integral,
+                    prod_diss_plot_params,
+                    plot_ind_params,
+                    all_data['grid_time'],
+                    all_data['grid_zeta'],
+                    verbose=out_params['verbose'],
+                    save=out_params['save'],
+                    folder=out_params['image_folder']
+                )
+                if pd_figs:
+                    print(f"Ploting " + prod_diss_plot_params["title"] + " completed.")
+                else:
+                    print(f"Ploting " + prod_diss_plot_params["title"] + " skipped (no valid integrated P/D data).")
             
-            if ind_params["profiles"] == False:
+            if return_params["profiles"] == False:
                 print("Profiles calculation is disabled in the configuration. Skipping profile plots.")
             else:
                 # Create local params with current level for plotting
@@ -714,13 +793,13 @@ if __name__ == "__main__":
                         all_induction_energy_profiles,
                         prof_plot_params_adjusted, plot_ind_params,
                         all_data['grid_time'], all_data['grid_zeta'],
-                        _get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                        utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                         folder=out_params['image_folder']                
                     )
                     
                     print(f"Ploting " + prof_plot_params["title"] + " completed.")
             
-            if ind_params["percentiles"] == False:
+            if percentile_params_cfg["enabled"] == False:
                 print("Percentiles calculation is disabled in the configuration. Skipping percentile evolution plots.")
             else:
                 # Create local params with current level for plotting
@@ -752,7 +831,7 @@ if __name__ == "__main__":
                         continue
                     distribution_check(all_debug_fields[field_key], quantity, debug_params, plot_ind_params,
                                     all_data['grid_time'], all_data['grid_zeta'],
-                                    _get_last_rad(Rad), ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
+                                    utils.get_last_rad(Rad), ref_field=all_debug_fields[ref_key], ref_scale=ref_scale_val,
                                     clean=debug_params.get("field_analysis", {}).get("clean_field", False), verbose=out_params["verbose"], save=out_params["save"],
                                     folder=out_params["image_folder"])
                     print(f"Ploting distribution check for " + quantity + " completed.")

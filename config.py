@@ -34,48 +34,52 @@ IND_PARAMS = {
     "namrz": [32, 32],
     "nbins": [25, 25], # Number of bins for the profiles histograms
     "rmin": [0.01, 0.01], # Minimum radius to calculate the profiles
-    "logbins": True, # Use logarithmic bins
-    "F": 2, # Factor to multiply the viral radius to define the box size
-    "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
-    "rad_kind": 1, # 1: Comoving, 2: Physical
-    # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
-    "units": 1, # Factor to convert the units of the resulting volume integrals
     # "level": [0,1,2,3,4,5,6,7], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [7], # Max. level of the AMR grid to be read
-    "up_to_level": [7], # AMR level up to which calculate
-    # "level": [9], # Max. level of the AMR grid to be read
-    # "up_to_level": [9], # AMR level up to which calculate
-    "region": 'BOX', # Region of interest to calculate the induction components (BOX, SPH, or None)
+    "level": [4], # Max. level of the AMR grid to be read
+    "up_to_level": [4], # AMR level up to which calculate
+    # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
+    "units": 1.0, # Factor to convert the units of the resulting volume integrals
+    "logbins": True, # Use logarithmic bins
+    "F": 2, # Factor to multiply the viral radius to define the box size
+    "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
+    "rad_kind": 1, # 1: Comoving, 2: Physical
+    "region": 'BOX', # Region of interest shape to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
     "H0": H0_masclet,
     # "H0": H0_isu,
-    "epsilon": 1e-30,
-    "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
-    "buffer": True, # Use buffer zones to avoid boundary effects BEFORE differentiating near patch boundaries (recommended but slower)
-    "interpol": 'TRILINEAR', # Interpolation method ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST').
-    "use_siblings": True, # Use sibling patches in buffer (if False, only parent interpolation is used)
-    "parent": True, # Parent mode fills frontiers after differenciating using the interpolation in "parent_interpol" (no extra buffer cells)
-    "parent_interpol": 'NEAREST', # Interpolation method for parent fill ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST')
-    "blend": True, # Blend boundary values from buffer differentiation with parent-filled boundaries (only if parent is True)
-    "divergence": True, # Process the divergence induction component
-    "compression": True, # Process the compression induction component
-    "stretching": True, # Process the stretching induction component
-    "advection": True, # Process the advection induction component
-    "drag": True, # Process the drag induction component
-    "total": True, # Process the total induction component
-    "mag": False, # Calculate magnetic induction components magnitudes
-    "energy_evolution": True, # Calculate the evolution of the energy budget
-    "evolution_type": 'total', # Type of evolution to calculate (total or differential)
-    "derivative": 'central', # Derivative to use for the evolution (implicit, central, RK or rate)
-    "profiles": True, # Calculate the profiles of the induction components
-    "projection": False, # Calculate the projection of the induction components
-    "A2U": False, # Transform the AMR grid to a uniform grid
-    "percentiles": False, # Calculate percentile thresholds of the magnetic field divergence
-    "percentile_levels": (95, 90, 75, 50, 25), # Percentile thresholds to compute
+    "differentiation": {
+        "epsilon": 1e-30, # Small value to avoid division by zero in differentiation and other operations (if needed)
+        "stencil": 3, # Stencil to calculate the derivatives (either 3 or 5)
+        "buffer": True, # Use buffer zones to avoid boundary effects BEFORE differentiating near patch boundaries (recommended but slower)
+        "interpol": 'TRILINEAR', # Interpolation method ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST').
+        "use_siblings": True, # Use sibling patches in buffer (if False, only parent interpolation is used)
+        "parent": True, # Parent mode fills frontiers after differenciating using the interpolation in "parent_interpol" (no extra buffer cells)
+        "parent_interpol": 'NEAREST', # Interpolation method for parent fill ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST')
+        "blend": True # Blend boundary values from buffer differentiation with parent-filled boundaries (only if parent is True)
+    },
+    "components": {
+        "divergence": True, # Process the divergence induction component
+        "compression": True, # Process the compression induction component
+        "stretching": True, # Process the stretching induction component
+        "advection": True, # Process the advection induction component
+        "drag": True, # Process the drag induction component
+        "total": True, # Process the total induction component
+        "kinetic_energy": False, # Calculate/plot kinetic energy measured in the simulation
+        "magnetic_energy": True # Calculate/plot magnetic energy measured in the simulation
+    },
+    "return": {
+        "mag": False, # Return magnetic induction components magnitudes
+        "return_vectorial": False, # Return the vectorial components of the induction terms
+        "return_induction": False, # Return the induction terms arrays
+        "return_induction_energy": False, # Return the induction energy terms arrays
+        "profiles": False, # Calculate the profiles of the induction components
+        "projection": False, # Calculate the projection of the induction components
+        "A2U": False # Transform the AMR grid to a uniform grid
+    },
     "divergence_filter": {
         "enabled": True, # Whether to apply a filter to the divergence field based on percentile thresholds
         "method": "mask", # "mask" or "clip" for masking or clipping values above the threshold
@@ -83,9 +87,27 @@ IND_PARAMS = {
         "use_abs": True, # Whether to use absolute values when applying the percentile threshold (recommended)
         "exclude_zeros": True # Whether to exclude zero values when calculating the percentile threshold (recommended)
     },
-    "return_vectorial": False, # Return the vectorial components of the induction terms
-    "return_induction": False, # Return the induction terms arrays
-    "return_induction_energy": False, # Return the induction energy terms arrays
+    "energy_evolution": {
+        "enabled": True, # Calculate the evolution of the energy budget
+        "derivative": 'central', # Derivative to use for the evolution (implicit_forward, central, alpha_fit, RK or rate)
+        "volume_coordinates": 'physical', # Integration volume differential: 'physical' (a^3 dV) or 'comoving' (dV)
+        "normalize_by_volume": False, # If True, divide integrated quantities by total integration volume
+        "normalized": True, # True: keeps B/sqrt(rho_b) in magnetic evolution outputs; False: shows results respect to physical B
+        "plot_total": True, # Calculate and plot total (integrated) energy evolution
+        "plot_differential": True # Calculate and plot differential (rate of change) energy evolution
+    },
+    "production_dissipation": {
+        "enabled": True, # Calculate production/dissipation decomposition from induction-energy terms
+        "normalized": True, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
+        "normalize_by_volume": False, # If True, divide P/D integrated quantities by total integration volume (override by energy evolution volume normalization if both modes are enabled)
+        "plot_absolute": True, # Plot absolute production and dissipation rates
+        "plot_fractional": True, # Plot fractional production/dissipation contributions and net efficiency
+        "plot_net": True # Plot net contributions (production - dissipation)
+    },
+    "percentiles": {
+        "enabled": False, # Calculate percentile thresholds of the magnetic field divergence
+        "percentile_levels": (95, 90, 75, 50, 25) # Percentile thresholds to compute
+    },
     "test_params": {
         "test": False,
         "B0": 2.3e-8
@@ -104,10 +126,9 @@ OUTPUT_PARAMS = {
     "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
-    "Save_Cores": 4, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
-    # Optional empirical correction for memory estimator (1.0 = no correction).
-    # Increase (e.g. 1.3-2.0) if observed peak RAM is consistently above estimated RAM.
-    "memory_safety_factor": 1.88,
+    "Save_Cores": 2, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
+    "memory_safety_factor": 1.88, # Optional empirical correction for memory estimator (1.0 = no correction).
+        # Increase (e.g. 1.3-2.0) if observed peak RAM is consistently above estimated RAM.
     # Optional runtime RAM profiling in main.py
     "memory_profiling": {
         "enabled": False,
@@ -120,8 +141,8 @@ OUTPUT_PARAMS = {
     # Recycle worker processes every N tasks in parallel mode to mitigate RAM growth
     # (set to None to disable recycling).
     "max_tasks_per_child": 1,
+    "run": f'MAGNAS_SSD_Evo_PD_25',
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    "run": f'MAGNAS_SSD_Evo_divergence_test_step_by_step_10_filter_divergence_evo_old_def',
     # "run": f'MAGNAS_SSD_Evo_RAM_test_1_serial',
     "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "sims": ["box_L40_p32_128_l9_2026_full_box_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
@@ -129,9 +150,9 @@ OUTPUT_PARAMS = {
     # "it": [[1300], [500]], # For different redshift snap iterations analysis
     # "it": [1700],
     # "it": list(range(300, 601, 50)), # For different redshift snap iterations analysis
-    # "it": list(range(1000, 2101, 50)) + [2119],
-    "it": list(range(250, 2101, 50)) + [2119], # For different redshift snap iterations analysis
+    # "it": list(range(1900, 2101, 50)) + [2119],
     # "it": list(range(50, 2101, 50)) + [2119], # For different redshift snap iterations analysis
+    "it": list(range(350, 2101, 50)) + [2119], # For different redshift snap iterations analysis
     "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
     "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
@@ -146,7 +167,7 @@ OUTPUT_PARAMS = {
     "rawdir": "raw_data_out/",
     "terminaldir": "terminal_output/",
     "ID1": "dynamo/",
-    "ID2": "divergence_deep_test",
+    "ID2": "new_induction_analysis",
     # "ID2": "RAM_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
@@ -196,21 +217,25 @@ SIM_CHARACTERISTICS = {
 }
 
 EVO_PLOT_PARAMS = {
-    'evolution_type': IND_PARAMS["evolution_type"],
-    'derivative': IND_PARAMS["derivative"],
+    'plot_total': IND_PARAMS["energy_evolution"]["plot_total"],
+    'plot_differential': IND_PARAMS["energy_evolution"]["plot_differential"],
+    'derivative': IND_PARAMS["energy_evolution"]["derivative"],
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
-    'y_scale': 'log',
+    'y_scale': 'lin' if IND_PARAMS["energy_evolution"]["plot_differential"] else 'log', # 'lin' for differential (rate), 'log' for total (energy)
     # 'xlim': [10, 0], # None for auto
     'xlim': [2.5, 0], # None for auto
     # 'xlim': None, # None for auto
+    'ylim': None, # None for auto
     # 'ylim': [1e57, 1e60], # For the test
     # 'ylim': [1e58, 1e63], # None for auto
-    'ylim': None, # None for auto
-    'cancel_limits': False, # bool to flip the x axis (useful for zeta)
+    # 'ylim': [1e-19, 1e-16], # None for auto
+    # 'ylim': [1e-19, 1e-13], # None for auto
+    # 'ylim': [-0.2e-28, 0.8e-28], # None for auto
+    'cancel_limits': False, # If True, ignore manual xlim/ylim; for zeta plots, also invert x-axis automatically
     'figure_size': [12, 8], # [width, height]
     'line_widths': [5, 1.5], # [line1, line2] for main and component lines
-    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
+    'plot_type': 'raw', # 'raw', 'smoothed', or 'interpolated' to choose plot style
     'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
     'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
     'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
@@ -218,6 +243,24 @@ EVO_PLOT_PARAMS = {
     'title': 'Magnetic Field Evolution Analysis',
     'dpi': 300,
     'run': OUTPUT_PARAMS["run"]
+}
+
+PROD_DISS_PLOT_PARAMS = {
+    'x_axis': 'zeta', # 'zeta' or 'years'
+    'x_scale': 'lin', # 'lin' or 'log'
+    'y_scale': 'log', # 'lin' or 'log'
+    'xlim': [2.5, 0], # None for auto
+    'ylim': None, # None for auto
+    'cancel_limits': False, # If True, ignore manual xlim/ylim; for zeta plots, also invert x-axis automatically
+    'figure_size': [12, 8], # [width, height]
+    'line_widths': [3.0, 2.0], # [main, components]
+    'title': 'Production and Dissipation Evolution',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"],
+    'plot_total_prod_diss': False, # If False, hide total production/dissipation curves (green/red). Net curves are still plotted when available.
+    'plot_absolute': IND_PARAMS["production_dissipation"]["plot_absolute"],
+    'plot_fractional': IND_PARAMS["production_dissipation"]["plot_fractional"],
+    'plot_net': IND_PARAMS["production_dissipation"]["plot_net"]
 }
 
 PROFILE_PLOT_PARAMS = {
@@ -471,35 +514,69 @@ if OUTPUT_PARAMS["bitformat"] == np.float32:
 elif OUTPUT_PARAMS["bitformat"] == np.float64:
     OUTPUT_PARAMS["complex_bitformat"] = np.complex128
 
-if IND_PARAMS["stencil"] not in [3, 5]:
-    raise ValueError("Invalid stencil value. It must be either 3 or 5.")
-elif IND_PARAMS["stencil"] == 3:
-    IND_PARAMS["nghost"] = 1
-elif IND_PARAMS["stencil"] == 5:
-    IND_PARAMS["nghost"] = 2
+diff_cfg = IND_PARAMS.get("differentiation", {})
+ret_cfg = IND_PARAMS.get("return", {})
+pct_cfg = IND_PARAMS.get("percentiles", {})
+
+if diff_cfg.get("stencil") not in [3, 5]:
+    raise ValueError("Invalid differentiation stencil value. It must be either 3 or 5.")
+elif diff_cfg.get("stencil") == 3:
+    IND_PARAMS["differentiation"]["nghost"] = 1
+elif diff_cfg.get("stencil") == 5:
+    IND_PARAMS["differentiation"]["nghost"] = 2
+
+# Validate energy evolution configuration
+energy_evo = IND_PARAMS.get("energy_evolution", {})
+if not isinstance(energy_evo, dict):
+    raise ValueError("IND_PARAMS['energy_evolution'] must be a dictionary")
+
+allowed_derivative = ['RK', 'implicit_forward', 'central', 'alpha_fit', 'rate']
+allowed_volume_coordinates = ['physical', 'comoving']
+
+if energy_evo.get("derivative") not in allowed_derivative:
+    raise ValueError("IND_PARAMS['energy_evolution']['derivative'] must be one of: RK, implicit_forward, central, alpha_fit, rate.")
+if energy_evo.get("volume_coordinates") not in allowed_volume_coordinates:
+    raise ValueError("IND_PARAMS['energy_evolution']['volume_coordinates'] must be 'physical' or 'comoving'.")
+if not isinstance(energy_evo.get("normalize_by_volume"), bool):
+    raise ValueError("IND_PARAMS['energy_evolution']['normalize_by_volume'] must be a boolean.")
+if not isinstance(energy_evo.get("normalized", True), bool):
+    raise ValueError("IND_PARAMS['energy_evolution']['normalized'] must be a boolean (True or False).")
+if not isinstance(energy_evo.get("plot_total", True), bool):
+    raise ValueError("IND_PARAMS['energy_evolution']['plot_total'] must be a boolean (True or False).")
+if not isinstance(energy_evo.get("plot_differential", True), bool):
+    raise ValueError("IND_PARAMS['energy_evolution']['plot_differential'] must be a boolean (True or False).")
+if not (energy_evo.get("plot_total", True) or energy_evo.get("plot_differential", True)):
+    raise ValueError("IND_PARAMS['energy_evolution'] must have at least one of 'plot_total' or 'plot_differential' set to True.")
+
+# Validate production/dissipation plotting units mode
+prod_diss_cfg = IND_PARAMS.get("production_dissipation", {})
+if not isinstance(prod_diss_cfg.get("normalized", True), bool):
+    raise ValueError("IND_PARAMS['production_dissipation']['normalized'] must be a boolean (True or False).")
+if not isinstance(prod_diss_cfg.get("normalize_by_volume", False), bool):
+    raise ValueError("IND_PARAMS['production_dissipation']['normalize_by_volume'] must be a boolean (True or False).")
 
 # Validate interpolation method and adjust parameters for parent mode
 allowed_interpol = ['TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST']
-if IND_PARAMS["interpol"] not in allowed_interpol:
+if diff_cfg.get("interpol") not in allowed_interpol:
     raise ValueError("Invalid interpolation method. Must be 'TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST'.")
-if IND_PARAMS.get("parent_interpol", IND_PARAMS["interpol"]) not in allowed_interpol:
+if diff_cfg.get("parent_interpol", diff_cfg.get("interpol")) not in allowed_interpol:
     raise ValueError("Invalid parent_interpol method. Must be 'TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST'.")
-IND_PARAMS["parent_interpol"] = IND_PARAMS.get("parent_interpol", IND_PARAMS["interpol"])
+IND_PARAMS["differentiation"]["parent_interpol"] = diff_cfg.get("parent_interpol", diff_cfg.get("interpol"))
 
 # If parent mode is selected, enforce compatible parameters
-if IND_PARAMS["parent"] is True:
-    blend_enabled = IND_PARAMS.get("blend", False)
-    method_name = 'PARENT' + ' + ' + IND_PARAMS["parent_interpol"]
+if diff_cfg.get("parent", False) is True:
+    blend_enabled = diff_cfg.get("blend", False)
+    method_name = 'PARENT' + ' + ' + IND_PARAMS["differentiation"]["parent_interpol"]
     interp_desc = ''
-    if IND_PARAMS["parent_interpol"] == 'TSC':
+    if IND_PARAMS["differentiation"]["parent_interpol"] == 'TSC':
         interp_desc = 'TSC (smooth Triangular-Shaped Cloud)'
-    elif IND_PARAMS["parent_interpol"] == 'TRILINEAR':
+    elif IND_PARAMS["differentiation"]["parent_interpol"] == 'TRILINEAR':
         interp_desc = 'Trilinear (linear interpolation)'
-    elif IND_PARAMS["parent_interpol"] == 'NEAREST':
+    elif IND_PARAMS["differentiation"]["parent_interpol"] == 'NEAREST':
         interp_desc = 'Nearest Neighbor (discontinuous)'
-    elif IND_PARAMS["parent_interpol"] == 'LINEAR':
+    elif IND_PARAMS["differentiation"]["parent_interpol"] == 'LINEAR':
         interp_desc = 'Linear (linear interpolation)'
-    elif IND_PARAMS["parent_interpol"] == 'SPH':
+    elif IND_PARAMS["differentiation"]["parent_interpol"] == 'SPH':
         interp_desc = 'SPH (Smoothed Particle Hydrodynamics)'
     print(f"\n⚠️  Parent mode enabled ({method_name}):")
     if blend_enabled:
@@ -596,17 +673,6 @@ if IND_PARAMS["test_params"]["test"]:
     IND_PARAMS["test_params"]["evo_plot_params"]["run"] = IND_PARAMS["test_params"]["evo_plot_params"]["run"] + '_analytic_test_field'
     IND_PARAMS["test_params"]["evo_plot_params"]["title"] = 'Analytic Magnetic Field Evolution Analysis'
 
-## Inducction components to be checked
-
-IND_PARAMS["components"] = {
-    "divergence": IND_PARAMS["divergence"],
-    "compression": IND_PARAMS["compression"],
-    "stretching": IND_PARAMS["stretching"],
-    "advection": IND_PARAMS["advection"],
-    "drag": IND_PARAMS["drag"],
-    "total": IND_PARAMS["total"]
-}
-
 ## Parallelization configuration based on available resources
 
 # Get system information
@@ -658,27 +724,30 @@ refinement_multiplier = min(max(refinement_multiplier, amr_complexity_multiplier
 single_array_gb = array_size_bytes / (1024 ** 3)
 total_snapshots = OUTPUT_PARAMS.get("total_iterations", sum(len(it_list) for it_list in OUTPUT_PARAMS["it"]))
 
-enabled_components = sum(bool(IND_PARAMS["components"].get(k, False)) for k in IND_PARAMS["components"])
+induction_component_keys = ["divergence", "compression", "stretching", "advection", "drag", "total"]
+enabled_components = sum(bool(IND_PARAMS["components"].get(k, False)) for k in induction_component_keys)
 
 # Worker memory model: arrays live concurrently during process_iteration in each subprocess.
 worker_arrays = 10  # Core loaded fields + masks + geometry helpers
-if IND_PARAMS.get("buffer", False):
+if diff_cfg.get("buffer", False):
     worker_arrays += 8
-if IND_PARAMS.get("parent", False):
+if diff_cfg.get("parent", False):
     worker_arrays += 3
-if IND_PARAMS.get("blend", False):
+if diff_cfg.get("blend", False):
     worker_arrays += 4
 worker_arrays += max(4, 2 * enabled_components)
 
-if IND_PARAMS.get("energy_evolution", False):
+if IND_PARAMS.get("energy_evolution", {}).get("enabled", False):
     worker_arrays += 6
-if IND_PARAMS.get("profiles", False):
+if ret_cfg.get("profiles", False):
     worker_arrays += 4
-if IND_PARAMS.get("percentiles", False):
+if IND_PARAMS.get("production_dissipation", {}).get("enabled", False):
+    worker_arrays += 4
+if pct_cfg.get("enabled", False):
     worker_arrays += 3
-if IND_PARAMS.get("projection", False):
+if ret_cfg.get("projection", False):
     worker_arrays += 8
-if IND_PARAMS.get("mag", False):
+if ret_cfg.get("mag", False):
     worker_arrays += 3
 
 if DEBUG_PARAMS.get("field_analysis", {}).get("enabled", False):
@@ -690,15 +759,15 @@ if DEBUG_PARAMS.get("buffer", {}).get("enabled", False) or DEBUG_PARAMS.get("div
 
 # Retained memory model in parent process (accumulated across snapshots).
 retained_amr_arrays_per_snapshot = 0
-if IND_PARAMS.get("return_vectorial", False):
+if ret_cfg.get("return_vectorial", False):
     retained_amr_arrays_per_snapshot += max(6, enabled_components)
-if IND_PARAMS.get("return_induction", False):
+if ret_cfg.get("return_induction", False):
     retained_amr_arrays_per_snapshot += max(6, enabled_components)
-if IND_PARAMS.get("return_induction_energy", False):
+if ret_cfg.get("return_induction_energy", False):
     retained_amr_arrays_per_snapshot += max(7, enabled_components + 1)
-if IND_PARAMS.get("projection", False):
+if ret_cfg.get("projection", False):
     retained_amr_arrays_per_snapshot += 3
-if IND_PARAMS.get("mag", False):
+if ret_cfg.get("mag", False):
     retained_amr_arrays_per_snapshot += 2
 if DEBUG_PARAMS.get("field_analysis", {}).get("enabled", False):
     retained_amr_arrays_per_snapshot += 4
@@ -706,11 +775,13 @@ if DEBUG_PARAMS.get("scan_animation", {}).get("enabled", False):
     retained_amr_arrays_per_snapshot += 2
 
 retained_meta_gb_per_snapshot = 0.01
-if IND_PARAMS.get("energy_evolution", False):
+if IND_PARAMS.get("energy_evolution", {}).get("enabled", False):
     retained_meta_gb_per_snapshot += 0.01
-if IND_PARAMS.get("profiles", False):
+if IND_PARAMS.get("production_dissipation", {}).get("enabled", False):
+    retained_meta_gb_per_snapshot += 0.01
+if ret_cfg.get("profiles", False):
     retained_meta_gb_per_snapshot += 0.02
-if IND_PARAMS.get("percentiles", False):
+if pct_cfg.get("enabled", False):
     retained_meta_gb_per_snapshot += 0.01
 
 estimated_worker_memory_gb_raw = single_array_gb * refinement_multiplier * worker_arrays

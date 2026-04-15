@@ -46,6 +46,18 @@ def log_message(message, tag=None, level=0):
         print(f"{prefix}{message}")
 
 
+def get_last_rad(rad_list):
+    """Return the last available radius from nested or flat radius containers."""
+    if not rad_list:
+        return 0
+    if isinstance(rad_list[0], (list, tuple, np.ndarray)):
+        for sim_rad in reversed(rad_list):
+            if sim_rad:
+                return sim_rad[-1]
+        return 0
+    return rad_list[-1]
+
+
 def build_terminal_log_filename(sim_name, snapshot_it, ind_params, out_params):
     '''
     Generate a unique filename for terminal output based on simulation parameters.
@@ -67,12 +79,13 @@ def build_terminal_log_filename(sim_name, snapshot_it, ind_params, out_params):
         safe = ''.join(ch for ch in text if ch.isalnum() or ch in ['_', '-', '.'])
         return safe if safe else 'NA'
 
-    interpol = ind_params.get("interpol", "TSC")
-    parent_interpol = ind_params.get("parent_interpol", interpol)
-    buffer = "buf" if ind_params.get("buffer", False) else "nobuf"
-    stencil = ind_params.get("stencil", 3)
-    parent = "parent" if ind_params.get("parent", False) else "noparent"
-    siblings = "sib" if ind_params.get("use_siblings", False) else "nosib"
+    diff_params = ind_params.get("differentiation", {})
+    interpol = diff_params.get("interpol", "TSC")
+    parent_interpol = diff_params.get("parent_interpol", interpol)
+    buffer = "buf" if diff_params.get("buffer", False) else "nobuf"
+    stencil = diff_params.get("stencil", 3)
+    parent = "parent" if diff_params.get("parent", False) else "noparent"
+    siblings = "sib" if diff_params.get("use_siblings", False) else "nosib"
     region = ind_params.get("region", "None")
     run = out_params.get("run", out_params.get("ID2", "run"))
     
@@ -95,7 +108,7 @@ def build_terminal_log_filename(sim_name, snapshot_it, ind_params, out_params):
     
     # Build filename similar to plot naming
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    parent_tag = f"{parent}_{_slug(parent_interpol)}" if ind_params.get("parent", False) else parent
+    parent_tag = f"{parent}_{_slug(parent_interpol)}" if diff_params.get("parent", False) else parent
     filename = (
         f"MAGNAS_SSD_{_slug(run)}_{_slug(sim_name)}_it{_slug(snapshot_it)}_"
         f"{_slug(sim_info)}_{_slug(grid_info)}_{_slug(interpol)}_"
@@ -1019,7 +1032,8 @@ def magnitude2(field_x, field_y, field_z, kept_patches=None):
 
 def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level,
                 patchrx, patchry, patchrz, patchnx, patchny, patchnz,
-                size, nmax, coords, region_coords, rad, a0=1, units=1, kept_patches=None, vol=False):
+                size, nmax, coords, region_coords, rad, a0=1, units=1, kept_patches=None, vol=False,
+                volume_coordinates='physical', normalize_by_volume=False):
     """
     Given a scalar field and a region defined with a center (x,y,z) and a radious together with the patch
     structure, returns the volumetric integral of the field along the volume.
@@ -1041,6 +1055,11 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level,
         - units: change of units factor to be multiplied by the final integral if one wants physical units (default is 1)
         - kept_patches: boolean array to select the patches to be considered in the integration. True if the patch is kept, False if not. If None, all patches are kept.
         - vol: if True, returns the volume of the region instead of the integral. Default is False.
+        - volume_coordinates: integration measure for the volume differential:
+            - 'physical': dV = a^3 dV_comoving
+            - 'comoving': dV = dV_comoving
+        - normalize_by_volume: if True, divides the final integral by the total integration volume
+            computed with the same volume_coordinates option (ignored when vol=True).
 
     Returns:
         - integral: volumetric integral of the field along the volume
@@ -1048,6 +1067,9 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level,
     Author: Marco Molina
     """
     field = clean_field(field, cr0amr, solapst, npatch, up_to_level)
+
+    if volume_coordinates not in ['physical', 'comoving']:
+        raise ValueError("volume_coordinates must be 'physical' or 'comoving'")
     
     if kept_patches is None:
         total_npatch = len(field)
@@ -1060,6 +1082,7 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level,
     a = a0 / (1 + zeta) # We compute the scale factor
     
     integral = 0
+    integration_volume = 0
     
     if vol:
         field = [np.ones_like(field[p]) for p in range(1 + np.sum(npatch))] # If vol is True, we just want the volume, so we set the field to 1
@@ -1088,12 +1111,20 @@ def vol_integral(field, zeta, cr0amr, solapst, npatch, up_to_level,
         elif region_coords[0] == None:
             mask = np.ones_like(X_grid, dtype=bool)
 
-        # Calculate the physical volume of the cell in this simulation patch
-        dr3 = (a*patch_res)**3
+        # Cell volume element in the requested coordinate system.
+        if volume_coordinates == 'physical':
+            dr3 = (a * patch_res)**3
+        else:
+            dr3 = patch_res**3
         
         # Calculate the integral of the scalar quantity over the volume
+        cell_count = np.sum(mask)
+        integration_volume += cell_count * dr3
         integral += np.sum(field[p]*mask)*dr3
     
+    if normalize_by_volume and not vol:
+        integral = 0.0 if integration_volume <= 0 else integral / integration_volume
+
     integral = units * integral
     
     return integral
