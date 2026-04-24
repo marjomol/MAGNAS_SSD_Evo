@@ -7,13 +7,14 @@ from config import IND_PARAMS as ind_params
 from config import OUTPUT_PARAMS as out_params
 from config import EVO_PLOT_PARAMS as evo_plot_params
 from config import PROD_DISS_PLOT_PARAMS as prod_diss_plot_params
-from config import PROFILE_PLOT_PARAMS as prof_plot_params
+from config import INDUCTION_PROFILE_PLOT_PARAMS as ind_prof_plot_params
+from config import PROD_DISS_PROFILE_PLOT_PARAMS as pd_prof_plot_params
 from config import DEBUG_PARAMS as debug_params
 from config import PERCENTILE_PLOT_PARAMS as percentile_plot_params
 from config import SCAN_PLOT_PARAMS as scan_plot_params
 from config import get_sim_characteristics
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
-from scripts.plot_fields import plot_integral_evolution, plot_production_dissipation_evolution, plot_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
+from scripts.plot_fields import plot_integral_evolution, plot_production_dissipation_evolution, plot_induction_radial_profiles, plot_production_dissipation_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
 from scripts.memory_utils import process_iteration_with_logging, MemoryMonitor, build_executor_kwargs
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
@@ -48,6 +49,23 @@ if __name__ == "__main__":
     diff_params = ind_params["differentiation"]
     return_params = ind_params["return"]
     percentile_params_cfg = ind_params["percentiles"]
+    energy_evo_cfg = ind_params.get("energy_evolution", {})
+    prod_diss_cfg = ind_params.get("production_dissipation", {})
+    energy_evolution_plots_enabled = bool(
+        energy_evo_cfg.get("enabled", False) and
+        (energy_evo_cfg.get("plot_total", False) or energy_evo_cfg.get("plot_differential", False))
+    )
+    pd_evolution_plots_enabled = bool(
+        prod_diss_cfg.get("enabled", False) and
+        (prod_diss_cfg.get("plot_absolute", False) or prod_diss_cfg.get("plot_fractional", False) or prod_diss_cfg.get("plot_net", False))
+    )
+    # Use the validated _truly_enabled flags from config
+    induction_profiles_enabled = bool(ind_params.get("energy_evolution", {}).get("_truly_enabled", False) and 
+                                     ind_params.get("energy_evolution", {}).get("plot_profiles", False))
+    pd_profiles_enabled = bool(
+        prod_diss_cfg.get("_truly_enabled", False) and
+        (prod_diss_cfg.get("plot_profiles", False) or prod_diss_cfg.get("plot_fractional_profiles", False))
+    )
     if out_params["parallel"]:
         print(f'**************************************************************')
         print(f"Running in parallel mode with {out_params['ncores']} cores")
@@ -88,10 +106,11 @@ if __name__ == "__main__":
             all_induction = {} if return_params["return_induction"] else None
             all_magnitudes = {} if return_params["mag"] else None
             all_induction_energy = {} if return_params["return_induction_energy"] else None
-            need_integrals = ind_params["energy_evolution"]["enabled"] or ind_params.get("production_dissipation", {}).get("enabled", False)
+            need_integrals = energy_evolution_plots_enabled or pd_evolution_plots_enabled
             all_induction_energy_integral = {} if need_integrals else None
             all_induction_test_energy_integral = {} if need_integrals else None
-            all_induction_energy_profiles = {} if return_params["profiles"] else None
+            all_induction_energy_profiles = {} if induction_profiles_enabled else None
+            all_production_dissipation_profiles = {} if pd_profiles_enabled else None
             all_induction_uniform = {} if return_params["projection"] else None
             all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
@@ -99,7 +118,8 @@ if __name__ == "__main__":
             scan_meta_sim = []
             scan_meta_it = []
             scan_meta_idx = []
-            profile_indices = []  # Track which indices in grid_zeta have profiles
+            profile_indices = []  # Induction-profile snapshot indices in aggregated timeline
+            pd_profile_indices = []  # P/D-profile snapshot indices in aggregated timeline
             first_iteration = True
             iteration_counter = 0
 
@@ -112,12 +132,15 @@ if __name__ == "__main__":
             with ProcessPoolExecutor(**executor_kwargs) as executor:
                 for i, sims in enumerate(out_params["sims"]):
                     it_list = out_params["it"][i]
-                    profile_it_indx = prof_plot_params.get("it_indx", [-1])
+                    profile_it_indx = ind_prof_plot_params.get("it_indx", [-1])
+                    pd_profile_it_indx = pd_prof_plot_params.get("it_indx", [-1])
                     debug_it_indx = debug_params.get("it_indx", [-1])
-                    profile_idx_set = set([it_list[k] for k in profile_it_indx if -len(it_list) <= k < len(it_list)])
-                    debug_idx_set = set([it_list[k] for k in debug_it_indx if -len(it_list) <= k < len(it_list)])
+                    profile_idx_set = utils.resolve_iteration_selection(it_list, profile_it_indx)
+                    pd_profile_idx_set = utils.resolve_iteration_selection(it_list, pd_profile_it_indx)
+                    debug_idx_set = utils.resolve_iteration_selection(it_list, debug_it_indx)
                     for j, it in enumerate(it_list):
-                        profiles_flag = bool(return_params["profiles"]) and (it in profile_idx_set)
+                        induction_profiles_flag = bool(induction_profiles_enabled) and (it in profile_idx_set)
+                        pd_profiles_flag = bool(pd_profiles_enabled) and (it in pd_profile_idx_set)
 
                         # Always apply percentile_params to all snapshots, but keep other debug
                         # settings only for selected iterations
@@ -165,8 +188,10 @@ if __name__ == "__main__":
                             mag=return_params["mag"],
                             sim_characteristics=sim_characteristics,
                             energy_evolution_config=ind_params["energy_evolution"],
-                            energy_evolution=ind_params["energy_evolution"]["enabled"],
-                            profiles=profiles_flag,
+                            energy_evolution=energy_evolution_plots_enabled,
+                            profiles=induction_profiles_flag,
+                            induction_profiles=induction_profiles_flag,
+                            pd_profiles=pd_profiles_flag,
                             projection=return_params["projection"],
                             percentiles=percentile_params_cfg["enabled"],
                             percentile_levels=percentile_params_cfg["percentile_levels"],
@@ -183,7 +208,7 @@ if __name__ == "__main__":
 
                 for fut in futures:
                     # Unpack results with logging information
-                    (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields), log_output, (sim_name, iteration) = fut.result()
+                    (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields), log_output, (sim_name, iteration) = fut.result()
                     
                     # Print the captured logs with a header showing which iteration this is
                     if log_output.strip():  # Only print if there's actual output
@@ -217,6 +242,9 @@ if __name__ == "__main__":
                         if all_induction_energy_profiles is not None and induction_energy_profiles is not None:
                             for key in induction_energy_profiles.keys():
                                 all_induction_energy_profiles[key] = []
+                        if all_production_dissipation_profiles is not None and production_dissipation_profiles is not None:
+                            for key in production_dissipation_profiles.keys():
+                                all_production_dissipation_profiles[key] = []
                         if all_induction_uniform is not None and induction_uniform is not None:
                             for key in induction_uniform.keys():
                                 all_induction_uniform[key] = []
@@ -258,6 +286,12 @@ if __name__ == "__main__":
                             if key not in all_induction_energy_profiles:
                                 all_induction_energy_profiles[key] = []
                             all_induction_energy_profiles[key].append(induction_energy_profiles[key])
+                    if all_production_dissipation_profiles is not None and production_dissipation_profiles is not None:
+                        pd_profile_indices.append(iter_idx)
+                        for key in production_dissipation_profiles.keys():
+                            if key not in all_production_dissipation_profiles:
+                                all_production_dissipation_profiles[key] = []
+                            all_production_dissipation_profiles[key].append(production_dissipation_profiles[key])
                     if all_induction_uniform is not None and induction_uniform is not None:
                         for key in induction_uniform.keys():
                             all_induction_uniform[key].append(induction_uniform[key])
@@ -284,7 +318,7 @@ if __name__ == "__main__":
                     )
                     del data, vectorial, induction, magnitudes, induction_energy
                     del induction_energy_integral, induction_test_energy_integral
-                    del induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields
+                    del induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
             # Enforce consistent temporal ordering before any evolution/plot step.
             debug_module.ensure_temporal_order(
@@ -297,16 +331,17 @@ if __name__ == "__main__":
                     all_induction_energy_integral,
                     all_induction_test_energy_integral,
                     all_induction_energy_profiles,
+                    all_production_dissipation_profiles,
                     all_induction_uniform,
                     all_diver_B_percentiles,
                     all_debug_fields,
                 ],
-                index_lists=[profile_indices, scan_meta_idx],
+                index_lists=[profile_indices, pd_profile_indices, scan_meta_idx],
                 verbose=out_params["verbose"],
             )
 
             # Plotting and post-processing driven by config for this level
-            if ind_params["energy_evolution"]["enabled"] and all_induction_energy_integral is not None:
+            if energy_evolution_plots_enabled and all_induction_energy_integral is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
                 induction_energy_integral_evo = induction_energy_integral_evolution(
@@ -333,6 +368,7 @@ if __name__ == "__main__":
                     plot_ind_params,
                     all_data['grid_time'],
                     all_data['grid_zeta'],
+                    utils.get_last_rad(Rad),
                     verbose=out_params['verbose'],
                     save=out_params['save'],
                     folder=out_params['image_folder']
@@ -342,23 +378,39 @@ if __name__ == "__main__":
                 else:
                     print(f"Ploting " + prod_diss_plot_params["title"] + f" skipped (level {lvl}, no valid integrated P/D data).")
 
-            if return_params["profiles"] and all_induction_energy_profiles is not None:
+            if induction_profiles_enabled and all_induction_energy_profiles is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
                 # Determine how many snapshots have profiles calculated
                 num_snapshots_with_profiles = len(all_induction_energy_profiles.get('clus_b2_profile', []))
                 if num_snapshots_with_profiles > 0:
                     # Use the tracked profile indices to correctly map to grid_zeta
-                    prof_plot_params_adjusted = prof_plot_params.copy()
+                    prof_plot_params_adjusted = ind_prof_plot_params.copy()
                     prof_plot_params_adjusted['it_indx'] = profile_indices
-                    plot_radial_profiles(
+                    plot_induction_radial_profiles(
                         all_induction_energy_profiles,
                         prof_plot_params_adjusted, plot_ind_params,
                         all_data['grid_time'], all_data['grid_zeta'],
                         utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                         folder=out_params['image_folder']                
                     )
-                    print(f"Ploting " + prof_plot_params["title"] + f" completed (level {lvl}).")
+                    print(f"Ploting " + ind_prof_plot_params["title"] + f" completed (level {lvl}).")
+
+            if pd_profiles_enabled and all_production_dissipation_profiles is not None:
+                plot_ind_params = ind_params.copy()
+                plot_ind_params["up_to_level"] = lvl
+                num_pd_profiles = len(all_production_dissipation_profiles.get('profile_bin_centers', []))
+                if num_pd_profiles > 0:
+                    pd_prof_plot_params_adjusted = pd_prof_plot_params.copy()
+                    pd_prof_plot_params_adjusted['it_indx'] = pd_profile_indices
+                    plot_production_dissipation_radial_profiles(
+                        all_production_dissipation_profiles,
+                        pd_prof_plot_params_adjusted, plot_ind_params,
+                        all_data['grid_time'], all_data['grid_zeta'],
+                        utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                        folder=out_params['image_folder']
+                    )
+                    print(f"Ploting " + pd_prof_plot_params["title"] + f" completed (level {lvl}).")
 
             if percentile_params_cfg["enabled"] and all_diver_B_percentiles is not None:
                 plot_ind_params = ind_params.copy()
@@ -496,10 +548,11 @@ if __name__ == "__main__":
             all_induction = {} if return_params["return_induction"] else None
             all_magnitudes = {} if return_params["mag"] else None
             all_induction_energy = {} if return_params["return_induction_energy"] else None
-            need_integrals = ind_params["energy_evolution"]["enabled"] or ind_params.get("production_dissipation", {}).get("enabled", False)
+            need_integrals = energy_evolution_plots_enabled or pd_evolution_plots_enabled
             all_induction_energy_integral = {} if need_integrals else None
             all_induction_test_energy_integral = {} if need_integrals else None
-            all_induction_energy_profiles = {} if return_params["profiles"] else None
+            all_induction_energy_profiles = {} if induction_profiles_enabled else None
+            all_production_dissipation_profiles = {} if pd_profiles_enabled else None
             all_induction_uniform = {} if return_params["projection"] else None
             all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
@@ -508,6 +561,7 @@ if __name__ == "__main__":
             scan_meta_it = []
             scan_meta_idx = []
             profile_indices = []
+            pd_profile_indices = []
 
             # Flag to track first iteration for dictionary initialization
             first_iteration = True
@@ -516,10 +570,12 @@ if __name__ == "__main__":
             # Process each iteration in serial
             for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
                 it_list = out_params["it"][i]
-                profile_it_indx = prof_plot_params.get("it_indx", [-1])
+                profile_it_indx = ind_prof_plot_params.get("it_indx", [-1])
+                pd_profile_it_indx = pd_prof_plot_params.get("it_indx", [-1])
                 debug_it_indx = debug_params.get("it_indx", [-1])
-                profile_idx_set = set([it_list[k] for k in profile_it_indx if -len(it_list) <= k < len(it_list)])
-                debug_idx_set = set([it_list[k] for k in debug_it_indx if -len(it_list) <= k < len(it_list)])
+                profile_idx_set = utils.resolve_iteration_selection(it_list, profile_it_indx)
+                pd_profile_idx_set = utils.resolve_iteration_selection(it_list, pd_profile_it_indx)
+                debug_idx_set = utils.resolve_iteration_selection(it_list, debug_it_indx)
                 for j, it in enumerate(it_list):
                     
                     # Print header before processing
@@ -541,7 +597,7 @@ if __name__ == "__main__":
                     sim_characteristics = get_sim_characteristics(sims)
 
                     (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral,
-                    induction_test_energy_integral, induction_energy_profiles, induction_uniform,
+                    induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform,
                     diver_B_percentiles, debug_fields) = process_iteration(
                         components=ind_params["components"],
                         dir_grids=out_params["dir_grids"],
@@ -575,8 +631,10 @@ if __name__ == "__main__":
                         mag=return_params["mag"],
                         sim_characteristics=sim_characteristics,
                         energy_evolution_config=ind_params["energy_evolution"],
-                        energy_evolution=ind_params["energy_evolution"]["enabled"],
-                        profiles=return_params["profiles"] if it in profile_idx_set else False,
+                        energy_evolution=energy_evolution_plots_enabled,
+                        profiles=induction_profiles_enabled if it in profile_idx_set else False,
+                        induction_profiles=induction_profiles_enabled if it in profile_idx_set else False,
+                        pd_profiles=pd_profiles_enabled if it in pd_profile_idx_set else False,
                         projection=return_params["projection"],
                         percentiles=percentile_params_cfg["enabled"],
                         percentile_levels=percentile_params_cfg["percentile_levels"],
@@ -622,6 +680,9 @@ if __name__ == "__main__":
                         if induction_energy_profiles is not None:
                             for key in induction_energy_profiles.keys():
                                 all_induction_energy_profiles[key] = []
+                        if production_dissipation_profiles is not None:
+                            for key in production_dissipation_profiles.keys():
+                                all_production_dissipation_profiles[key] = []
                         
                         if diver_B_percentiles is not None:
                             for key in diver_B_percentiles.keys():
@@ -673,6 +734,12 @@ if __name__ == "__main__":
                                 all_induction_energy_profiles[key] = []
                             all_induction_energy_profiles[key].append(induction_energy_profiles[key])
                         profile_indices.append(iter_idx)
+                    if production_dissipation_profiles is not None:
+                        for key in production_dissipation_profiles.keys():
+                            if key not in all_production_dissipation_profiles:
+                                all_production_dissipation_profiles[key] = []
+                            all_production_dissipation_profiles[key].append(production_dissipation_profiles[key])
+                        pd_profile_indices.append(iter_idx)
                     
                     if diver_B_percentiles is not None:
                         for key in diver_B_percentiles.keys():
@@ -701,7 +768,7 @@ if __name__ == "__main__":
                     )
                     del data, vectorial, induction, magnitudes, induction_energy
                     del induction_energy_integral, induction_test_energy_integral
-                    del induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields
+                    del induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
             # Enforce consistent temporal ordering before any evolution/plot step.
             debug_module.ensure_temporal_order(
@@ -714,11 +781,12 @@ if __name__ == "__main__":
                     all_induction_energy_integral,
                     all_induction_test_energy_integral,
                     all_induction_energy_profiles,
+                    all_production_dissipation_profiles,
                     all_induction_uniform,
                     all_diver_B_percentiles,
                     all_debug_fields,
                 ],
-                index_lists=[profile_indices, scan_meta_idx],
+                index_lists=[profile_indices, pd_profile_indices, scan_meta_idx],
                 verbose=out_params["verbose"],
             )
 
@@ -733,8 +801,8 @@ if __name__ == "__main__":
             #         Save=True, DPI=out_params["dpi"], run=out_params["run"] + f'_Level_{ind_params["up_to_level"]}', folder=out_params["image_folder"])
             
             # Actual evolution calculation
-            if ind_params["energy_evolution"]["enabled"] == False:
-                print("Energy evolution calculation is disabled in the configuration. Skipping evolution plots.")
+            if not energy_evolution_plots_enabled:
+                print("Energy evolution plots are disabled (or profiles-only mode). Skipping evolution plots.")
             else:
                 induction_energy_integral_evo = induction_energy_integral_evolution(
                     ind_params["components"], all_induction_energy_integral,
@@ -757,8 +825,8 @@ if __name__ == "__main__":
 
                 print(f"Ploting " + evo_plot_params["title"] + " completed.")
 
-            if ind_params.get("production_dissipation", {}).get("enabled", False) == False:
-                print("Production/dissipation analysis is disabled in the configuration. Skipping P/D plots.")
+            if not pd_evolution_plots_enabled:
+                print("P/D evolution plots are disabled. Skipping P/D evolution plots.")
             else:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = ind_params["level"][L]
@@ -768,6 +836,7 @@ if __name__ == "__main__":
                     plot_ind_params,
                     all_data['grid_time'],
                     all_data['grid_zeta'],
+                    utils.get_last_rad(Rad),
                     verbose=out_params['verbose'],
                     save=out_params['save'],
                     folder=out_params['image_folder']
@@ -777,8 +846,8 @@ if __name__ == "__main__":
                 else:
                     print(f"Ploting " + prod_diss_plot_params["title"] + " skipped (no valid integrated P/D data).")
             
-            if return_params["profiles"] == False:
-                print("Profiles calculation is disabled in the configuration. Skipping profile plots.")
+            if induction_profiles_enabled == False:
+                print("Induction profile plotting is disabled in the configuration. Skipping induction profile plots.")
             else:
                 # Create local params with current level for plotting
                 plot_ind_params = ind_params.copy()
@@ -787,9 +856,9 @@ if __name__ == "__main__":
                 num_snapshots_with_profiles = len(all_induction_energy_profiles.get('clus_b2_profile', []))
                 if num_snapshots_with_profiles > 0:
                     # Adjust it_indx to plot all snapshots with profiles
-                    prof_plot_params_adjusted = prof_plot_params.copy()
+                    prof_plot_params_adjusted = ind_prof_plot_params.copy()
                     prof_plot_params_adjusted['it_indx'] = profile_indices
-                    plot_radial_profiles(
+                    plot_induction_radial_profiles(
                         all_induction_energy_profiles,
                         prof_plot_params_adjusted, plot_ind_params,
                         all_data['grid_time'], all_data['grid_zeta'],
@@ -797,7 +866,25 @@ if __name__ == "__main__":
                         folder=out_params['image_folder']                
                     )
                     
-                    print(f"Ploting " + prof_plot_params["title"] + " completed.")
+                    print(f"Ploting " + ind_prof_plot_params["title"] + " completed.")
+
+            if pd_profiles_enabled == False:
+                print("P/D profile plotting is disabled in the configuration. Skipping P/D profile plots.")
+            else:
+                plot_ind_params = ind_params.copy()
+                plot_ind_params["up_to_level"] = ind_params["level"][L]
+                num_pd_profiles = len(all_production_dissipation_profiles.get('profile_bin_centers', []))
+                if num_pd_profiles > 0:
+                    pd_prof_plot_params_adjusted = pd_prof_plot_params.copy()
+                    pd_prof_plot_params_adjusted['it_indx'] = pd_profile_indices
+                    plot_production_dissipation_radial_profiles(
+                        all_production_dissipation_profiles,
+                        pd_prof_plot_params_adjusted, plot_ind_params,
+                        all_data['grid_time'], all_data['grid_zeta'],
+                        utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
+                        folder=out_params['image_folder']
+                    )
+                    print(f"Ploting " + pd_prof_plot_params["title"] + " completed.")
             
             if percentile_params_cfg["enabled"] == False:
                 print("Percentiles calculation is disabled in the configuration. Skipping percentile evolution plots.")
@@ -910,15 +997,6 @@ if __name__ == "__main__":
             #     verbose=out_params["verbose"])
             
             # ind_params["up_to_level"] = ind_params["level"][L]
-
-            # plot_integral_evolution(
-            #     induction_test_energy_integral_evo,
-            #     ind_params["test_params"]['evo_plot_params'], ind_params,
-            #     all_data['grid_time'], all_data['grid_zeta'],
-            #     Rad[-1], verbose=out_params['verbose'], save=out_params['save'],
-            #     folder=out_params['image_folder']
-            # )
-
             # print(f"Ploting " + ind_params["test_params"]['evo_plot_params']["title"] + " completed.")
             
         

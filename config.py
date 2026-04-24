@@ -23,12 +23,15 @@ from scripts.test import test_limits
 # Induction Parameters #
 
 IND_PARAMS = {
-    "nmax": [128, 128],
-    "nmay": [128, 128],
-    "nmaz": [128, 128],
+    # "nmax": [128, 128],
+    # "nmay": [128, 128],
+    # "nmaz": [128, 128],
+    "nmax": [64, 64],
+    "nmay": [64, 64],
+    "nmaz": [64, 64],
     "size": [40, 40], # Size of the box in Mpc
-    "npalev": [40000, 40000],
-    "nlevels": [7],
+    "npalev": [7000, 7000],
+    "nlevels": [10],
     "namrx": [32, 32],
     "namry": [32, 32],
     "namrz": [32, 32],
@@ -38,13 +41,13 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [4], # Max. level of the AMR grid to be read
-    "up_to_level": [4], # AMR level up to which calculate
+    "level": [10], # Max. level of the AMR grid to be read
+    "up_to_level": [10], # AMR level up to which calculate
     # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
     "units": 1.0, # Factor to convert the units of the resulting volume integrals
     "logbins": True, # Use logarithmic bins
     "F": 2, # Factor to multiply the viral radius to define the box size
-    "vir_kind": 1, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
+    "vir_kind": 2, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "region": 'BOX', # Region of interest shape to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
@@ -76,7 +79,6 @@ IND_PARAMS = {
         "return_vectorial": False, # Return the vectorial components of the induction terms
         "return_induction": False, # Return the induction terms arrays
         "return_induction_energy": False, # Return the induction energy terms arrays
-        "profiles": False, # Calculate the profiles of the induction components
         "projection": False, # Calculate the projection of the induction components
         "A2U": False # Transform the AMR grid to a uniform grid
     },
@@ -90,22 +92,26 @@ IND_PARAMS = {
     "energy_evolution": {
         "enabled": True, # Calculate the evolution of the energy budget
         "derivative": 'central', # Derivative to use for the evolution (implicit_forward, central, alpha_fit, RK or rate)
+        "normalized": False, # True: keeps B/sqrt(rho_b) in magnetic evolution outputs; False: shows results respect to physical B
         "volume_coordinates": 'physical', # Integration volume differential: 'physical' (a^3 dV) or 'comoving' (dV)
         "normalize_by_volume": False, # If True, divide integrated quantities by total integration volume
-        "normalized": True, # True: keeps B/sqrt(rho_b) in magnetic evolution outputs; False: shows results respect to physical B
         "plot_total": True, # Calculate and plot total (integrated) energy evolution
-        "plot_differential": True # Calculate and plot differential (rate of change) energy evolution
+        "plot_differential": True, # Calculate and plot differential (rate of change) energy evolution
+        "plot_profiles": True # Plot radial profiles for induction-energy terms
     },
     "production_dissipation": {
         "enabled": True, # Calculate production/dissipation decomposition from induction-energy terms
-        "normalized": True, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
-        "normalize_by_volume": False, # If True, divide P/D integrated quantities by total integration volume (override by energy evolution volume normalization if both modes are enabled)
-        "plot_absolute": True, # Plot absolute production and dissipation rates
-        "plot_fractional": True, # Plot fractional production/dissipation contributions and net efficiency
-        "plot_net": True # Plot net contributions (production - dissipation)
+        "normalized": False, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
+        "volume_coordinates": 'physical', # Integration volume differential for P/D: 'physical' (a^3 dV) or 'comoving' (dV)
+        "normalize_by_volume": False, # If True, divide P/D integrated quantities by total integration volume
+        "plot_absolute": False, # Plot absolute production and dissipation rates
+        "plot_fractional": False, # Plot fractional production/dissipation contributions and net efficiency
+        "plot_net": False, # Plot net contributions (production - dissipation)
+        "plot_profiles": True, # Plot radial profiles for production/dissipation terms
+        "plot_fractional_profiles": True # Plot fractional contribution profiles for production/dissipation terms
     },
     "percentiles": {
-        "enabled": False, # Calculate percentile thresholds of the magnetic field divergence
+        "enabled": True, # Calculate percentile thresholds of the magnetic field divergence
         "percentile_levels": (95, 90, 75, 50, 25) # Percentile thresholds to compute
     },
     "test_params": {
@@ -141,24 +147,26 @@ OUTPUT_PARAMS = {
     # Recycle worker processes every N tasks in parallel mode to mitigate RAM growth
     # (set to None to disable recycling).
     "max_tasks_per_child": 1,
-    "run": f'MAGNAS_SSD_Evo_PD_25',
+    "run": f'MAGNAS_SSD_Evo_PD_42',
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
     # "run": f'MAGNAS_SSD_Evo_RAM_test_1_serial',
-    "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
-    # "sims": ["box_L40_p32_128_l9_2026_full_box_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
+    # "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
+    # "sims": ["box_L40_p32_128_l9_2026_full_box_7_bis"], # Simulation names, must match the nameof the simulations folder in the data directory
+    "sims": ["prova_ORPHEUS_l10_1e4cool"],
     # "sims": ["cluster_B_low_res_paper_2020", "cluster_L40_p32_agn_sim_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [[1300], [500]], # For different redshift snap iterations analysis
-    # "it": [1700],
-    # "it": list(range(300, 601, 50)), # For different redshift snap iterations analysis
+    # "it": [900],
+    # "it": [2119],
+    "it": list(range(100, 900, 50)), # For different redshift snap iterations analysis
     # "it": list(range(1900, 2101, 50)) + [2119],
     # "it": list(range(50, 2101, 50)) + [2119], # For different redshift snap iterations analysis
-    "it": list(range(350, 2101, 50)) + [2119], # For different redshift snap iterations analysis
-    "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    # "dir_DM": "/mnt/perdiu/scratch/",
-    # "dir_gas": "/mnt/perdiu/scratch/",
-    # "dir_grids": "/mnt/perdiu/scratch/",
+    # "it": list(range(350, 2101, 50)) + [2119], # For different redshift snap iterations analysis
+    # "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    # "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    # "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    "dir_DM": "/mnt/perdiu/scratch/",
+    "dir_gas": "/mnt/perdiu/scratch/",
+    "dir_grids": "/mnt/perdiu/scratch/",
     "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF/",
     "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX/",
     # "outdir": "/scratch/marcomol/output_files_PRIMAL_",
@@ -167,7 +175,7 @@ OUTPUT_PARAMS = {
     "rawdir": "raw_data_out/",
     "terminaldir": "terminal_output/",
     "ID1": "dynamo/",
-    "ID2": "new_induction_analysis",
+    "ID2": "new_sim_induction_analysis",
     # "ID2": "RAM_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
@@ -204,7 +212,7 @@ SIM_CHARACTERISTICS = {
         "is_cooling": False,      # This simulation has NO cooling (no temp/metalicity in file)
         "is_mascletB": True,      # This simulation has magnetic fields (Bx, By, Bz in file)
     },
-    "box_L40_p32_128_l9_2026_full_box_7_bis": {
+    "prova_ORPHEUS_l10_1e4cool": {
         "is_cooling": True,       # This simulation HAS cooling (temp/metalicity in file)
         "is_mascletB": True,      # This simulation has magnetic fields (Bx, By, Bz in file)
     },
@@ -216,25 +224,78 @@ SIM_CHARACTERISTICS = {
     # }
 }
 
+PLOT_PALETTES = {
+    "active": "classic",
+    "available": {
+        "classic": {
+            "measured_energy": "#1f77b4",
+            "induction_itemized": "#ff7f0e",
+            "induction_compact": "#800020",
+            "kinetic_energy": "#17becf",
+            "production": "#2ca02c",
+            "dissipation": "#d62728",
+            "net_itemized": "#ff7f0e",
+            "net_compact": "#800020",
+            "efficiency": "#1f77b4",
+            "density": "#2ca02c",
+            "max_curve": "#111111",
+            "negative_interval": "#364243",
+            "component_colors": {
+                "compression": "#9467bd",
+                "stretching": "#ff9896",
+                "advection": "#e377c2",
+                "divergence": "#c5b0d5",
+                "drag": "#7f7f7f"
+            },
+            "percentile_cmap": "viridis"
+        },
+        "colorblind": {
+            "measured_energy": "#0072B2",
+            "induction_itemized": "#E69F00",
+            "induction_compact": "#000000",
+            "kinetic_energy": "#56B4E9",
+            "production": "#009E73",
+            "dissipation": "#D55E00",
+            "net_itemized": "#E69F00",
+            "net_compact": "#000000",
+            "efficiency": "#CC79A7",
+            "density": "#009E73",
+            "max_curve": "#444444",
+            "negative_interval": "#666666",
+            "component_colors": {
+                "compression": "#0072B2",
+                "stretching": "#D55E00",
+                "advection": "#009E73",
+                "divergence": "#CC79A7",
+                "drag": "#999999"
+            },
+            "percentile_cmap": "cividis"
+        }
+    }
+}
+
 EVO_PLOT_PARAMS = {
+    'palette_name': PLOT_PALETTES["active"],
+    'palettes': PLOT_PALETTES["available"],
+    'units': IND_PARAMS["units"],
     'plot_total': IND_PARAMS["energy_evolution"]["plot_total"],
     'plot_differential': IND_PARAMS["energy_evolution"]["plot_differential"],
     'derivative': IND_PARAMS["energy_evolution"]["derivative"],
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
-    'y_scale': 'lin' if IND_PARAMS["energy_evolution"]["plot_differential"] else 'log', # 'lin' for differential (rate), 'log' for total (energy)
+    'y_scale': 'log', # Only for total evolution; 'lin' or 'log'
     # 'xlim': [10, 0], # None for auto
-    'xlim': [2.5, 0], # None for auto
-    # 'xlim': None, # None for auto
+    # 'xlim': [2.5, 0], # None for auto
+    'xlim': None, # None for auto
     'ylim': None, # None for auto
     # 'ylim': [1e57, 1e60], # For the test
     # 'ylim': [1e58, 1e63], # None for auto
     # 'ylim': [1e-19, 1e-16], # None for auto
     # 'ylim': [1e-19, 1e-13], # None for auto
     # 'ylim': [-0.2e-28, 0.8e-28], # None for auto
-    'cancel_limits': False, # If True, ignore manual xlim/ylim; for zeta plots, also invert x-axis automatically
+    'cancel_limits': True, # If True, ignore manual xlim/ylim; for zeta plots, also invert x-axis automatically
     'figure_size': [12, 8], # [width, height]
-    'line_widths': [5, 1.5], # [line1, line2] for main and component lines
+    'line_widths': [5.0, 3.0], # [line1, line2] for main and component lines
     'plot_type': 'raw', # 'raw', 'smoothed', or 'interpolated' to choose plot style
     'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
     'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
@@ -246,49 +307,94 @@ EVO_PLOT_PARAMS = {
 }
 
 PROD_DISS_PLOT_PARAMS = {
+    'palette_name': PLOT_PALETTES["active"],
+    'palettes': PLOT_PALETTES["available"],
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
-    'xlim': [2.5, 0], # None for auto
+    # 'xlim': [2.5, 0], # None for auto
+    'xlim': None, # None for auto
     'ylim': None, # None for auto
     'cancel_limits': False, # If True, ignore manual xlim/ylim; for zeta plots, also invert x-axis automatically
     'figure_size': [12, 8], # [width, height]
-    'line_widths': [3.0, 2.0], # [main, components]
+    'line_widths': [5.0, 3.0], # [main, components]
     'title': 'Production and Dissipation Evolution',
     'dpi': 300,
     'run': OUTPUT_PARAMS["run"],
+    'units': IND_PARAMS["units"],
     'plot_total_prod_diss': False, # If False, hide total production/dissipation curves (green/red). Net curves are still plotted when available.
     'plot_absolute': IND_PARAMS["production_dissipation"]["plot_absolute"],
     'plot_fractional': IND_PARAMS["production_dissipation"]["plot_fractional"],
     'plot_net': IND_PARAMS["production_dissipation"]["plot_net"]
 }
 
-PROFILE_PLOT_PARAMS = {
-    'it_indx': [-1],
+INDUCTION_PROFILE_PLOT_PARAMS = {
+    'palette_name': PLOT_PALETTES["active"],
+    'palettes': PLOT_PALETTES["available"],
+    'units': IND_PARAMS["units"],
+    # 'it_indx': [-1],
+    "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
     # 'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
     # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
     'x_scale': 'log', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
     'xlim': None, # None for auto
-    'ylim': None, # None for auto
+    # 'ylim': None, # None for auto
     'rylim': None, # None for auto
     'dylim': None, # None for auto
-    # 'xlim': [5e-3,1e0], # None for auto
-    # 'ylim': [3e53,1e65], # None for auto
+    # 'xlim': [1e-17,1e-5], # None for auto
+    'ylim': [1e-17,1e-5], # None for auto
     # 'rylim': [1e-21,1e-14], # None for auto
     # 'dylim': [1e-28,1e-25], # None for auto
     'figure_size': [12, 8], # [width, height]
-    'line_widths': [3, 2], # [line1, line2] for main and component lines
+    'line_widths': [5.0, 3.0], # [line1, line2] for main and component lines
     'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated' to choose plot style
     'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
     'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
     'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
+    'component_alpha': 0.65, # Opacity for individual induction component curves (totals remain fully opaque)
+    'fixed_legend': True, # If True, place legend at a fixed position inside axes (best for animations)
     'title': 'Induction Radial Profile',
+    'dpi': 300,
+    'run': OUTPUT_PARAMS["run"],
+    'plot_density': False, # Whether to plot the density profile as a reference
+    'plot_magnetic_energy': False, # Whether to plot the magnetic energy profile as a reference
+}
+
+PROD_DISS_PROFILE_PLOT_PARAMS = {
+    'palette_name': PLOT_PALETTES["active"],
+    'palettes': PLOT_PALETTES["available"],
+    'units': IND_PARAMS["units"],
+    # 'it_indx': [-1],
+    "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
+    'x_scale': 'log', # 'lin' or 'log'
+    'y_scale': 'log', # 'lin' or 'log'
+    'xlim': None, # None for auto
+    # 'xlim': [1e-17,1e-5], # None for auto
+    # 'ylim': None, # None for auto
+    'ylim': [1e-17,1e-5], # None for auto
+    'figure_size': [12, 8], # [width, height]
+    'line_widths': [5.0, 3.0], # [line_main, line_components]
+    'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated'
+    'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed')
+    'interpolation_points': 100, # points for interpolation (only for 'interpolated')
+    'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest'
+    'component_alpha': 0.65, # Opacity for individual P/D component curves (totals remain fully opaque)
+    'area_alpha': 0.18, # Opacity for shaded area between production and dissipation component curves
+    'fixed_legend': True, # If True, place legend at a fixed position inside axes (best for animations)
+    'plot_density': False, # Whether to plot the density profile as a reference
+    'plot_magnetic_energy': False, # Whether to plot the magnetic energy profile as a reference
+    'plot_net': False, # If True, also plots the net production/dissipation profiles for the different induction components
+    'plot_absolute': False, # Plot production/dissipation component profiles
+    'title': 'Production and Dissipation Radial Profile',
     'dpi': 300,
     'run': OUTPUT_PARAMS["run"]
 }
 
 PERCENTILE_PLOT_PARAMS = {
+    'palette_name': PLOT_PALETTES["active"],
+    'palettes': PLOT_PALETTES["available"],
+    'units': IND_PARAMS["units"],
     'x_axis': 'years', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
@@ -541,19 +647,83 @@ if not isinstance(energy_evo.get("normalize_by_volume"), bool):
     raise ValueError("IND_PARAMS['energy_evolution']['normalize_by_volume'] must be a boolean.")
 if not isinstance(energy_evo.get("normalized", True), bool):
     raise ValueError("IND_PARAMS['energy_evolution']['normalized'] must be a boolean (True or False).")
+if not isinstance(energy_evo.get("plot_profiles", False), bool):
+    raise ValueError("IND_PARAMS['energy_evolution']['plot_profiles'] must be a boolean (True or False).")
 if not isinstance(energy_evo.get("plot_total", True), bool):
     raise ValueError("IND_PARAMS['energy_evolution']['plot_total'] must be a boolean (True or False).")
 if not isinstance(energy_evo.get("plot_differential", True), bool):
     raise ValueError("IND_PARAMS['energy_evolution']['plot_differential'] must be a boolean (True or False).")
-if not (energy_evo.get("plot_total", True) or energy_evo.get("plot_differential", True)):
-    raise ValueError("IND_PARAMS['energy_evolution'] must have at least one of 'plot_total' or 'plot_differential' set to True.")
+if energy_evo.get("enabled", True) and not (
+    energy_evo.get("plot_total", True)
+    or energy_evo.get("plot_differential", True)
+    or energy_evo.get("plot_profiles", False)
+):
+    raise ValueError(
+        "IND_PARAMS['energy_evolution'] is enabled but no output is selected. "
+        "Set at least one of 'plot_total', 'plot_differential', or 'plot_profiles' to True."
+    )
 
 # Validate production/dissipation plotting units mode
 prod_diss_cfg = IND_PARAMS.get("production_dissipation", {})
 if not isinstance(prod_diss_cfg.get("normalized", True), bool):
     raise ValueError("IND_PARAMS['production_dissipation']['normalized'] must be a boolean (True or False).")
+if prod_diss_cfg.get("volume_coordinates", "physical") not in allowed_volume_coordinates:
+    raise ValueError("IND_PARAMS['production_dissipation']['volume_coordinates'] must be 'physical' or 'comoving'.")
 if not isinstance(prod_diss_cfg.get("normalize_by_volume", False), bool):
     raise ValueError("IND_PARAMS['production_dissipation']['normalize_by_volume'] must be a boolean (True or False).")
+if not isinstance(prod_diss_cfg.get("plot_profiles", False), bool):
+    raise ValueError("IND_PARAMS['production_dissipation']['plot_profiles'] must be a boolean (True or False).")
+if not isinstance(prod_diss_cfg.get("plot_absolute", True), bool):
+    raise ValueError("IND_PARAMS['production_dissipation']['plot_absolute'] must be a boolean (True or False).")
+if not isinstance(prod_diss_cfg.get("plot_fractional", True), bool):
+    raise ValueError("IND_PARAMS['production_dissipation']['plot_fractional'] must be a boolean (True or False).")
+if not isinstance(prod_diss_cfg.get("plot_net", True), bool):
+    raise ValueError("IND_PARAMS['production_dissipation']['plot_net'] must be a boolean (True or False).")
+if not isinstance(prod_diss_cfg.get("plot_fractional_profiles", False), bool):
+    raise ValueError("IND_PARAMS['production_dissipation']['plot_fractional_profiles'] must be a boolean (True or False).")
+
+IND_PARAMS["energy_evolution"]["plot_profiles"] = bool(energy_evo.get("plot_profiles", False))
+IND_PARAMS["production_dissipation"]["plot_profiles"] = bool(prod_diss_cfg.get("plot_profiles", False))
+IND_PARAMS["production_dissipation"]["plot_fractional_profiles"] = bool(prod_diss_cfg.get("plot_fractional_profiles", False))
+
+# Validate consistency: cannot request plots/returns for disabled subsystems
+if not energy_evo.get("enabled", True) and energy_evo.get("plot_profiles", False):
+    raise ValueError(
+        "Error: energy_evolution['plot_profiles'] = True but energy_evolution['enabled'] = False. "
+        "Cannot request profiles for disabled subsystem."
+    )
+
+if not prod_diss_cfg.get("enabled", True) and prod_diss_cfg.get("plot_profiles", False):
+    raise ValueError(
+        "Error: production_dissipation['plot_profiles'] = True but production_dissipation['enabled'] = False. "
+        "Cannot request profiles for disabled subsystem."
+    )
+if not prod_diss_cfg.get("enabled", True) and prod_diss_cfg.get("plot_fractional_profiles", False):
+    raise ValueError(
+        "Error: production_dissipation['plot_fractional_profiles'] = True but production_dissipation['enabled'] = False. "
+        "Cannot request fractional profiles for disabled subsystem."
+    )
+
+# Determine if there's actually something to do (coupling: nothing computed unless enabled + something to plot/return)
+# Energy evolution is truly needed if enabled AND has any plot enabled
+energy_evolution_truly_enabled = (
+    energy_evo.get("enabled", True) and 
+    (energy_evo.get("plot_total", True) or 
+     energy_evo.get("plot_differential", True) or 
+     energy_evo.get("plot_profiles", False))
+)
+IND_PARAMS["energy_evolution"]["_truly_enabled"] = energy_evolution_truly_enabled
+
+# P/D is truly needed if enabled AND has any plot enabled
+pd_truly_enabled = (
+    prod_diss_cfg.get("enabled", True) and 
+    (prod_diss_cfg.get("plot_absolute", True) or 
+     prod_diss_cfg.get("plot_fractional", True) or 
+     prod_diss_cfg.get("plot_net", True) or 
+    prod_diss_cfg.get("plot_profiles", False) or
+    prod_diss_cfg.get("plot_fractional_profiles", False))
+)
+IND_PARAMS["production_dissipation"]["_truly_enabled"] = pd_truly_enabled
 
 # Validate interpolation method and adjust parameters for parent mode
 allowed_interpol = ['TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST']
@@ -739,7 +909,9 @@ worker_arrays += max(4, 2 * enabled_components)
 
 if IND_PARAMS.get("energy_evolution", {}).get("enabled", False):
     worker_arrays += 6
-if ret_cfg.get("profiles", False):
+if IND_PARAMS.get("energy_evolution", {}).get("plot_profiles", False):
+    worker_arrays += 4
+if IND_PARAMS.get("production_dissipation", {}).get("plot_profiles", False):
     worker_arrays += 4
 if IND_PARAMS.get("production_dissipation", {}).get("enabled", False):
     worker_arrays += 4
@@ -779,7 +951,9 @@ if IND_PARAMS.get("energy_evolution", {}).get("enabled", False):
     retained_meta_gb_per_snapshot += 0.01
 if IND_PARAMS.get("production_dissipation", {}).get("enabled", False):
     retained_meta_gb_per_snapshot += 0.01
-if ret_cfg.get("profiles", False):
+if IND_PARAMS.get("energy_evolution", {}).get("plot_profiles", False):
+    retained_meta_gb_per_snapshot += 0.02
+if IND_PARAMS.get("production_dissipation", {}).get("plot_profiles", False):
     retained_meta_gb_per_snapshot += 0.02
 if pct_cfg.get("enabled", False):
     retained_meta_gb_per_snapshot += 0.01
@@ -806,7 +980,8 @@ print(
     f"buffer={IND_PARAMS.get('buffer', False)}, "
     f"parent={IND_PARAMS.get('parent', False)}, "
     f"blend={IND_PARAMS.get('blend', False)}, "
-    f"profiles={IND_PARAMS.get('profiles', False)}, "
+    f"induction_profiles={IND_PARAMS.get('energy_evolution', {}).get('plot_profiles', False)}, "
+    f"pd_profiles={IND_PARAMS.get('production_dissipation', {}).get('plot_profiles', False)}, "
     f"percentiles={IND_PARAMS.get('percentiles', False)}, "
     f"projection={IND_PARAMS.get('projection', False)}, "
     f"debug_field_analysis={DEBUG_PARAMS.get('field_analysis', {}).get('enabled', False)}, "

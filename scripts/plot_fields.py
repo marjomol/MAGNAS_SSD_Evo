@@ -16,7 +16,7 @@ import scripts.diff as diff
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.font_manager import FontProperties
-from matplotlib.colors import LogNorm, Normalize, BoundaryNorm
+from matplotlib.colors import LogNorm, Normalize, BoundaryNorm, to_rgb
 from matplotlib.ticker import FormatStrFormatter
 from scipy import stats
 from scipy import fft
@@ -31,6 +31,52 @@ from time import gmtime
 import sys
 import hashlib
 from scripts.units import *
+
+DEFAULT_PLOT_PALETTE = {
+    'measured_energy': '#1f77b4',
+    'induction_itemized': '#ff7f0e',
+    'induction_compact': '#800020',
+    'kinetic_energy': '#17becf',
+    'production': '#2ca02c',
+    'dissipation': '#d62728',
+    'net_itemized': '#ff7f0e',
+    'net_compact': '#800020',
+    'efficiency': '#1f77b4',
+    'density': '#2ca02c',
+    'max_curve': '#111111',
+    'negative_interval': '#364243',
+    'percentile_cmap': 'viridis',
+    'component_colors': {
+        'compression': '#9467bd',
+        'stretching': '#ff9896',
+        'advection': '#e377c2',
+        'divergence': '#c5b0d5',
+        'drag': '#7f7f7f'
+    }
+}
+
+
+def get_plot_palette(plot_params=None, induction_params=None):
+    """Resolve the active plot palette from plot parameters or defaults."""
+    plot_params = plot_params or {}
+    induction_params = induction_params or {}
+
+    palettes = plot_params.get('palettes') or induction_params.get('palettes') or {}
+    palette_name = plot_params.get('palette_name', induction_params.get('palette_name', 'classic'))
+
+    palette = None
+    if isinstance(palettes, dict) and palettes:
+        palette = palettes.get(palette_name, palettes.get('classic', next(iter(palettes.values()))))
+    if not isinstance(palette, dict):
+        palette = DEFAULT_PLOT_PALETTE
+
+    resolved = DEFAULT_PLOT_PALETTE.copy()
+    resolved.update({k: v for k, v in palette.items() if k != 'component_colors'})
+
+    component_colors = DEFAULT_PLOT_PALETTE['component_colors'].copy()
+    component_colors.update(palette.get('component_colors', {}))
+    resolved['component_colors'] = component_colors
+    return resolved
 
 def safe_filename(filepath, max_length=255, verbose=False):
     """
@@ -667,6 +713,8 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     base_title = plot_params.get('title', 'Percentile Threshold Evolution')
     line_widths = plot_params.get('line_widths', [2.0, 1.5])
     alpha_fill = plot_params.get('alpha_fill', 0.20)
+    palette = get_plot_palette(plot_params, induction_params)
+    color_max_curve = palette.get('max_curve', DEFAULT_PLOT_PALETTE['max_curve'])
     
     # Read boundary exclusion parameters from plot_params
     exclude_boundaries = plot_params.get('exclude_boundaries', False)
@@ -692,7 +740,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         ax.text(0.5, 1.05, subtitle, transform=ax.transAxes,
                 ha='center', va='top', fontsize=9, style='normal')
 
-    colors = plt.cm.viridis(np.linspace(0.15, 0.85, levels_sorted.size))
+    colors = plt.get_cmap(palette.get('percentile_cmap', 'viridis'))(np.linspace(0.15, 0.85, levels_sorted.size))
 
     # Shaded bands: ±1% error bands around each percentile (if available)
     if pct_plus_sorted is not None and pct_minus_sorted is not None:
@@ -726,10 +774,10 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         except Exception:
             gmax = None
         if gmax is not None and gmax.size == x.size:
-                ax.plot(x, gmax, color='#111111', linewidth=lw_max, linestyle='--', label='_nolegend_')
-                # Store Max label position for later
-                label_idx = max(0, min(int(len(x) * label_x_frac), len(x) - 1))
-                label_entries.append((x[label_idx], gmax[label_idx], 'Max', '#111111'))
+            ax.plot(x, gmax, color=color_max_curve, linewidth=lw_max, linestyle='--', label='_nolegend_')
+            # Store Max label position for later
+            label_idx = max(0, min(int(len(x) * label_x_frac), len(x) - 1))
+            label_entries.append((x[label_idx], gmax[label_idx], 'Max', color_max_curve))
     
     if x_scale == 'log':
         ax.set_xscale('log')
@@ -887,9 +935,34 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     plot_total = plot_params.get('plot_total', True)
     plot_differential = plot_params.get('plot_differential', True)
     assert plot_total or plot_differential, "At least one of plot_total or plot_differential must be True"
+
+    requested_modes = []
+    if plot_total:
+        requested_modes.append('total')
+    if plot_differential:
+        requested_modes.append('differential')
+
+    if not plot_params.get('_internal_mode', False) and len(requested_modes) > 1:
+        figures = []
+        plot_volume_once = bool(plot_params.get('volume_evolution', False))
+        for mode_index, mode in enumerate(requested_modes):
+            mode_params = plot_params.copy()
+            mode_params['evolution_type'] = mode
+            mode_params['plot_total'] = mode == 'total'
+            mode_params['plot_differential'] = mode == 'differential'
+            mode_params['y_scale'] = 'log' if mode == 'total' else 'lin'
+            mode_params['volume_evolution'] = plot_volume_once and mode_index == 0
+            mode_params['_internal_mode'] = True
+            figures.extend(
+                plot_integral_evolution(
+                    evolution_data, mode_params, induction_params,
+                    grid_t, grid_zeta, rad,
+                    verbose=verbose, save=save, folder=folder
+                )
+            )
+        return figures
     
     # Extract parameters from plot_params
-    derivative = plot_params['derivative']
     derivative = plot_params['derivative']
     x_axis = plot_params['x_axis']
     if x_axis == 'zeta':
@@ -899,13 +972,10 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         assert len(grid_t) > 0, "grid_t must not be empty when x_axis is 'years'"
         assert plot_params.get('interpolation_points', 500) > 0, "interpolation_points must be a positive integer"
     
-    # Determine which evolution type to plot based on flags and available data
-    # For now, if plot_differential is True and has data, use differential; else use total
-    evolution_type = 'differential' if plot_differential and 'evo_b2_diff' in evolution_data else 'total'
+    evolution_type = plot_params.get('evolution_type', 'differential' if plot_differential else 'total')
     data_suffix = '_diff' if evolution_type == 'differential' else ''
     x_scale = plot_params['x_scale']
-    y_scale = plot_params['y_scale']
-    y_scale = plot_params['y_scale']
+    y_scale = 'lin' if evolution_type == 'differential' else plot_params['y_scale']
     xlim = plot_params.get('xlim', None)
     ylim = plot_params.get('ylim', None)
     cancel_limits = plot_params.get('cancel_limits', False)
@@ -925,12 +995,19 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
     
     # Extract induction parameters
-    units = induction_params['units']
+    units = plot_params.get('units', induction_params.get('units', 1.0))
     factor_F = induction_params['F']
     region = induction_params['region']
     components_cfg = induction_params.get('components', {})
     plot_magnetic_energy = bool(components_cfg.get('magnetic_energy', True))
     plot_kinetic_energy = bool(components_cfg.get('kinetic_energy', True))
+    palette = get_plot_palette(plot_params, induction_params)
+    component_colors = palette.get('component_colors', {})
+    color_negative_interval = palette.get('negative_interval', DEFAULT_PLOT_PALETTE['negative_interval'])
+    color_measured = palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
+    color_itemized = palette.get('induction_itemized', DEFAULT_PLOT_PALETTE['induction_itemized'])
+    color_compact = palette.get('induction_compact', DEFAULT_PLOT_PALETTE['induction_compact'])
+    color_kinetic = palette.get('kinetic_energy', DEFAULT_PLOT_PALETTE['kinetic_energy'])
     
     # Set up matplotlib parameters
     plt.rcParams.update({
@@ -952,18 +1029,25 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     font_title = FontProperties()
     font_title.set_style('normal')
     font_title.set_weight('bold')
-    font_title.set_size(24)
+    font_title.set_size(20)
     
     font_legend = FontProperties()
     font_legend.set_style('normal')
     font_legend.set_weight('normal')
     font_legend.set_size(12)
     
-    y_title = 1.05
+    y_title = 1.02
     line1, line2 = line_widths
+    component_alpha = float(np.clip(plot_params.get('component_alpha', 0.75), 0.05, 1.0))
+    component_alpha = float(np.clip(plot_params.get('component_alpha', 0.75), 0.05, 1.0))
     component_threshold = plot_params.get(
         'component_threshold',
         0.0 if evolution_type == 'differential' else induction_params.get('differentiation', {}).get('epsilon', 1e-30)
+    )
+    normalize_by_volume = induction_params.get('energy_evolution', {}).get('normalize_by_volume', False)
+    normalized = plot_params.get(
+        'normalized',
+        induction_params.get('energy_evolution', {}).get('normalized', True)
     )
     
     # Prepare time and redshift arrays
@@ -1174,7 +1258,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     xk, yk = _slice_xy(x_data, kinetic_work_data, index_O_plot, index_F_plot)
     if plot_kinetic_energy and should_plot_component(yk, threshold=component_threshold):
         ax1.plot(xk, yk, 
-                linewidth=line1, label='Kinetic Energy', color='#17becf')
+            linewidth=line1, label='Kinetic Energy', color=color_kinetic)
         components_plotted.append('kinetic')
     
     # Main energy line (always plot)
@@ -1186,40 +1270,37 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     x1, y1 = _slice_xy(x_data, n1_data, index_O_plot, index_F_plot)
     if plot_magnetic_energy and should_plot_component(y1, threshold=component_threshold):
         ax1.plot(x1, y1, 
-                linewidth=line1, label=label, color='#1f77b4')
+            linewidth=line1, label=label, color=color_measured)
         components_plotted.append('magnetic_energy')
         
     # Total work (compacted)
     xt, yt = _slice_xy_with_offset(x_data, total_work_data, index_o_plot, index_f_plot)
     if should_plot_component(yt, threshold=component_threshold):
         ax1.plot(xt, yt, '-', 
-                linewidth=line1, label='...from Compact Induction', color='#800020')
+            linewidth=line1, label='...from Compact Induction', color=color_compact)
         components_plotted.append('total')
 
     # Induction prediction (plot if has data)
     x0, y0 = _slice_xy_with_offset(x_data, n0_data, index_o_plot, index_f_plot)
     if should_plot_component(y0, threshold=component_threshold):
-        if evolution_type == 'total':
-            label = '...from Itemize Induction'
-        else:
-            label = 'Predicted Induction'
         ax1.plot(x0, y0, '--',
-            linewidth=line1, label=label, color='#ff7f0e')
+            linewidth=line1, label='...from Itemize Induction', color=color_itemized)
 
     # Individual components with their colors
     component_configs = [
-        (compres_work_data, 'Compression', '#9467bd'),
-        (stretch_work_data, 'Stretching', '#ff9896'),
-        (advec_work_data, 'Advection', '#e377c2'),
-        (diver_work_data, 'Divergence', '#c5b0d5'),
-        (drag_work_data, 'Cosmic Drag', '#7f7f7f')
+        (compres_work_data, 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
+        (stretch_work_data, 'Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str'),
+        (advec_work_data, 'Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv'),
+        (diver_work_data, 'Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div'),
+        (drag_work_data, 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag')
     ]
     
-    for data, label, color in component_configs:
+    for data, label, color, sym in component_configs:
         xc, yc = _slice_xy_with_offset(x_data, data, index_o_plot, index_f_plot)
         if should_plot_component(yc, threshold=component_threshold):
+            latex_label = rf'{label} $\Gamma_{{\mathrm{{{sym}}}}}$'
             ax1.plot(xc, yc, '--', 
-                    linewidth=line2, label=label, color=color)
+                    linewidth=line2, label=latex_label, color=color)
             components_plotted.append(label.lower())
 
     if verbose and evolution_type == 'total':
@@ -1265,13 +1346,19 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             )
     
     setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font)
+    norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
+    vol_suffix = r' / Volume' if normalize_by_volume else ''
+    if evolution_type == 'total':
+        ax1.set_ylabel(f'Magnetic Energy{norm_suffix}{vol_suffix}', fontproperties=font)
+    else:
+        ax1.set_ylabel(f'Magnetic Evolution{norm_suffix}{vol_suffix}', fontproperties=font)
     ax1.grid(alpha=0.3)
     ax1.legend(prop=font_legend, ncol=2)
 
     if region == 'None':
-        plot_title = f'{title} - {np.round(induction_params["size"][0]/2)} Mpc'
+        plot_title = f'{title} - {np.round(induction_params["size"][0]/2, 1)} Mpc'
     else:
-        plot_title = f'{title} - {np.round(factor_F*rad)} Mpc'
+        plot_title = f'{title} - {np.round(factor_F*rad, 1)} Mpc'
 
     if evolution_type != 'total':
         plot_title = plot_title.replace('Evolution', 'Induction Evolution')
@@ -1387,7 +1474,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
 
 
 def plot_production_dissipation_evolution(pd_data, plot_params, induction_params,
-                                        grid_t, grid_zeta,
+                                        grid_t, grid_zeta, rad=None,
                                         verbose=True, save=False, folder=None):
     '''
     Plot production/dissipation evolution from precomputed volumetric integrals.
@@ -1432,12 +1519,27 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     plot_absolute = plot_params.get('plot_absolute', True)
     plot_fractional = plot_params.get('plot_fractional', True)
     plot_net = plot_params.get('plot_net', False)
+    units = plot_params.get('units', induction_params.get('units', 1.0))
     normalized = plot_params.get('normalized', induction_params.get('production_dissipation', {}).get('normalized', True))
-    normalize_by_volume = induction_params.get(induction_params.get('production_dissipation', {}).get('normalize_by_volume', False))
+    normalize_by_volume = induction_params.get('production_dissipation', {}).get('normalize_by_volume', False)
+    palette = get_plot_palette(plot_params, induction_params)
+    component_colors = palette.get('component_colors', {})
+    color_prod = palette.get('production', DEFAULT_PLOT_PALETTE['production'])
+    color_diss = palette.get('dissipation', DEFAULT_PLOT_PALETTE['dissipation'])
+    color_itemized_net = palette.get('net_itemized', DEFAULT_PLOT_PALETTE['net_itemized'])
+    color_compact_net = palette.get('net_compact', DEFAULT_PLOT_PALETTE['net_compact'])
+    color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
+    plot_density = bool(plot_params.get('plot_density', False))
+    plot_magnetic_energy = bool(plot_params.get('plot_magnetic_energy', False))
+    color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
     if not isinstance(normalized, bool):
         normalized = True
     if not isinstance(normalize_by_volume, bool):
         normalize_by_volume = False
+    try:
+        units = float(units)
+    except (TypeError, ValueError):
+        units = 1.0
     epsilon = induction_params.get('differentiation', {}).get('epsilon', 1e-30)
 
     # Match style with latest plot functions (e.g. radial profiles)
@@ -1448,7 +1550,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
         'xtick.labelsize': 14,
         'ytick.labelsize': 14,
         'legend.fontsize': 10,
-        'figure.titlesize': 20
+        'figure.titlesize': 18
     })
 
     font = FontProperties()
@@ -1459,14 +1561,14 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     font_title = FontProperties()
     font_title.set_style('normal')
     font_title.set_weight('bold')
-    font_title.set_size(24)
+    font_title.set_size(20)
 
     font_legend = FontProperties()
     font_legend.set_style('normal')
     font_legend.set_weight('normal')
     font_legend.set_size(12)
 
-    y_title = 1.05
+    y_title = 1.02
 
     line_main = line_widths[0]
     line_comp = line_widths[1] if len(line_widths) > 1 else line_widths[0]
@@ -1480,25 +1582,36 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             x[-1] = abs(x[-1])
         xlabel = 'Redshift (z)'
 
+    if rad is None:
+        if induction_params.get('region', None) == 'None':
+            region_label = f'{np.round(induction_params.get("size", [0])[0] / 2)} Mpc'
+        else:
+            region_label = f'{np.round(induction_params.get("F", 1.0) * induction_params.get("size", [0])[0] / 2)} Mpc'
+    else:
+        if induction_params.get('region', None) == 'None':
+            region_label = f'{np.round(induction_params.get("size", [0])[0] / 2)} Mpc'
+        else:
+            region_label = f'{np.round(induction_params.get("F", 1.0) * rad, 1)} Mpc'
+
     # Itemized totals: sum of per-term production/dissipation contributions.
-    itemized_prod = np.asarray(pd_data['int_MIE_total_B2_prod_itemized'], dtype=float)
-    itemized_diss = np.asarray(pd_data['int_MIE_total_B2_diss_itemized'], dtype=float)
+    itemized_prod = units * np.asarray(pd_data['int_MIE_total_B2_prod_itemized'], dtype=float)
+    itemized_diss = units * np.asarray(pd_data['int_MIE_total_B2_diss_itemized'], dtype=float)
     itemized_net = itemized_prod - itemized_diss
 
     compact_prod = None
     compact_diss = None
     if 'int_MIE_total_B2_prod_compact' in pd_data and 'int_MIE_total_B2_diss_compact' in pd_data:
-        compact_prod = np.asarray(pd_data['int_MIE_total_B2_prod_compact'], dtype=float)
-        compact_diss = np.asarray(pd_data['int_MIE_total_B2_diss_compact'], dtype=float)
+        compact_prod = units * np.asarray(pd_data['int_MIE_total_B2_prod_compact'], dtype=float)
+        compact_diss = units * np.asarray(pd_data['int_MIE_total_B2_diss_compact'], dtype=float)
     compact_net = None if compact_prod is None or compact_diss is None else (compact_prod - compact_diss)
 
-    # Component palette used in plot_radial_profiles
+    # Component palette used in plot_induction_radial_profiles
     component_map = [
-        ('MIE_compres_B2', 'Compression', '#9467bd', 'comp'),
-        ('MIE_stretch_B2', 'Stretching', '#ff9896', 'str'),
-        ('MIE_advec_B2', 'Advection', '#e377c2', 'adv'),
-        ('MIE_diver_B2', 'Divergence', '#c5b0d5', 'div'),
-        ('MIE_drag_B2', 'Cosmic Drag', '#7f7f7f', 'drag')
+        ('MIE_compres_B2', 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
+        ('MIE_stretch_B2', 'Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str'),
+        ('MIE_advec_B2', 'Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv'),
+        ('MIE_diver_B2', 'Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div'),
+        ('MIE_drag_B2', 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag')
     ]
 
     if verbose:
@@ -1520,26 +1633,26 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     if plot_absolute:
         fig_abs, ax_abs = plt.subplots(figsize=figure_size, dpi=dpi)
         if plot_total_prod_diss:
-            ax_abs.plot(x, itemized_prod, '-', linewidth=line_main, color='#2ca02c', label='Total Production (itemized sum)')
-            ax_abs.plot(x, itemized_diss, '-', linewidth=line_main, color='#d62728', label='Total Dissipation (itemized sum)')
-        ax_abs.plot(x, itemized_net, '--', linewidth=line_main, color='#ff7f0e', label='Net (itemized) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
+            ax_abs.plot(x, itemized_prod, '-.', linewidth=line_main, color=color_prod, label='Total Production (itemized sum)')
+            ax_abs.plot(x, itemized_diss, '-.', linewidth=line_main, color=color_diss, label='Total Dissipation (itemized sum)')
+        ax_abs.plot(x, itemized_net, '--', linewidth=line_main, color=color_itemized_net, label='Net (itemized) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
 
         if compact_prod is not None and compact_diss is not None:
             if plot_total_prod_diss:
-                ax_abs.plot(x, compact_prod, '-.', linewidth=line_comp, color='#2ca02c', label='Total Production (compact)')
-                ax_abs.plot(x, compact_diss, '-.', linewidth=line_comp, color='#d62728', label='Total Dissipation (compact)')
+                ax_abs.plot(x, compact_prod, '-', linewidth=line_comp, color=color_prod, label='Total Production (compact)')
+                ax_abs.plot(x, compact_diss, '-', linewidth=line_comp, color=color_diss, label='Total Dissipation (compact)')
         if compact_net is not None:
-            ax_abs.plot(x, compact_net, '-', linewidth=line_main, color='#800020', label='Net (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
+            ax_abs.plot(x, compact_net, '-', linewidth=line_main, color=color_compact_net, label='Net (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
 
         for prefix, label, color, sym in component_map:
             prod_key = f'int_{prefix}_prod'
             diss_key = f'int_{prefix}_diss'
             if prod_key in pd_data:
-                arr_p = np.asarray(pd_data[prod_key], dtype=float)
+                arr_p = units * np.asarray(pd_data[prod_key], dtype=float)
                 if should_plot_component(arr_p):
                     ax_abs.plot(x, arr_p, '--', linewidth=line_comp, color=color, label=rf'{label} $P_{{\mathrm{{{sym}}}}}$')
             if diss_key in pd_data:
-                arr_d = np.asarray(pd_data[diss_key], dtype=float)
+                arr_d = units * np.asarray(pd_data[diss_key], dtype=float)
                 if should_plot_component(arr_d):
                     ax_abs.plot(x, arr_d, ':', linewidth=line_comp, color=color, label=rf'{label} $D_{{\mathrm{{{sym}}}}}$')
 
@@ -1564,7 +1677,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_abs.invert_xaxis()
 
         ax_abs.grid(alpha=0.3)
-        ax_abs.set_title(title, y=y_title, fontproperties=font_title)
+        ax_abs.set_title(f'{title} - {region_label}', y=y_title, fontproperties=font_title)
         ax_abs.legend(prop=font_legend, ncol=2)
         fig_abs.tight_layout()
         figures.append(fig_abs)
@@ -1587,7 +1700,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
         if 'int_PD_iota' in pd_data:
             iota = np.asarray(pd_data['int_PD_iota'], dtype=float)
-            ax_frac.plot(x, iota, '-', linewidth=line_main, color='#1f77b4', label=r'Net Efficiency $\iota$')
+            ax_frac.plot(x, iota, '-', linewidth=line_main, color=color_efficiency, label=r'Net Efficiency $\iota$')
 
         ax_frac.set_xlabel(xlabel, fontproperties=font)
         ax_frac.set_ylabel('Fractional Contribution (+prod / -diss)', fontproperties=font)
@@ -1604,7 +1717,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_frac.invert_xaxis()
 
         ax_frac.grid(alpha=0.3)
-        ax_frac.set_title(f'{title} (Fractions)', y=y_title, fontproperties=font_title)
+        ax_frac.set_title(f'{title} (Fractions) - {region_label}', y=y_title, fontproperties=font_title)
         ax_frac.legend(prop=font_legend, ncol=2)
         fig_frac.tight_layout()
         figures.append(fig_frac)
@@ -1617,15 +1730,15 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             prod_key = f'int_{prefix}_prod'
             diss_key = f'int_{prefix}_diss'
             if prod_key in pd_data and diss_key in pd_data:
-                arr_p = np.asarray(pd_data[prod_key], dtype=float)
-                arr_d = np.asarray(pd_data[diss_key], dtype=float)
+                arr_p = units * np.asarray(pd_data[prod_key], dtype=float)
+                arr_d = units * np.asarray(pd_data[diss_key], dtype=float)
                 net_i = arr_p - arr_d
                 if should_plot_component(net_i, threshold=epsilon):
                     ax_net.plot(x, net_i, '--', linewidth=line_comp, color=color, label=rf'{label} $N_{{\mathrm{{{sym}}}}}$')
 
-        ax_net.plot(x, itemized_net, '--', linewidth=line_main, color='#ff7f0e', label='Net total (itemized)')
+        ax_net.plot(x, itemized_net, '--', linewidth=line_main, color=color_itemized_net, label='Net total (itemized)')
         if compact_net is not None:
-            ax_net.plot(x, compact_net, '-', linewidth=line_main, color='#800020', label='Net total (compact)')
+            ax_net.plot(x, compact_net, '-', linewidth=line_main, color=color_compact_net, label='Net total (compact)')
 
         ax_net.set_xlabel(xlabel, fontproperties=font)
         norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
@@ -1645,7 +1758,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_net.invert_xaxis()
 
         ax_net.grid(alpha=0.3)
-        ax_net.set_title(f'{title} (Net)', y=y_title, fontproperties=font_title)
+        ax_net.set_title(f'{title} (Net) - {region_label}', y=y_title, fontproperties=font_title)
         ax_net.legend(prop=font_legend, ncol=2)
         fig_net.tight_layout()
         figures.append(fig_net)
@@ -1711,9 +1824,9 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
     return figures
 
-def plot_radial_profiles(profile_data, plot_params, induction_params,
-                        grid_t, grid_zeta, rad,
-                        verbose=True, save=False, folder=None):
+def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
+                                 grid_t, grid_zeta, rad,
+                                 verbose=True, save=False, folder=None):
     """
     Plot radial profiles of magnetic energy and induction components.
 
@@ -1787,6 +1900,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     ylim = plot_params.get('ylim', None)
     rylim = plot_params.get('rylim', None)
     dylim = plot_params.get('dylim', None)
+    fixed_legend = bool(plot_params.get('fixed_legend', False))
     figure_size = plot_params.get('figure_size', [12, 8])
     line_widths = plot_params.get('line_widths', [3, 1.5])
     title = plot_params.get('title', 'Magnetic Field Radial Profiles')
@@ -1824,12 +1938,18 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     # Extract induction parameters
     factor_F = induction_params.get('F', 1.0)
     region = induction_params.get('region', None)
-    units = induction_params.get('units', None)
+    units = plot_params.get('units', induction_params.get('units', None))
+    palette = get_plot_palette(plot_params, induction_params)
+    component_colors = palette.get('component_colors', {})
+    color_negative_interval = palette.get('negative_interval', DEFAULT_PLOT_PALETTE['negative_interval'])
     
     # Use string identifiers for axis types to avoid collisions when values are equal
-    AXIS_LEFT = 'left'      # Energy/Kinetic
-    AXIS_RIGHT = 'right'    # Induction  
+    AXIS_MAIN = 'main'      # Induction main axis
+    AXIS_ENERGY = 'energy'  # Magnetic/kinetic energy reference
     AXIS_DENSITY = 'density' # Density
+
+    plot_density = bool(plot_params.get('plot_density', False))
+    plot_magnetic_energy = bool(plot_params.get('plot_magnetic_energy', False))
     
     # Map axis types to their scaling factors
     if units is None:
@@ -1855,7 +1975,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         'xtick.labelsize': 14,
         'ytick.labelsize': 14,
         'legend.fontsize': 10,
-        'figure.titlesize': 20
+        'figure.titlesize': 18
     })
     
     # Define font properties
@@ -1867,15 +1987,16 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     font_title = FontProperties()
     font_title.set_style('normal')
     font_title.set_weight('bold')
-    font_title.set_size(24)
+    font_title.set_size(20)
     
     font_legend = FontProperties()
     font_legend.set_style('normal')
     font_legend.set_weight('normal')
     font_legend.set_size(12)
     
-    y_title = 1.05
+    y_title = 1.02
     line1, line2 = line_widths
+    component_alpha = float(np.clip(plot_params.get('component_alpha', 0.75), 0.05, 1.0))
 
     # Radial axis normalized by R_vir
     r = np.asarray(profile_bin_centers) / float(rad)
@@ -1887,19 +2008,48 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         z[-1] = abs(z[-1])
 
     # Compute plotted arrays with units (each is a list indexed by snapshots)
-    def safe_get(key):
-        return profile_data.get(key, [np.zeros(nbins) for _ in range(len(it_indx))])
+    # Robustly coerce scalars/missing values to per-bin arrays to avoid ndimage axis errors.
+    def series_array(key, scale):
+        raw = profile_data.get(key, None)
+        out = []
+        for i in range(len(it_indx)):
+            value = 0.0
+            if raw is not None:
+                try:
+                    value = raw[i]
+                except Exception:
+                    value = 0.0
 
-    kinetic_energy_profile = [units_y_2 * safe_get('kinetic_energy_profile')[i] for i in range(len(it_indx))]
-    clus_b2_profile = [units_y_2 * safe_get('clus_b2_profile')[i] for i in range(len(it_indx))]
-    clus_rho_rho_b_profile = [units_y_3 * safe_get('clus_rho_rho_b_profile')[i] for i in range(len(it_indx))]
-    diver_profile = [units_y_1 * safe_get('MIE_diver_B2_profile')[i] for i in range(len(it_indx))]
-    compres_profile = [units_y_1 * safe_get('MIE_compres_B2_profile')[i] for i in range(len(it_indx))]
-    stretch_profile = [units_y_1 * safe_get('MIE_stretch_B2_profile')[i] for i in range(len(it_indx))]
-    advec_profile = [units_y_1 * safe_get('MIE_advec_B2_profile')[i] for i in range(len(it_indx))]
-    drag_profile = [units_y_1 * safe_get('MIE_drag_B2_profile')[i] for i in range(len(it_indx))]
-    total_profile = [units_y_1 * safe_get('MIE_total_B2_profile')[i] for i in range(len(it_indx))]
-    ind_b2_profile = [units_y_1 * safe_get('ind_b2_profile')[i] for i in range(len(it_indx))]
+            arr = np.asarray(value, dtype=float)
+            if arr.ndim == 0:
+                arr = np.full(nbins, float(arr), dtype=float)
+            else:
+                arr = arr.ravel()
+                if arr.size == 0:
+                    arr = np.zeros(nbins, dtype=float)
+                elif arr.size == 1:
+                    arr = np.full(nbins, float(arr[0]), dtype=float)
+                elif arr.size != nbins:
+                    x_old = np.linspace(0.0, 1.0, arr.size)
+                    x_new = np.linspace(0.0, 1.0, nbins)
+                    arr = np.interp(x_new, x_old, arr)
+
+            out.append(scale * arr)
+        return out
+
+    components_cfg = induction_params.get('components', {})
+    plot_kinetic_energy = bool(components_cfg.get('kinetic_energy', True))
+
+    kinetic_energy_profile = series_array('kinetic_energy_profile', units_y_2)
+    clus_b2_profile = series_array('clus_b2_profile', units_y_2)
+    clus_rho_rho_b_profile = series_array('clus_rho_rho_b_profile', units_y_3)
+    diver_profile = series_array('MIE_diver_B2_profile', units_y_1)
+    compres_profile = series_array('MIE_compres_B2_profile', units_y_1)
+    stretch_profile = series_array('MIE_stretch_B2_profile', units_y_1)
+    advec_profile = series_array('MIE_advec_B2_profile', units_y_1)
+    drag_profile = series_array('MIE_drag_B2_profile', units_y_1)
+    total_profile = series_array('MIE_total_B2_profile', units_y_1)
+    ind_b2_profile = series_array('ind_b2_profile', units_y_1)
     # post_ind_b2_profile = [units_y_1 * safe_get('post_ind_b2_profile')[i] for i in range(len(it_indx))]
 
     
@@ -1945,24 +2095,37 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
 
     figures = []
     
-    # Components configuration: (data_list, label, color, lw, linestyle, unit)
+    # Components configuration: (data_list, label, color, lw, linestyle, axis_type, alpha)
     components_configs = [
-        # Density (AXIS_DENSITY)
-        (clus_rho_rho_b_profile, 'Density Profile', "#2ca02c", line1, '-', AXIS_DENSITY),
-        # Energies (AXIS_LEFT)
-        (kinetic_energy_profile, 'Kinetic Energy Density', "#17becf", line1, '-', AXIS_LEFT),
-        (clus_b2_profile, 'Magnetic Energy Density', "#1f77b4", line1, '-', AXIS_LEFT),
-        # Induction totals (AXIS_RIGHT)
-        (total_profile, '...from Compact Induction', "#d62728", line1, '-', AXIS_RIGHT),
-        (ind_b2_profile, '...from Itemize Induction', "#ff7f0e", line1, '--', AXIS_RIGHT),
-        # (post_ind_b2_profile, '...from Post-Itemize Induction', "#ffbb78", line1, '-.', AXIS_RIGHT),
-        # Individual components (AXIS_RIGHT)
-        (compres_profile, 'Compression', "#9467bd", line2, '--', AXIS_RIGHT),
-        (stretch_profile, 'Stretching', "#ff9896", line2, '--', AXIS_RIGHT),
-        (advec_profile, 'Advection', "#e377c2", line2, '--', AXIS_RIGHT),
-        (diver_profile, 'Divergence', "#c5b0d5", line2, '--', AXIS_RIGHT),
-        (drag_profile, 'Cosmic Drag', "#7f7f7f", line2, '--', AXIS_RIGHT)
+        # Induction main axis
+        (total_profile, '...from Compact Induction', palette.get('induction_compact', DEFAULT_PLOT_PALETTE['induction_compact']), line1, '-', AXIS_MAIN, 1.0),
+        (ind_b2_profile, '...from Itemized Induction', palette.get('induction_itemized', DEFAULT_PLOT_PALETTE['induction_itemized']), line1, '--', AXIS_MAIN, 1.0),
+        # (post_ind_b2_profile, '...from Post-Itemize Induction', "#ffbb78", line1, '-.', AXIS_MAIN),
+        # Individual components (main axis)
+        (compres_profile, r'Compression $\Gamma_{\mathrm{comp}}$', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), line2, '--', AXIS_MAIN, component_alpha),
+        (stretch_profile, r'Stretching $\Gamma_{\mathrm{str}}$', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), line2, '--', AXIS_MAIN, component_alpha),
+        (advec_profile, r'Advection $\Gamma_{\mathrm{adv}}$', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), line2, '--', AXIS_MAIN, component_alpha),
+        (diver_profile, r'Divergence $\Gamma_{\mathrm{div}}$', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), line2, '--', AXIS_MAIN, component_alpha),
+        (drag_profile, r'Cosmic Drag $\Gamma_{\mathrm{drag}}$', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), line2, '--', AXIS_MAIN, component_alpha)
     ]
+
+    if plot_kinetic_energy:
+        components_configs.insert(
+            0,
+            (kinetic_energy_profile, 'Kinetic Energy Density', palette.get('kinetic_energy', DEFAULT_PLOT_PALETTE['kinetic_energy']), line1, '-', AXIS_ENERGY, 1.0)
+        )
+
+    if plot_magnetic_energy:
+        components_configs.insert(
+            0,
+            (clus_b2_profile, 'Magnetic Energy Density', palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy']), line1, '-', AXIS_ENERGY, 1.0)
+        )
+
+    if plot_density:
+        components_configs.insert(
+            0,
+            (clus_rho_rho_b_profile, 'Density', palette.get('density', DEFAULT_PLOT_PALETTE['density']), line1, '-', AXIS_DENSITY, 1.0)
+        )
 
     # Decide which components have data (per snapshot we check existence)
     def has_nonzero(arr_or_callable, snap_idx, threshold=induction_params.get('epsilon', 1e-30)):
@@ -1981,7 +2144,7 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
             return False
         
     # Helper to plot signed data: single continuous line with per-segment styling
-    def plot_signed(ax, x, y, lw, ls, color, label, eps=induction_params.get('epsilon', 1e-30)):
+    def plot_signed(ax, x, y, lw, ls, color, label, alpha=1.0, eps=induction_params.get('epsilon', 1e-30)):
         """
         Plot a single continuous line where:
             - positive intervals use linestyle `ls`
@@ -2019,23 +2182,23 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
 
         # Plot base thin continuous line (no legend)
         ax.plot(xv, yabs, linestyle='-', linewidth=max(lw * 0.5, 0.3), 
-                color=color, alpha=0.2, label='_nolegend_')
+            color=color, alpha=0.2 * alpha, label='_nolegend_')
 
         # Overlay segments with sign-dependent dashes
         lc_pos = LineCollection(
             [seg for seg, is_pos in zip(segments, sign_styles) if is_pos],
-            linewidths=lw, colors=color, linestyles=ls, label='_nolegend_'
+            linewidths=lw, colors=color, linestyles=ls, label='_nolegend_', alpha=alpha
         )
         lc_neg = LineCollection(
             [seg for seg, is_pos in zip(segments, sign_styles) if not is_pos],
-            linewidths=lw, colors=color, linestyles=':', label='_nolegend_'
+            linewidths=lw, colors=color, linestyles=':', label='_nolegend_', alpha=alpha
         )
         
         ax.add_collection(lc_pos)
         ax.add_collection(lc_neg)
 
         # Return a dummy handle for legend entry
-        h_legend, = ax.plot([], [], linestyle=ls, linewidth=lw, color=color, label=label)
+        h_legend, = ax.plot([], [], linestyle=ls, linewidth=lw, color=color, alpha=alpha, label=label)
         return h_legend
 
     def _auto_limits(values, scale, pad=0.10):
@@ -2058,138 +2221,140 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
     
     for snap_i in range(len(it_indx)):
         fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
-        ax_right = ax1.twinx()  # Second axis for induction
-        ax_density = ax1.twinx()  # Third axis for density
-        ax_density.spines["right"].set_position(("axes", 1.12))
-        ax_density.set_frame_on(True)
-        ax_density.patch.set_visible(False)
-        for sp in ax_density.spines.values():
-            sp.set_visible(True)
+        ax_energy = None
+        ax_density = None
+        if plot_magnetic_energy or plot_kinetic_energy:
+            ax_energy = ax1.twinx()
+        if plot_density:
+            ax_density = ax1.twinx()
+            if ax_energy is not None:
+                ax_density.spines["right"].set_position(("axes", 1.12))
+            ax_density.set_frame_on(True)
+            ax_density.patch.set_visible(False)
+            for sp in ax_density.spines.values():
+                sp.set_visible(True)
 
         snap_z = np.abs(np.round(grid_zeta[it_indx[snap_i]], 2))
-        ax1.set_title(f'{title} - z = {snap_z:.2f}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
+        z_text = f"{snap_z:6.2f}"
+        ax1.set_title(f'{title} - z = {z_text}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
 
         unique_handles = []
         unique_labels = []
-
-        y_left_vals = []
-        y_right_vals = []
+        y_main_vals = []
+        y_energy_vals = []
         y_density_vals = []
-        
-        # Add one explanatory legend entry: dotted means negative interval
+
         from matplotlib.lines import Line2D
-        neg_note = Line2D([0], [0], color="#364243", linestyle=':', linewidth=line2, label='Negative Interval')
+        neg_note = Line2D([0], [0], color=color_negative_interval, linestyle=':', linewidth=line2, label='Negative Interval')
         unique_handles.append(neg_note)
         unique_labels.append('Negative Interval')
 
-        for (data_list, label, color, lw, ls, axis_type) in components_configs:
+        for (data_list, label, color, lw, ls, axis_type, alpha_curve) in components_configs:
             if not has_nonzero(data_list, snap_i):
                 continue
 
-            # obtain y values depending on type
             if callable(data_list[snap_i]):
                 y = data_list[snap_i](r_pro)
             else:
                 y = np.asarray(data_list[snap_i])
-                # if interpolation requested but we have raw arrays and r_pro is finer, interpolate on the fly
                 if plot_type == 'interpolated' and y.size == r.size and r_pro.size != r.size:
                     y = np.interp(r_pro, r, y)
-            
-            # Choose axis: left for energy/kinetic, right for induction, density for density
-            if axis_type == AXIS_RIGHT:
-                # unified signed plotting on right axis
-                _ = plot_signed(ax_right, r_pro, y, lw, ls, color, label)
-                # For limits calculation, collect absolute values (plot_signed uses abs clamped to epsilon)
+
+            if axis_type == AXIS_ENERGY:
+                if ax_energy is None:
+                    continue
+                _ = plot_signed(ax_energy, r_pro, y, lw, ls, color, label, alpha=alpha_curve)
                 eps = induction_params.get('epsilon', 1e-30)
                 y_clean = np.asarray(y)
                 y_clean = y_clean[np.isfinite(y_clean)]
                 if y_clean.size > 0:
-                    # Apply the same transformation as plot_signed: abs + clamp to epsilon
-                    y_clamped = np.maximum(np.abs(y_clean), eps)
-                    y_right_vals.append(y_clamped)
+                    y_energy_vals.append(np.maximum(np.abs(y_clean), eps))
             elif axis_type == AXIS_DENSITY:
-                ax_density.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+                if ax_density is None:
+                    continue
+                ax_density.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, alpha=alpha_curve, label=label)
                 y_clean = np.asarray(y)
                 y_clean = y_clean[np.isfinite(y_clean)]
                 if y_clean.size > 0:
                     y_density_vals.append(y_clean)
-            else:  # AXIS_LEFT
-                ax1.plot(r_pro, y, linewidth=lw, linestyle=ls, color=color, label=label)
+            else:
+                _ = plot_signed(ax1, r_pro, y, lw, ls, color, label, alpha=alpha_curve)
                 y_clean = np.asarray(y)
                 y_clean = y_clean[np.isfinite(y_clean)]
                 if y_clean.size > 0:
-                    y_left_vals.append(y_clean)
-            
-        # Axis scales and labels
+                    eps = induction_params.get('epsilon', 1e-30)
+                    y_main_vals.append(np.maximum(np.abs(y_clean), eps))
+
         if x_scale == 'log':
             ax1.set_xscale('log')
-            ax1.set_xlabel('Radial Distance log[r/$R_{Vir}$]')
+            ax1.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
         else:
-            ax1.set_xlabel('Radial Distance [r/$R_{Vir}$]')
+            ax1.set_xlabel('Radial Distance [r/$R_{Vir}$]', fontproperties=font)
+        ax1.tick_params(axis='x', labelsize=11)
 
         if xlim is not None:
             ax1.set_xlim(xlim[0], xlim[1])
 
-        # y scales - set BEFORE establishing limits
         if y_scale == 'log':
             ax1.set_yscale('log')
-            ax_right.set_yscale('log')
-            ax_density.set_yscale('log')
+            if ax_energy is not None:
+                ax_energy.set_yscale('log')
+            if ax_density is not None:
+                ax_density.set_yscale('log')
 
-        # Set y-axis limits BEFORE labels to ensure proper scaling
         if ylim is not None:
             ax1.set_ylim(ylim[0], ylim[1])
-        else:
-            if y_left_vals:
-                y_left_auto = _auto_limits(np.concatenate(y_left_vals), y_scale)
-                if y_left_auto is not None:
-                    # Add extra space at bottom for legend (2 orders of magnitude lower)
-                    if y_scale == 'log':
-                        y_min_adjusted = y_left_auto[0] / 100.0
-                    else:
-                        span = y_left_auto[1] - y_left_auto[0]
-                        y_min_adjusted = y_left_auto[0] - 2 * span
-                    ax1.set_ylim(y_min_adjusted, y_left_auto[1])
-        
-        if rylim is not None:
-            ax_right.set_ylim(rylim[0], rylim[1])
-        else:
-            if y_right_vals:
-                y_right_concat = np.concatenate(y_right_vals)
-                y_right_auto = _auto_limits(y_right_concat, y_scale)
-                if y_right_auto is not None:
-                    ax_right.set_ylim(y_right_auto[0], y_right_auto[1])
-        
-        if dylim is not None:
-            ax_density.set_ylim(dylim[0], dylim[1])
-        else:
-            if y_density_vals:
+        elif y_main_vals:
+            y_main_auto = _auto_limits(np.concatenate(y_main_vals), y_scale)
+            if y_main_auto is not None:
+                ax1.set_ylim(y_main_auto[0], y_main_auto[1])
+
+        if ax_energy is not None:
+            if rylim is not None:
+                ax_energy.set_ylim(rylim[0], rylim[1])
+            elif y_energy_vals:
+                y_energy_auto = _auto_limits(np.concatenate(y_energy_vals), y_scale)
+                if y_energy_auto is not None:
+                    ax_energy.set_ylim(y_energy_auto[0], y_energy_auto[1])
+
+        if ax_density is not None:
+            if dylim is not None:
+                ax_density.set_ylim(dylim[0], dylim[1])
+            elif y_density_vals:
                 y_density_auto = _auto_limits(np.concatenate(y_density_vals), y_scale)
                 if y_density_auto is not None:
                     ax_density.set_ylim(y_density_auto[0], y_density_auto[1])
 
-        # Now set labels
         if units == energy_to_erg:
-            ax1.set_ylabel('Energy Density (erg/$Mpc^{3}$)')
-            ax_right.set_ylabel('Induction Density (erg/$Mpc^{3}$/s)')
-            ax_density.set_ylabel('Density (g/cm³)')
+            ax1.set_ylabel('Induction Density (erg/$Mpc^{3}$/s)', fontproperties=font)
+            if ax_energy is not None:
+                ax_energy.set_ylabel('Energy Density (erg/$Mpc^{3}$)', fontproperties=font)
+            if ax_density is not None:
+                ax_density.set_ylabel('Density (g/cm³)', fontproperties=font)
         elif units == energy_to_J:
-            ax1.set_ylabel('Energy Density (J/$Mpc^{3}$)')
-            ax_right.set_ylabel('Induction Density (J/$Mpc^{3}$/s)')
-            ax_density.set_ylabel('Density (M$_{\odot}$/Mpc³)')
+            ax1.set_ylabel('Induction Density (J/$Mpc^{3}$/s)', fontproperties=font)
+            if ax_energy is not None:
+                ax_energy.set_ylabel('Energy Density (J/$Mpc^{3}$)', fontproperties=font)
+            if ax_density is not None:
+                ax_density.set_ylabel('Density (M$_{\odot}$/Mpc³)', fontproperties=font)
         else:
-            ax1.set_ylabel('Energy Density (arb. units)')
-            ax_right.set_ylabel('Induction Density (arb. units / s)')
-            ax_density.set_ylabel('Density (arb. units)')
-            
-        ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+            ax1.set_ylabel('Induction Density (arb. units / s)', fontproperties=font)
+            if ax_energy is not None:
+                ax_energy.set_ylabel('Energy Density (arb. units)', fontproperties=font)
+            if ax_density is not None:
+                ax_density.set_ylabel('Density (arb. units)', fontproperties=font)
 
-        # Gather handles/labels from all axes and keep unique labels in order
+        ax1.grid(alpha=0.3)
+        if ax_energy is not None:
+            ax_energy.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+        if ax_density is not None:
+            ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+
         h1, l1 = ax1.get_legend_handles_labels()
-        h2, l2 = ax_right.get_legend_handles_labels()
-        h3, l3 = ax_density.get_legend_handles_labels()
-        all_handles = h3 + h1 + h2
-        all_labels = l3 + l1 + l2
+        h2, l2 = ax_energy.get_legend_handles_labels() if ax_energy is not None else ([], [])
+        h3, l3 = ax_density.get_legend_handles_labels() if ax_density is not None else ([], [])
+        all_handles = h1 + h2 + h3
+        all_labels = l1 + l2 + l3
         seen = set()
         for hh, ll in zip(all_handles, all_labels):
             if ll and not ll.startswith('_') and ll not in seen:
@@ -2198,44 +2363,40 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
                 unique_labels.append(ll)
 
         if unique_handles:
-            fig1.legend(unique_handles, unique_labels, prop=font_legend,
-                        loc='lower left', bbox_to_anchor=(0.02, 0.02),
-                        bbox_transform=ax1.transAxes, ncol=2, frameon=True)
+            if fixed_legend:
+                ax1.legend(unique_handles, unique_labels, prop=font_legend,
+                           loc='lower left', bbox_to_anchor=(0.02, 0.02),
+                           bbox_transform=ax1.transAxes, ncol=2, frameon=True)
+            else:
+                fig1.legend(unique_handles, unique_labels, prop=font_legend,
+                            loc='lower left', bbox_to_anchor=(0.02, 0.02),
+                            bbox_transform=ax1.transAxes, ncol=2, frameon=True)
 
-        # Call tight_layout first, then reapply limits to ensure they stick
         fig1.tight_layout()
-        
-        # Reapply y-limits after tight_layout to ensure they are not overridden
+
         if ylim is not None:
             ax1.set_ylim(ylim[0], ylim[1])
-        else:
-            if y_left_vals:
-                y_left_auto = _auto_limits(np.concatenate(y_left_vals), y_scale)
-                if y_left_auto is not None:
-                    # Add extra space at bottom for legend (2 orders of magnitude lower)
-                    if y_scale == 'log':
-                        y_min_adjusted = y_left_auto[0] / 100.0
-                    else:
-                        span = y_left_auto[1] - y_left_auto[0]
-                        y_min_adjusted = y_left_auto[0] - 2 * span
-                    ax1.set_ylim(y_min_adjusted, y_left_auto[1])
-        
-        if rylim is not None:
-            ax_right.set_ylim(rylim[0], rylim[1])
-        else:
-            if y_right_vals:
-                y_right_auto = _auto_limits(np.concatenate(y_right_vals), y_scale)
-                if y_right_auto is not None:
-                    ax_right.set_ylim(y_right_auto[0], y_right_auto[1])
-        
-        if dylim is not None:
-            ax_density.set_ylim(dylim[0], dylim[1])
-        else:
-            if y_density_vals:
+        elif y_main_vals:
+            y_main_auto = _auto_limits(np.concatenate(y_main_vals), y_scale)
+            if y_main_auto is not None:
+                ax1.set_ylim(y_main_auto[0], y_main_auto[1])
+
+        if ax_energy is not None:
+            if rylim is not None:
+                ax_energy.set_ylim(rylim[0], rylim[1])
+            elif y_energy_vals:
+                y_energy_auto = _auto_limits(np.concatenate(y_energy_vals), y_scale)
+                if y_energy_auto is not None:
+                    ax_energy.set_ylim(y_energy_auto[0], y_energy_auto[1])
+
+        if ax_density is not None:
+            if dylim is not None:
+                ax_density.set_ylim(dylim[0], dylim[1])
+            elif y_density_vals:
                 y_density_auto = _auto_limits(np.concatenate(y_density_vals), y_scale)
                 if y_density_auto is not None:
                     ax_density.set_ylim(y_density_auto[0], y_density_auto[1])
-        
+
         figures.append(fig1)
         
     if verbose:
@@ -2272,6 +2433,519 @@ def plot_radial_profiles(profile_data, plot_params, induction_params,
         for i, fig in enumerate(figures):
             file_title = '_'.join(title.split()[:3])
             file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
+            file_name = safe_filename(file_name, verbose=verbose)
+            fig.savefig(file_name, dpi=dpi)
+            if verbose:
+                print(f'Saved figure {i+1}/{len(figures)}: {file_name}')
+
+    return figures
+
+
+def plot_production_dissipation_radial_profiles(profile_data, plot_params, induction_params,
+                                            grid_t, grid_zeta, rad,
+                                            verbose=True, save=False, folder=None):
+    """Plot radial profiles for production/dissipation components."""
+
+    assert plot_params.get('x_scale', 'lin') in ['lin', 'log'], "x_scale must be 'lin' or 'log'"
+    assert plot_params.get('y_scale', 'log') in ['lin', 'log'], "y_scale must be 'lin' or 'log'"
+    plot_type = plot_params.get('plot_type', 'raw')
+    assert plot_type in ['raw', 'smoothed', 'interpolated'], "plot_type must be 'raw', 'smoothed', or 'interpolated'"
+    assert plot_params.get('interpolation_kind', 'linear') in ['linear', 'cubic', 'nearest'], "interpolation_kind must be 'linear', 'cubic', or 'nearest'"
+    assert plot_params.get('smoothing_sigma', 1.10) > 0, "smoothing_sigma must be a positive number"
+    assert plot_params.get('it_indx', None) is not None, "it_indx must be provided in plot_params"
+    assert len(plot_params['it_indx']) > 0, "it_indx must contain at least one index"
+
+    it_indx = plot_params['it_indx']
+    x_scale = plot_params.get('x_scale', 'lin')
+    y_scale = plot_params.get('y_scale', 'log')
+    xlim = plot_params.get('xlim', None)
+    ylim = plot_params.get('ylim', None)
+    fixed_legend = bool(plot_params.get('fixed_legend', False))
+    figure_size = plot_params.get('figure_size', [12, 8])
+    line_widths = plot_params.get('line_widths', [3, 1.5])
+    title = plot_params.get('title', 'Production and Dissipation Radial Profile')
+    dpi = plot_params.get('dpi', 300)
+    run = plot_params.get('run', '_')
+
+    if plot_type == 'smoothed':
+        smoothing_sigma = plot_params.get('smoothing_sigma', 1.10)
+    elif plot_type == 'interpolated':
+        interpolation_points = plot_params.get('interpolation_points', 500)
+        interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
+
+    profile_bin_centers = profile_data.get('profile_bin_centers', None)
+    if profile_bin_centers is None:
+        raise KeyError("profile_bin_centers not found in profile_data")
+    if isinstance(profile_bin_centers, (list, tuple, np.ndarray)) and len(profile_bin_centers) > 0 and not isinstance(profile_bin_centers, np.ndarray):
+        pb = None
+        for p in profile_bin_centers:
+            if p is None:
+                continue
+            p_arr = np.asarray(p)
+            if p_arr.size > 0:
+                pb = p_arr
+                break
+        if pb is None:
+            raise ValueError("profile_bin_centers list contains only empty entries")
+        profile_bin_centers = pb
+    else:
+        profile_bin_centers = np.asarray(profile_bin_centers)
+    profile_bin_centers = profile_bin_centers.flatten()
+
+    factor_F = induction_params.get('F', 1.0)
+    region = induction_params.get('region', None)
+    units = plot_params.get('units', induction_params.get('units', None))
+    palette = get_plot_palette(plot_params, induction_params)
+    component_colors = palette.get('component_colors', {})
+    color_prod = palette.get('production', DEFAULT_PLOT_PALETTE['production'])
+    color_diss = palette.get('dissipation', DEFAULT_PLOT_PALETTE['dissipation'])
+    color_itemized_net = palette.get('net_itemized', DEFAULT_PLOT_PALETTE['net_itemized'])
+    color_compact_net = palette.get('net_compact', DEFAULT_PLOT_PALETTE['net_compact'])
+    color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
+    color_measured_energy = palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
+    color_density = palette.get('density', DEFAULT_PLOT_PALETTE['density'])
+    plot_density = bool(plot_params.get('plot_density', False))
+    plot_magnetic_energy = bool(plot_params.get('plot_magnetic_energy', False))
+
+    if units is None:
+        units_y = 1.0
+        units_energy = 1.0
+        units_density = 1.0
+    elif units == energy_to_erg:
+        units_y = (energy_to_erg / (length_to_mpc) ** 3) / time_to_s
+        units_energy = energy_to_erg / (length_to_mpc) ** 3
+        units_density = density_to_cgs
+    elif units == energy_to_J:
+        units_y = (energy_to_J / (length_to_mpc) ** 3) / time_to_s
+        units_energy = energy_to_J / (length_to_mpc) ** 3
+        units_density = density_to_sunMpc3
+    else:
+        units_y = 1.0
+        units_energy = 1.0
+        units_density = 1.0
+
+    plt.rcParams.update({
+        'font.size': 16,
+        'axes.labelsize': 16,
+        'axes.titlesize': 18,
+        'xtick.labelsize': 14,
+        'ytick.labelsize': 14,
+        'legend.fontsize': 10,
+        'figure.titlesize': 20
+    })
+
+    font = FontProperties()
+    font.set_style('normal')
+    font.set_weight('normal')
+    font.set_size(12)
+
+    font_title = FontProperties()
+    font_title.set_style('normal')
+    font_title.set_weight('bold')
+    font_title.set_size(17)
+
+    font_legend = FontProperties()
+    font_legend.set_style('normal')
+    font_legend.set_weight('normal')
+    font_legend.set_size(12)
+
+    line_main, line_comp = line_widths
+    component_alpha = float(np.clip(plot_params.get('component_alpha', 0.75), 0.05, 1.0))
+    area_alpha = float(np.clip(plot_params.get('area_alpha', 0.24), 0.0, 1.0))
+    y_title = 1.05
+
+    r = np.asarray(profile_bin_centers) / float(rad)
+    nbins = profile_bin_centers.shape[0]
+
+    def safe_get(key):
+        return profile_data.get(key, [np.zeros(nbins) for _ in range(len(it_indx))])
+
+    component_map = [
+        ('MIE_compres_B2', 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
+        ('MIE_stretch_B2', 'Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str'),
+        ('MIE_advec_B2', 'Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv'),
+        ('MIE_diver_B2', 'Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div'),
+        ('MIE_drag_B2', 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag')
+    ]
+
+    def _series(key):
+        return [units_y * np.asarray(safe_get(key)[i], dtype=float) for i in range(len(it_indx))]
+
+    itemized_prod = _series('MIE_total_B2_prod_itemized_profile')
+    itemized_diss = _series('MIE_total_B2_diss_itemized_profile')
+    itemized_net = _series('MIE_total_B2_net_itemized_profile')
+    compact_prod = _series('MIE_total_B2_prod_compact_profile')
+    compact_diss = _series('MIE_total_B2_diss_compact_profile')
+    compact_net = _series('MIE_total_B2_net_compact_profile')
+    clus_b2_profile = [units_energy * np.asarray(safe_get('clus_b2_profile')[i], dtype=float) for i in range(len(it_indx))]
+    clus_rho_rho_b_profile = [units_density * np.asarray(safe_get('clus_rho_rho_b_profile')[i], dtype=float) for i in range(len(it_indx))]
+
+    component_prod = {prefix: _series(f'{prefix}_prod_profile') for prefix, _, _, _ in component_map}
+    component_diss = {prefix: _series(f'{prefix}_diss_profile') for prefix, _, _, _ in component_map}
+    component_net = {prefix: _series(f'{prefix}_net_profile') for prefix, _, _, _ in component_map}
+    component_frac_prod = {prefix: _series(f'PD_frac_{prefix}_prod_profile') for prefix, _, _, _ in component_map}
+    component_frac_diss = {prefix: _series(f'PD_frac_{prefix}_diss_profile') for prefix, _, _, _ in component_map}
+
+    if plot_type == 'smoothed':
+        smooth = lambda arrs: [gaussian_filter1d(a, sigma=smoothing_sigma) for a in arrs]
+        itemized_prod = smooth(itemized_prod)
+        itemized_diss = smooth(itemized_diss)
+        itemized_net = smooth(itemized_net)
+        compact_prod = smooth(compact_prod)
+        compact_diss = smooth(compact_diss)
+        compact_net = smooth(compact_net)
+        clus_b2_profile = smooth(clus_b2_profile)
+        clus_rho_rho_b_profile = smooth(clus_rho_rho_b_profile)
+        for prefix in component_prod:
+            component_prod[prefix] = smooth(component_prod[prefix])
+            component_diss[prefix] = smooth(component_diss[prefix])
+            component_net[prefix] = smooth(component_net[prefix])
+            component_frac_prod[prefix] = smooth(component_frac_prod[prefix])
+            component_frac_diss[prefix] = smooth(component_frac_diss[prefix])
+        r_plot = r
+        plot_suffix = f'smoothed_sigma_{smoothing_sigma}'
+    elif plot_type == 'interpolated':
+        r_new = np.linspace(min(r), max(r), num=interpolation_points, endpoint=True)
+        interp = lambda arrs: [
+            interp1d(r, arrs[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan)(r_new)
+            for i in range(len(arrs))
+        ]
+        itemized_prod = interp(itemized_prod)
+        itemized_diss = interp(itemized_diss)
+        itemized_net = interp(itemized_net)
+        compact_prod = interp(compact_prod)
+        compact_diss = interp(compact_diss)
+        compact_net = interp(compact_net)
+        clus_b2_profile = interp(clus_b2_profile)
+        clus_rho_rho_b_profile = interp(clus_rho_rho_b_profile)
+        for prefix in component_prod:
+            component_prod[prefix] = interp(component_prod[prefix])
+            component_diss[prefix] = interp(component_diss[prefix])
+            component_net[prefix] = interp(component_net[prefix])
+            component_frac_prod[prefix] = interp(component_frac_prod[prefix])
+            component_frac_diss[prefix] = interp(component_frac_diss[prefix])
+        r_plot = r_new
+        plot_suffix = f'{interpolation_kind}_interpolated_{interpolation_points}_points'
+    else:
+        r_plot = r
+        plot_suffix = 'raw'
+
+    def _auto_limits(values, scale, pad=0.10):
+        values = np.asarray(values)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return None
+        if scale == 'log':
+            values = values[values > 0]
+            if values.size == 0:
+                return None
+            vmin = np.log10(np.min(values))
+            vmax = np.log10(np.max(values))
+            span = max(vmax - vmin, 1e-6)
+            return 10 ** (vmin - pad * span), 10 ** (vmax + pad * span)
+        vmin = np.min(values)
+        vmax = np.max(values)
+        span = max(vmax - vmin, 1e-12)
+        return vmin - pad * span, vmax + pad * span
+
+    def _plot_signed(ax, x, y, lw, ls, color, label, alpha=1.0, eps=1e-30):
+        from matplotlib.collections import LineCollection
+        y = np.asarray(y)
+        x = np.asarray(x)
+        valid = ~np.isnan(y)
+        if not np.any(valid):
+            return
+        xv = x[valid]
+        yv = y[valid]
+        yabs = np.maximum(np.abs(yv), eps)
+        segments = []
+        sign_styles = []
+        for i in range(len(xv) - 1):
+            segments.append(np.array([[xv[i], yabs[i]], [xv[i + 1], yabs[i + 1]]]))
+            sign_styles.append(yv[i] >= 0)
+        if not segments:
+            return
+        ax.plot(xv, yabs, linestyle='-', linewidth=max(lw * 0.5, 0.3), color=color, alpha=0.2 * alpha, label='_nolegend_')
+        ax.add_collection(LineCollection([s for s, p in zip(segments, sign_styles) if p], linewidths=lw, colors=color, linestyles=ls, alpha=alpha))
+        ax.add_collection(LineCollection([s for s, p in zip(segments, sign_styles) if not p], linewidths=lw, colors=color, linestyles=':', alpha=alpha))
+        ax.plot([], [], linestyle=ls, linewidth=lw, color=color, alpha=alpha, label=label)
+
+    def _blend_color(base_color, target='white', amount=0.4):
+        """Blend a color towards white/black to create readable fill shades."""
+        c = np.array(to_rgb(base_color), dtype=float)
+        t = np.array([1.0, 1.0, 1.0], dtype=float) if target == 'white' else np.array([0.0, 0.0, 0.0], dtype=float)
+        amount = float(np.clip(amount, 0.0, 1.0))
+        return tuple((1.0 - amount) * c + amount * t)
+
+    figures = []
+    plot_absolute = bool(plot_params.get('plot_absolute', True))
+    plot_net = bool(plot_params.get('plot_net', False))
+    plot_fractional_profiles = bool(
+        plot_params.get(
+            'plot_fractional_profiles',
+            induction_params.get('production_dissipation', {}).get('plot_fractional_profiles', False)
+        )
+    )
+
+    for snap_i in range(len(it_indx)):
+        fig, ax = plt.subplots(figsize=figure_size, dpi=dpi)
+        ax_energy = ax.twinx() if plot_magnetic_energy else None
+        ax_density = ax.twinx() if plot_density else None
+        if ax_density is not None:
+            if ax_energy is not None:
+                ax_density.spines["right"].set_position(("axes", 1.12))
+            ax_density.set_frame_on(True)
+            ax_density.patch.set_visible(False)
+            for sp in ax_density.spines.values():
+                sp.set_visible(True)
+
+        snap_z = np.abs(np.round(grid_zeta[it_indx[snap_i]], 2))
+        z_text = f"{snap_z:6.2f}"
+        ax.set_title(f'{title} - z = {z_text}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
+
+        plotted_vals = []
+        energy_vals = []
+        density_vals = []
+
+        if plot_absolute:
+            if should_plot_component(itemized_prod[snap_i]):
+                ax.plot(r_plot, itemized_prod[snap_i], '-.', linewidth=line_main, color=color_prod, label='Total Production (itemized)')
+                plotted_vals.append(itemized_prod[snap_i])
+            if should_plot_component(itemized_diss[snap_i]):
+                ax.plot(r_plot, itemized_diss[snap_i], '-.', linewidth=line_main, color=color_diss, label='Total Dissipation (itemized)')
+                plotted_vals.append(itemized_diss[snap_i])
+            if should_plot_component(compact_prod[snap_i]):
+                ax.plot(r_plot, compact_prod[snap_i], '-', linewidth=line_comp, color=color_prod, label='Total Production (compact)')
+                plotted_vals.append(compact_prod[snap_i])
+            if should_plot_component(compact_diss[snap_i]):
+                ax.plot(r_plot, compact_diss[snap_i], '-', linewidth=line_comp, color=color_diss, label='Total Dissipation (compact)')
+                plotted_vals.append(compact_diss[snap_i])
+
+        for prefix, label, color, sym in component_map:
+            arr_p = component_prod[prefix][snap_i]
+            arr_d = component_diss[prefix][snap_i]
+
+            # Shade the area between P and D for each component: lighter when P dominates,
+            # darker when D dominates.
+            p_vals = np.asarray(arr_p, dtype=float)
+            d_vals = np.asarray(arr_d, dtype=float)
+            valid_fill = np.isfinite(p_vals) & np.isfinite(d_vals)
+            if y_scale == 'log':
+                valid_fill = valid_fill & (p_vals > 0.0) & (d_vals > 0.0)
+
+            if np.any(valid_fill):
+                prod_dominates = valid_fill & (p_vals >= d_vals)
+                diss_dominates = valid_fill & (d_vals > p_vals)
+                fill_light = _blend_color(color, target='white', amount=0.45)
+                fill_dark = _blend_color(color, target='black', amount=0.22)
+
+                ax.fill_between(
+                    r_plot, p_vals, d_vals,
+                    where=prod_dominates,
+                    interpolate=True,
+                    color=fill_light,
+                    alpha=area_alpha,
+                    linewidth=0.0,
+                    label='_nolegend_'
+                )
+                ax.fill_between(
+                    r_plot, p_vals, d_vals,
+                    where=diss_dominates,
+                    interpolate=True,
+                    color=fill_dark,
+                    alpha=area_alpha,
+                    linewidth=0.0,
+                    label='_nolegend_'
+                )
+
+            if should_plot_component(arr_p):
+                ax.plot(r_plot, arr_p, '--', linewidth=line_comp, color=color, alpha=component_alpha, label=rf'{label} $P_{{\mathrm{{{sym}}}}}$')
+                plotted_vals.append(arr_p)
+            if should_plot_component(arr_d):
+                ax.plot(r_plot, arr_d, ':', linewidth=line_comp, color=color, alpha=component_alpha, label=rf'{label} $D_{{\mathrm{{{sym}}}}}$')
+                plotted_vals.append(arr_d)
+
+        if should_plot_component(compact_net[snap_i]):
+            _plot_signed(ax, r_plot, compact_net[snap_i], line_main, '-', color_compact_net, 'Net total (compact)')
+            plotted_vals.append(np.maximum(np.abs(compact_net[snap_i]), 1e-30))
+        if should_plot_component(itemized_net[snap_i]):
+            _plot_signed(ax, r_plot, itemized_net[snap_i], line_main, '--', color_itemized_net, 'Net total (itemized)')
+            plotted_vals.append(np.maximum(np.abs(itemized_net[snap_i]), 1e-30))
+
+        if plot_net:
+            for prefix, label, color, sym in component_map:
+                arr_n = component_net[prefix][snap_i]
+                if should_plot_component(arr_n):
+                    _plot_signed(ax, r_plot, arr_n, line_comp, '--', color, rf'{label} $N_{{\mathrm{{{sym}}}}}$', alpha=component_alpha)
+                    plotted_vals.append(np.maximum(np.abs(arr_n), 1e-30))
+
+        if x_scale == 'log':
+            ax.set_xscale('log')
+            ax.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
+        else:
+            ax.set_xlabel('Radial Distance [r/$R_{Vir}$]', fontproperties=font)
+        ax.tick_params(axis='x', labelsize=11)
+        if xlim is not None:
+            ax.set_xlim(xlim[0], xlim[1])
+
+        if y_scale == 'log':
+            ax.set_yscale('log')
+            if ax_energy is not None:
+                ax_energy.set_yscale('log')
+            if ax_density is not None:
+                ax_density.set_yscale('log')
+
+        if ylim is not None:
+            ax.set_ylim(ylim[0], ylim[1])
+        elif plotted_vals:
+            auto_lim = _auto_limits(np.concatenate([np.asarray(v).ravel() for v in plotted_vals]), y_scale)
+            if auto_lim is not None:
+                ax.set_ylim(auto_lim[0], auto_lim[1])
+
+        if ax_energy is not None:
+            if should_plot_component(clus_b2_profile[snap_i]):
+                ax_energy.plot(r_plot, clus_b2_profile[snap_i], '-', linewidth=line_main, color=color_measured_energy, label='Magnetic Energy Density')
+                energy_vals.append(clus_b2_profile[snap_i])
+        if ax_density is not None:
+            if should_plot_component(clus_rho_rho_b_profile[snap_i]):
+                ax_density.plot(r_plot, clus_rho_rho_b_profile[snap_i], '-', linewidth=line_main, color=color_density, label='Density')
+                density_vals.append(clus_rho_rho_b_profile[snap_i])
+
+        if ax_energy is not None and energy_vals:
+            energy_auto = _auto_limits(np.concatenate([np.asarray(v).ravel() for v in energy_vals]), y_scale)
+            if energy_auto is not None:
+                ax_energy.set_ylim(energy_auto[0], energy_auto[1])
+        if ax_density is not None and density_vals:
+            density_auto = _auto_limits(np.concatenate([np.asarray(v).ravel() for v in density_vals]), y_scale)
+            if density_auto is not None:
+                ax_density.set_ylim(density_auto[0], density_auto[1])
+
+        if units == energy_to_erg:
+            ax.set_ylabel('Production / Dissipation (erg/$Mpc^{3}$/s)', fontproperties=font)
+            if ax_energy is not None:
+                ax_energy.set_ylabel('Magnetic Energy Density (erg/$Mpc^{3}$)', fontproperties=font)
+            if ax_density is not None:
+                ax_density.set_ylabel('Density (g/cm³)', fontproperties=font)
+        elif units == energy_to_J:
+            ax.set_ylabel('Production / Dissipation (J/$Mpc^{3}$/s)', fontproperties=font)
+            if ax_energy is not None:
+                ax_energy.set_ylabel('Magnetic Energy Density (J/$Mpc^{3}$)', fontproperties=font)
+            if ax_density is not None:
+                ax_density.set_ylabel('Density (M$_{\odot}$/Mpc³)', fontproperties=font)
+        else:
+            ax.set_ylabel('Production / Dissipation (arb. units)', fontproperties=font)
+            if ax_energy is not None:
+                ax_energy.set_ylabel('Magnetic Energy Density (arb. units)', fontproperties=font)
+            if ax_density is not None:
+                ax_density.set_ylabel('Density (arb. units)', fontproperties=font)
+
+        ax.grid(alpha=0.3)
+        if ax_energy is not None:
+            ax_energy.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+        if ax_density is not None:
+            ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+
+        handles, labels = ax.get_legend_handles_labels()
+        if ax_energy is not None:
+            h_energy, l_energy = ax_energy.get_legend_handles_labels()
+            handles += h_energy
+            labels += l_energy
+        if ax_density is not None:
+            h_density, l_density = ax_density.get_legend_handles_labels()
+            handles += h_density
+            labels += l_density
+        seen = set()
+        legend_handles = []
+        legend_labels = []
+        for hh, ll in zip(handles, labels):
+            if ll and not ll.startswith('_') and ll not in seen:
+                seen.add(ll)
+                legend_handles.append(hh)
+                legend_labels.append(ll)
+        if legend_handles:
+            if fixed_legend:
+                ax.legend(legend_handles, legend_labels, prop=font_legend,
+                          loc='lower left', bbox_to_anchor=(0.02, 0.02),
+                          bbox_transform=ax.transAxes, ncol=2, frameon=True)
+            else:
+                ax.legend(legend_handles, legend_labels, prop=font_legend, ncol=2)
+
+        fig.tight_layout()
+        figures.append(fig)
+
+        if plot_fractional_profiles:
+            fig_frac, ax_frac = plt.subplots(figsize=figure_size, dpi=dpi)
+            ax_frac.set_title(f'{title} (Fractions) - z = {z_text}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
+
+            for prefix, label, color, sym in component_map:
+                arr_fp = component_frac_prod[prefix][snap_i]
+                arr_fd = component_frac_diss[prefix][snap_i]
+                if should_plot_component(arr_fp, threshold=1e-30):
+                    ax_frac.plot(r_plot, arr_fp, '--', linewidth=line_comp, color=color, label=rf'{label} $p_{{\mathrm{{{sym}}}}}$')
+                if should_plot_component(arr_fd, threshold=1e-30):
+                    ax_frac.plot(r_plot, -arr_fd, ':', linewidth=line_comp, color=color, label=rf'{label} $d_{{\mathrm{{{sym}}}}}$')
+
+            prod_i = np.asarray(itemized_prod[snap_i], dtype=float)
+            diss_i = np.asarray(itemized_diss[snap_i], dtype=float)
+            iota_profile = np.divide(
+                prod_i - diss_i,
+                prod_i,
+                out=np.zeros_like(prod_i),
+                where=prod_i > 0
+            )
+            if should_plot_component(iota_profile, threshold=1e-30):
+                ax_frac.plot(r_plot, iota_profile, '-', linewidth=line_main, color=color_efficiency, label=r'Net Efficiency $\iota$')
+
+            if x_scale == 'log':
+                ax_frac.set_xscale('log')
+                ax_frac.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
+            else:
+                ax_frac.set_xlabel('Radial Distance [r/$R_{Vir}$]', fontproperties=font)
+            ax_frac.tick_params(axis='x', labelsize=11)
+            if xlim is not None:
+                ax_frac.set_xlim(xlim[0], xlim[1])
+
+            ax_frac.set_ylim(-1.05, 1.05)
+            ax_frac.set_ylabel('Fractional Contribution (+prod / -diss)', fontproperties=font)
+            ax_frac.grid(alpha=0.3)
+            if fixed_legend:
+                ax_frac.legend(prop=font_legend,
+                               loc='lower left', bbox_to_anchor=(0.02, 0.02),
+                               bbox_transform=ax_frac.transAxes, ncol=2, frameon=True)
+            else:
+                ax_frac.legend(prop=font_legend, ncol=2)
+            fig_frac.tight_layout()
+            figures.append(fig_frac)
+
+    if verbose:
+        print('Plotting... Production/dissipation radial profile plots created')
+
+    if save:
+        if folder is None:
+            folder = os.getcwd()
+
+        sim_info = f'{induction_params.get("up_to_level","")}_{factor_F}_{induction_params.get("vir_kind","")}vir_{induction_params.get("rad_kind","")}rad_{region}Region'
+        axis_info = f'{x_scale}_{y_scale}'
+        limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
+
+        diff_cfg = induction_params.get('differentiation', {})
+        if diff_cfg.get('buffer', False) == True:
+            parent_flag = diff_cfg.get('parent', False)
+            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol', ''))
+            buffer_info = f'Buffered_{diff_cfg.get("interpol","")}_siblings_{diff_cfg.get("use_siblings","")}'
+            if parent_flag:
+                buffer_info += f'_parent_{parent_interpol}'
+        else:
+            buffer_info = 'NoBuffer'
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for i, fig in enumerate(figures):
+            file_title = '_'.join(title.split()[:3])
+            if plot_fractional_profiles and (i % 2 == 1):
+                profile_tag = 'pd_frac_profile'
+            else:
+                profile_tag = 'pd_profile'
+            file_name = f'{folder}/{run}_{file_title}_{profile_tag}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
             file_name = safe_filename(file_name, verbose=verbose)
             fig.savefig(file_name, dpi=dpi)
             if verbose:
@@ -2349,6 +3023,12 @@ def distribution_check(arr, quantity, plot_params, induction_params,
     subsample_fraction = plot_params.get('subsample_fraction', 0.2)
     central_fraction = plot_params.get('central_fraction', 1.0)
     it_indx = plot_params.get('it_indx', [0])
+    palette = get_plot_palette(plot_params, induction_params)
+    component_colors = palette.get('component_colors', {})
+    color_hist = palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
+    color_cdf = palette.get('induction_itemized', DEFAULT_PLOT_PALETTE['induction_itemized'])
+    color_abs_pct = palette.get('dissipation', DEFAULT_PLOT_PALETTE['dissipation'])
+    color_rel_pct = component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression'])
     
     assert 0 < subsample_fraction <= 1, "subsample_fraction must be in (0,1]"
     assert 0 < central_fraction <= 1, "central_fraction must be in (0,1]"
@@ -2503,7 +3183,7 @@ def distribution_check(arr, quantity, plot_params, induction_params,
         axes[0].set_ylabel('Number of Cells', fontsize=11)
         if log_scale:
             axes[0].set_yscale('log')
-        axes[0].hist(flat, bins=bins, color='#1f77b4', alpha=0.7, edgecolor='black', linewidth=0.5)
+        axes[0].hist(flat, bins=bins, color=color_hist, alpha=0.7, edgecolor='black', linewidth=0.5)
         axes[0].grid(alpha=0.3)
 
         # Cumulative distribution
@@ -2514,14 +3194,14 @@ def distribution_check(arr, quantity, plot_params, induction_params,
         axes[1].set_ylabel('Cumulative % of Cells', fontsize=11)
         if log_scale:
             axes[1].set_yscale('log')
-        axes[1].plot(sorted_arr, cumulative * 100, color='#ff7f0e', linewidth=2, alpha=0.8)
+        axes[1].plot(sorted_arr, cumulative * 100, color=color_cdf, linewidth=2, alpha=0.8)
         axes[1].grid(alpha=0.3)
 
         # Cumulative absolute percentiles
         axes[2].set_title('Cumulative Absolute |field|', fontsize=12, fontweight='bold')
         axes[2].set_xlabel('Percent of cells', fontsize=11)
         axes[2].set_ylabel(f'|{quantity}|', fontsize=11)
-        axes[2].plot(p_grid, abs_curve, color='#d62728', linewidth=2.5)
+        axes[2].plot(p_grid, abs_curve, color=color_abs_pct, linewidth=2.5)
         axes[2].set_yscale('log')
         axes[2].grid(alpha=0.3)
 
@@ -2530,7 +3210,7 @@ def distribution_check(arr, quantity, plot_params, induction_params,
             axes[3].set_title('Cumulative Relative |field| / |ref|', fontsize=12, fontweight='bold')
             axes[3].set_xlabel('Percent of cells', fontsize=11)
             axes[3].set_ylabel('Relative amplitude', fontsize=11)
-            axes[3].plot(p_grid, rel_curve, color='#9467bd', linewidth=2.5)
+            axes[3].plot(p_grid, rel_curve, color=color_rel_pct, linewidth=2.5)
             axes[3].set_yscale('log')
             axes[3].grid(alpha=0.3)
         else:

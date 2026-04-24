@@ -1,85 +1,120 @@
-# MAGNAS Small Scale Dynamo Evolution
+# MAGNAS SSD Evo
 
-## Overview
+MAGNAS SSD Evo (MAGnetic field Non-linear Amplification for the study of the Small Scale Dynamo Evolution) is a scientific analysis pipeline for cosmological AMR simulations (MASCLET-based), focused on magnetic-field induction, energy budgets, and production/dissipation diagnostics.
 
-The MAGNAS SSD Evo (MAGnetic field Non-linear Amplification in the large scale Structure for the study of the Small Sacale Dynamo Evolution) repository contains a set of Python scripts and functions to analyse simulated cosmological magnetic field induction. The repository also includes tools to plot and analyze this magnetic field.
+## What This Project Does
 
-## Repository Structure
+- Reads AMR snapshots and halo metadata.
+- Computes induction terms and induction-energy terms.
+- Applies configurable boundary handling (buffer, parent fill, blend).
+- Computes radial profiles for induction and production/dissipation (P/D).
+- Computes temporal evolution when enabled (integrated and/or differential).
+- Produces publication-style plots and saves processed arrays.
 
-```
-PRIMAL_Seed_Gen/
-│
+## Repository Layout
+
+```text
+MAGNAS_SSD_Evo/
 ├── README.md
 ├── config.py
 ├── main.py
 ├── requirements.txt
-│
 ├── data/
-│   └── ... (generated magnetic field files and live animations)
-│
-├── scripts/
-│   ├── __init__.py
-│   ├── diff.py
-│   ├── plot_fields.py
-│   ├── induction_evo.py
-│   ├── readers.py
-│   ├── spectral.py
-│   ├── units.py
-│   └── utils.py
+└── scripts/
+    ├── amr2uniform.py
+    ├── buffer.py
+    ├── debug.py
+    ├── diff.py
+    ├── induction_evo.py
+    ├── memory_utils.py
+    ├── plot_fields.py
+    ├── readers.py
+    ├── spectral.py
+    ├── test.py
+    ├── units.py
+    └── utils.py
 ```
 
 ## Installation
 
-1. Clone the repository:
-    ```bash
-    git clone https://github.com/marjomol/MAGNAS_SSD_Evo.git
-    cd MAGNAS_SSD_Evo
-    ```
+1. Clone repository:
 
-2. Create a virtual environment and activate it:
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
+```bash
+git clone https://github.com/marjomol/MAGNAS_SSD_Evo.git
+cd MAGNAS_SSD_Evo
+```
 
-3. Install the required packages:
-    ```bash
-    pip install -r requirements.txt
-    ```
+2. Create and activate a virtual environment:
 
-## Configuration
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
-The configuration parameters for the simulation are stored in `config.py`. By deafoult this are chosen for MASCLET simulation. You can modify these parameters to suit your needs.
+3. Install dependencies:
 
-## Usage
+```bash
+pip install -r requirements.txt
+```
 
-1. Choose and prepare your AMR simulation data for different epochs.
+## Quick Start
 
+1. Edit `config.py`:
+- Select simulation(s), snapshots, input/output folders.
+- Set numerical options (stencil, interpolation, filter, levels).
+- Enable/disable evolution and profile outputs.
 
-2. Run the main script to analyze the magnetic field induction evolution and plot the results:
-    ```bash
-    python main.py
-    ```
+2. Run pipeline:
 
-3. The analics and results will be saved with the desired format in the data directory.
+```bash
+python main.py
+```
 
-4. The generated plots and animations will be saved in the specified `image_folder` directory.
+3. Check outputs:
+- Plots in `OUTPUT_PARAMS["image_folder"]`.
+- Raw processed arrays in `OUTPUT_PARAMS["data_folder"]`.
+- Terminal logs in `OUTPUT_PARAMS["terminal_folder"]` when `save_terminal=True`.
 
-5. For debugging purposes, run the script in debugging mode with a small resolution (recommended 32 cell size arrays) to save intermediary arrays.
+## Configuration Guide
 
-## Scripts
+Main configuration blocks are in `config.py`:
 
-- **diff.py**: Contains functions to compute the general differential calculus.
-- **plot_fields.py**: Contains functions to plot the magnetic field seeds and create animations.
-- **induction_evo.py**: Contains functions to calculate the magnetic field induction components and their evolution.
-- **readers.py**: Provides the necessary functions for reading MASCLET and ASOHF files and loading them in memory.
-- **spectral.py**: Contains functions to perform spectral analysis on the generated magnetic field seeds.
-- **units.py**: Provides unit conversion utilities for various physical quantities used in the simulations.
-- **utils.py**: Includes general utility functions that support the main operations of the repository.
+- `IND_PARAMS`: numerical and physical analysis options.
+- `OUTPUT_PARAMS`: IO paths, execution mode, output formatting.
+- `EVO_PLOT_PARAMS`: temporal energy-evolution plot settings.
+- `PROD_DISS_PLOT_PARAMS`: temporal production/dissipation plot settings.
+- `INDUCTION_PROFILE_PLOT_PARAMS`: induction radial profile styling and selection.
+- `PROD_DISS_PROFILE_PLOT_PARAMS`: P/D radial profile styling and selection.
+- `DEBUG_PARAMS`: optional diagnostics modules.
+
+### Recent Profile-Plot Controls
+
+For animation-friendly profile postprocessing, these controls are available:
+
+- `fixed_legend`: lock legend position inside axes.
+- `component_alpha`: opacity of individual component curves.
+- `area_alpha` (P/D only): opacity of shaded area between production and dissipation.
+- `plot_density`, `plot_magnetic_energy`: optional reference curves in profile plots.
+
+## Processing Notes
+
+- Profiles and temporal evolution are independently gated by configuration.
+- `it_indx` selectors for profiles support both positional indices and explicit iteration IDs.
+- P/D radial plotting supports absolute and fractional views.
+- Fractional P/D profiles include net efficiency representation.
+
+## Core Modules
+
+- `scripts/induction_evo.py`: core physics pipeline and per-snapshot processing.
+- `scripts/diff.py`: derivative operators and AMR differential calculus.
+- `scripts/buffer.py` (if present in your branch): ghost-cell and boundary strategies.
+- `scripts/plot_fields.py`: all plotting routines.
+- `scripts/readers.py`: MASCLET/ASOHF data ingestion.
+- `scripts/utils.py`: utility helpers, logging, and support functions.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](https://github.com/marjomol/MAGNAS_SSD_Evo/blob/master/LICENSE.md) file for details.
+MIT License. See `LICENSE.md`.
 
 ## Acknowledgments
 

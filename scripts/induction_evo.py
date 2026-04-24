@@ -1235,6 +1235,8 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                             units =1, production_dissipation=None,
                             rho_b=None,
                             volume_coordinates='physical', normalize_by_volume=False,
+                            compute_induction_integrals=True,
+                            compute_fractional_integrals=False,
                             verbose=False):
     '''
     Computes the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
@@ -1274,6 +1276,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         - rho_b: background density at the snapshot. Used when production_dissipation['normalized'] is False
         - volume_coordinates: 'physical' or 'comoving' integration differential for dV
         - normalize_by_volume: if True, divide each field integral by total integration volume
+        - compute_induction_integrals: if True, compute base induction integrals (int_MIE_*, int_b2, int_kinetic_energy, volume)
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
@@ -1315,13 +1318,17 @@ def induction_vol_integral(components, induction_energy, clus_b2,
             normalize_by_volume=normalize_by_volume
         )
     
-    for key, prefix in component_specs:
-        if components.get(key, False):
-            results[f'int_{prefix}'] = _integrate_field(induction_energy[prefix])
-    
-            if verbose == True:
-                log_message(f'Snap {it} in {sims}: {key} energy density volume integral done', tag="integral", level=1)
-        else:
+    if compute_induction_integrals:
+        for key, prefix in component_specs:
+            if components.get(key, False):
+                results[f'int_{prefix}'] = _integrate_field(induction_energy[prefix])
+
+                if verbose == True:
+                    log_message(f'Snap {it} in {sims}: {key} energy density volume integral done', tag="integral", level=1)
+            else:
+                results[f'int_{prefix}'] = 0.0
+    else:
+        for _, prefix in component_specs:
             results[f'int_{prefix}'] = 0.0
 
     pd_enabled = False
@@ -1377,20 +1384,31 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                 else:
                     results[f'int_{prefix}_prod_compact'] = 0.0
                     results[f'int_{prefix}_diss_compact'] = 0.0
+                    
+            if verbose == True:
+                if pd_mode == 'compact':
+                    log_message(f'Snap {it} in {sims}: compact total P/D split volume integral done', tag="integral", level=1)
+                else:
+                    log_message(f'Snap {it} in {sims}: {key} P/D volume integral done', tag="integral", level=1)
 
         # Itemized totals are defined as sum of component integrals by construction.
         results['int_MIE_total_B2_prod_itemized'] = total_prod
         results['int_MIE_total_B2_diss_itemized'] = total_diss
 
-        results['int_PD_iota'] = 0.0 if total_prod <= 0.0 else (total_prod - total_diss) / total_prod
+        if compute_fractional_integrals:
+            results['int_PD_iota'] = 0.0 if total_prod <= 0.0 else (total_prod - total_diss) / total_prod
+        
+        if compute_fractional_integrals:
+            for key, prefix, pd_mode in pd_specs:
+                if pd_mode != 'itemized':
+                    continue
+                p_i = float(results[f'int_{prefix}_prod'])
+                d_i = float(results[f'int_{prefix}_diss'])
+                results[f'int_PD_frac_{prefix}_prod'] = 0.0 if total_prod <= 0.0 else p_i / total_prod
+                results[f'int_PD_frac_{prefix}_diss'] = 0.0 if total_diss <= 0.0 else d_i / total_diss
 
-        for key, prefix, pd_mode in pd_specs:
-            if pd_mode != 'itemized':
-                continue
-            p_i = float(results[f'int_{prefix}_prod'])
-            d_i = float(results[f'int_{prefix}_diss'])
-            results[f'int_PD_frac_{prefix}_prod'] = 0.0 if total_prod <= 0.0 else p_i / total_prod
-            results[f'int_PD_frac_{prefix}_diss'] = 0.0 if total_diss <= 0.0 else d_i / total_diss
+                if verbose == True:
+                    log_message(f'Snap {it} in {sims}: {key} fractional P/D volume integral computed', tag="integral", level=1)
     
     if components.get('kinetic_energy', True) and induction_energy['kinetic_energy_density']:
         results['int_kinetic_energy'] = _integrate_field(induction_energy['kinetic_energy_density'])
@@ -1398,7 +1416,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
             log_message(f'Snap {it} in {sims}: Kinetic energy density volume integral done', tag="integral", level=1)
     else:
         results['int_kinetic_energy'] = 0.0
-        
+
     if components.get('magnetic_energy', True) and clus_b2:
         results['int_b2'] = _integrate_field(clus_b2)
         if verbose == True:
@@ -1419,8 +1437,12 @@ def induction_vol_integral(components, induction_energy, clus_b2,
 
     total_time_induction = end_time_induction - start_time_induction
 
-    if verbose == True:
+    if verbose == True and compute_induction_integrals and pd_enabled:
+        log_message('Time for induction and P/D integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))), tag="integral", level=1)
+    elif verbose == True and compute_induction_integrals:
         log_message('Time for induction integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))), tag="integral", level=1)
+    elif verbose == True and pd_enabled:
+        log_message('Time for P/D integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))), tag="integral", level=1)
 
     return results
 
@@ -1927,6 +1949,148 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     return results
 
 
+def production_dissipation_radial_profiles(components, induction_energy,
+                                        rho_b, clus_cr0amr, clus_solapst, clus_kp,
+                                        grid_irr, grid_npatch, up_to_level,
+                                        grid_patchrx, grid_patchry, grid_patchrz,
+                                        grid_patchnx, grid_patchny, grid_patchnz,
+                                        it, sims, nmax, size, coords, rmin, rad,
+                                        nbins=25, logbins=True, units=1,
+                                        compute_fractional_profiles=False,
+                                        debug=False, verbose=False):
+    '''
+    Computes radial profiles for production/dissipation terms from induction-energy fields.
+
+    Returns profiles for production, dissipation and net (production - dissipation)
+    for each enabled component and total terms.
+    '''
+
+    start_time_profile = time.time()
+
+    X, Y, Z = utils.compute_position_fields(
+        grid_patchnx, grid_patchny, grid_patchnz,
+        grid_patchrx, grid_patchry, grid_patchrz,
+        grid_npatch, size, nmax, ncores=1, kept_patches=clus_kp
+    )
+
+    n = 1 + np.sum(grid_npatch)
+    zero = 0.0
+    results = {}
+
+    component_specs = [
+        ('divergence', 'MIE_diver_B2', 'div'),
+        ('compression', 'MIE_compres_B2', 'comp'),
+        ('stretching', 'MIE_stretch_B2', 'str'),
+        ('advection', 'MIE_advec_B2', 'adv'),
+        ('drag', 'MIE_drag_B2', 'drag'),
+        ('total', 'MIE_total_B2', 'tot'),
+    ]
+
+    # Keep running totals for itemized curves (exclude compact total by construction).
+    itemized_prod_acc = None
+    itemized_diss_acc = None
+
+    for key, prefix, _ in component_specs:
+        enabled = bool(components.get(key, False))
+        prod_key = f'{prefix}_prod'
+        diss_key = f'{prefix}_diss'
+
+        if (not enabled) or (prod_key not in induction_energy) or (diss_key not in induction_energy):
+            results[f'{prefix}_prod_profile'] = zero
+            results[f'{prefix}_diss_profile'] = zero
+            results[f'{prefix}_net_profile'] = zero
+            continue
+
+        _, prod_profile = utils.radial_profile_vw(
+            field=induction_energy[prod_key], cr0amr=clus_cr0amr,
+            solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+            clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+            nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
+        _, diss_profile = utils.radial_profile_vw(
+            field=induction_energy[diss_key], cr0amr=clus_cr0amr,
+            solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+            clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+            nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
+
+        prod_profile = rho_b * np.asarray(prod_profile)
+        diss_profile = rho_b * np.asarray(diss_profile)
+        net_profile = prod_profile - diss_profile
+
+        results[f'{prefix}_prod_profile'] = prod_profile
+        results[f'{prefix}_diss_profile'] = diss_profile
+        results[f'{prefix}_net_profile'] = net_profile
+
+        if key != 'total':
+            if itemized_prod_acc is None:
+                itemized_prod_acc = np.zeros_like(prod_profile, dtype=float)
+                itemized_diss_acc = np.zeros_like(diss_profile, dtype=float)
+            itemized_prod_acc = itemized_prod_acc + prod_profile
+            itemized_diss_acc = itemized_diss_acc + diss_profile
+
+        if verbose:
+            log_message(f'Snap {it} in {sims}: {key} production/dissipation profiles done', tag="profiles", level=1)
+
+    if itemized_prod_acc is None:
+        itemized_prod_acc = np.zeros(nbins, dtype=float)
+        itemized_diss_acc = np.zeros(nbins, dtype=float)
+
+    results['MIE_total_B2_prod_itemized_profile'] = itemized_prod_acc
+    results['MIE_total_B2_diss_itemized_profile'] = itemized_diss_acc
+    results['MIE_total_B2_net_itemized_profile'] = itemized_prod_acc - itemized_diss_acc
+
+    if isinstance(results.get('MIE_total_B2_prod_profile', 0.0), np.ndarray) and isinstance(results.get('MIE_total_B2_diss_profile', 0.0), np.ndarray):
+        results['MIE_total_B2_prod_compact_profile'] = results['MIE_total_B2_prod_profile']
+        results['MIE_total_B2_diss_compact_profile'] = results['MIE_total_B2_diss_profile']
+        results['MIE_total_B2_net_compact_profile'] = results['MIE_total_B2_net_profile']
+    else:
+        results['MIE_total_B2_prod_compact_profile'] = np.zeros(nbins, dtype=float)
+        results['MIE_total_B2_diss_compact_profile'] = np.zeros(nbins, dtype=float)
+        results['MIE_total_B2_net_compact_profile'] = np.zeros(nbins, dtype=float)
+
+    if compute_fractional_profiles:
+        total_prod = np.maximum(itemized_prod_acc, 0.0)
+        total_diss = np.maximum(itemized_diss_acc, 0.0)
+        for _, prefix, _ in component_specs:
+            p_key = f'{prefix}_prod_profile'
+            d_key = f'{prefix}_diss_profile'
+            if isinstance(results.get(p_key, 0.0), np.ndarray):
+                p_i = np.asarray(results[p_key], dtype=float)
+                d_i = np.asarray(results[d_key], dtype=float)
+                results[f'PD_frac_{prefix}_prod_profile'] = np.divide(
+                    p_i, total_prod, out=np.zeros_like(p_i), where=total_prod > 0
+                )
+                results[f'PD_frac_{prefix}_diss_profile'] = np.divide(
+                    d_i, total_diss, out=np.zeros_like(d_i), where=total_diss > 0
+                )
+            else:
+                results[f'PD_frac_{prefix}_prod_profile'] = np.zeros(nbins, dtype=float)
+                results[f'PD_frac_{prefix}_diss_profile'] = np.zeros(nbins, dtype=float)
+
+    profile_bin_centers, _ = utils.radial_profile_vw(
+        field=induction_energy.get('MIE_total_B2', [0 for _ in range(n)]), cr0amr=clus_cr0amr,
+        solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+        clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
+        nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+        size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+    )
+    results['profile_bin_centers'] = profile_bin_centers
+
+    end_time_profile = time.time()
+    if verbose:
+        total_time_profile = end_time_profile - start_time_profile
+        log_message(
+            'Time for production/dissipation profile calculation in snap ' + str(grid_irr) + ': ' +
+            str(strftime("%H:%M:%S", gmtime(total_time_profile))),
+            tag="profiles", level=1
+        )
+
+    return results
+
+
 def compute_percentile_thresholds(field_numerator, field_denominator, scale_factor,
                                 cr0amr, solapst, npatch, up_to_level,
                                 percentiles=(100, 90, 75, 50, 25),
@@ -2244,7 +2408,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                     parent=False, parent_interpol=None,
                     bitformat=np.float32, mag=False, sim_characteristics=None,
                     energy_evolution_config=None,
-                    energy_evolution=True, profiles=True, projection=True, percentiles=True, 
+                    energy_evolution=True, profiles=True, induction_profiles=None, pd_profiles=False,
+                    projection=True, percentiles=True, 
                     percentile_levels=(95, 90, 75, 50, 25), divergence_filter=None, debug_params=None,
                     production_dissipation=None,
                     return_vectorial=False, return_induction=False, return_induction_energy=False,
@@ -2288,7 +2453,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - energy_evolution_config: dictionary with energy evolution options
             (evolution_type, derivative, volume_coordinates, normalize_by_volume)
         - energy_evolution: boolean to compute energy evolution (default is True)
-        - profiles: boolean to compute radial profiles (default is True)
+        - profiles: legacy boolean to compute induction radial profiles (default is True)
+        - induction_profiles: boolean to compute induction radial profiles (default is None -> uses legacy 'profiles')
+        - pd_profiles: boolean to compute production/dissipation radial profiles (default is False)
         - projection: boolean to compute uniform projection (default is True)
         - percentiles: boolean to compute percentile thresholds (default is True)
         - percentile_levels: tuple of percentile thresholds to compute (default is (100, 90, 75, 50, 25))
@@ -2306,7 +2473,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - induction: dictionary containing the components of the magnetic induction equation
         - induction_energy: dictionary containing the components of the magnetic induction equation in terms of the magnetic energy
         - induction_energy_integral: dictionary containing the volume integrals of the magnetic induction equation in terms of the magnetic energy
-        - induction_energy_profiles: dictionary containing the radial profiles of the magnetic induction equation in terms of the magnetic energy
+        - induction_energy_profiles: dictionary containing radial profiles of induction-energy terms
+        - production_dissipation_profiles: dictionary containing radial profiles of production/dissipation terms
         - induction_uniform: dictionary containing the uniform projection of the magnetic induction equation in terms of the magnetic energy
         - diver_B_percentiles: dictionary containing percentile thresholds of the magnetic field divergence
         - debug_fields: dictionary containing debug fields if requested
@@ -2321,6 +2489,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             "volume_coordinates": "physical",
             "normalize_by_volume": False,
         }
+
+    if induction_profiles is None:
+        induction_profiles = profiles
 
     # Initialize debug parameters if not provided
     if debug_params is None:
@@ -2517,16 +2688,33 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This will be usefull to plot fluyd maps as the quantities involved are vectors.
 
     pd_enabled = False
+    pd_fractional_any_enabled = False
     if isinstance(production_dissipation, dict):
         pd_enabled = bool(production_dissipation.get('enabled', False))
+        pd_fractional_any_enabled = bool(
+            production_dissipation.get('plot_fractional', False)
+            or production_dissipation.get('plot_fractional_profiles', False)
+        )
     elif production_dissipation is not None:
         pd_enabled = bool(production_dissipation)
+
+    pd_integrals_enabled = False
+    if isinstance(production_dissipation, dict):
+        pd_integrals_enabled = bool(
+            pd_enabled and (
+                production_dissipation.get('plot_absolute', False)
+                or production_dissipation.get('plot_fractional', False)
+                or production_dissipation.get('plot_net', False)
+            )
+        )
+    elif production_dissipation is not None:
+        pd_integrals_enabled = bool(pd_enabled)
     
     # Determine if induction needs to be calculated based on downstream dependencies
     # Production/dissipation requires induction -> induction_energy -> integrals.
     compute_induction = (
         return_induction or return_induction_energy or
-        energy_evolution or profiles or projection or mag or percentiles or pd_enabled
+        energy_evolution or induction_profiles or pd_profiles or projection or mag or percentiles or pd_enabled
     )
     
     if compute_induction:
@@ -2547,7 +2735,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This will be usefull to calculate volumetric integrals and energy budgets as the quantities involved are scalars.
     
     # Determine if induction_energy needs to be calculated
-    compute_induction_energy = return_induction_energy or energy_evolution or profiles or pd_enabled
+    compute_induction_energy = return_induction_energy or energy_evolution or induction_profiles or pd_profiles or pd_enabled
     
     if compute_induction_energy and induction is not None:
         induction_energy = induction_equation_energy(components, induction,
@@ -2579,24 +2767,58 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             elif induction_energy is None:
                 log_message('Production/disipation fields skipped (induction energy not available).', tag="pipeline", level=1)
 
-    if (energy_evolution or pd_enabled) and induction_energy is not None:
+    if (energy_evolution or pd_integrals_enabled) and induction_energy is not None:
         # Volume Integral of the Magnetic Induction Equation
     
         ## Here we compute the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
         ## This is done according to the derived equation and compared to the actual magnetic energy integrated along the studied volume. The kinetic energy
         ## density is also computed.
         
-        induction_energy_integral = induction_vol_integral(components, induction_energy, data['clus_b2'],
-                                data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
-                                data['grid_irr'], data['grid_zeta'], data['grid_npatch'], up_to_level,
-                                data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
-                                data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
-                                it, sims, nmax, size, coords, region_coords, rad,
-                                units=1, production_dissipation=production_dissipation,
-                                rho_b=data.get('rho_b', None),
-                                volume_coordinates=energy_evolution_config.get('volume_coordinates', 'physical'),
-                                normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False) if energy_evolution else production_dissipation.get('normalize_by_volume', False) if pd_enabled else False,
-                                verbose=verbose)
+        induction_energy_integral = {}
+
+        if energy_evolution:
+            evo_integral = induction_vol_integral(
+                components, induction_energy, data['clus_b2'],
+                data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
+                data['grid_irr'], data['grid_zeta'], data['grid_npatch'], up_to_level,
+                data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
+                data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                it, sims, nmax, size, coords, region_coords, rad,
+                units=1, production_dissipation=False,
+                rho_b=data.get('rho_b', None),
+                volume_coordinates=energy_evolution_config.get('volume_coordinates', 'physical'),
+                normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False),
+                verbose=verbose
+            )
+            induction_energy_integral.update(evo_integral)
+
+        if pd_enabled:
+            pd_cfg = production_dissipation if isinstance(production_dissipation, dict) else {}
+            pd_integral = induction_vol_integral(
+                components, induction_energy, data['clus_b2'],
+                data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
+                data['grid_irr'], data['grid_zeta'], data['grid_npatch'], up_to_level,
+                data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
+                data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+                it, sims, nmax, size, coords, region_coords, rad,
+                units=1, production_dissipation=production_dissipation,
+                rho_b=data.get('rho_b', None),
+                volume_coordinates=pd_cfg.get('volume_coordinates', 'physical'),
+                normalize_by_volume=pd_cfg.get('normalize_by_volume', False),
+                compute_induction_integrals=energy_evolution,
+                compute_fractional_integrals=pd_fractional_any_enabled,
+                verbose=verbose
+            )
+
+            if energy_evolution:
+                pd_only = {
+                    key: value
+                    for key, value in pd_integral.items()
+                    if key.startswith('int_PD_') or ('_prod' in key) or ('_diss' in key)
+                }
+                induction_energy_integral.update(pd_only)
+            else:
+                induction_energy_integral.update(pd_integral)
         
         if test['test'] == True:
             
@@ -2608,10 +2830,10 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                         data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
                         data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                         it, sims, nmax, size, coords, region_coords, rad,
-                        units=1, production_dissipation=production_dissipation,
+                        units=1, production_dissipation=False,
                         rho_b=data.get('rho_b', None),
                         volume_coordinates=energy_evolution_config.get('volume_coordinates', 'physical'),
-                        normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False) if energy_evolution else production_dissipation.get('normalize_by_volume', False) if pd_enabled else False,
+                        normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False),
                         verbose=verbose)
         else:
             induction_test_energy_integral = None
@@ -2626,7 +2848,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             elif induction_energy is None:
                 log_message('Energy evolution skipped (induction_energy not available).', tag="pipeline", level=1)
             
-    if profiles and induction_energy is not None:
+    if induction_profiles and induction_energy is not None:
         # Radial Profiles of the Magnetic Induction Equation
     
         ## We can calculate the radial profiles of the magnetic energy density in the volume we have considered (usually the virial volume)
@@ -2642,10 +2864,32 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     else:
         induction_energy_profiles = None
         if verbose == True:
-            if not profiles:
-                log_message('Profiles are set to False, skipping radial profiles of the magnetic induction equation.', tag="pipeline", level=1)
+            if not induction_profiles:
+                log_message('Induction profiles are set to False, skipping radial profiles of the magnetic induction equation.', tag="pipeline", level=1)
             elif induction_energy is None:
-                log_message('Radial profiles skipped (induction_energy not available).', tag="pipeline", level=1)
+                log_message('Induction radial profiles skipped (induction_energy not available).', tag="pipeline", level=1)
+
+    if pd_profiles and pd_enabled and induction_energy is not None:
+        production_dissipation_profiles = production_dissipation_radial_profiles(
+            components, induction_energy,
+            data['rho_b'], data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
+            data['grid_irr'], data['grid_npatch'], up_to_level,
+            data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
+            data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+            it, sims, nmax, size, coords, rmin, rad,
+            nbins=nbins, logbins=logbins, units=1,
+            compute_fractional_profiles=pd_fractional_any_enabled,
+            verbose=verbose
+        )
+    else:
+        production_dissipation_profiles = None
+        if verbose == True:
+            if not pd_profiles:
+                log_message('P/D radial profiles are set to False, skipping P/D profiles.', tag="pipeline", level=1)
+            elif not pd_enabled:
+                log_message('P/D radial profiles skipped (production_dissipation disabled).', tag="pipeline", level=1)
+            elif induction_energy is None:
+                log_message('P/D radial profiles skipped (induction_energy not available).', tag="pipeline", level=1)
             
     if projection and induction is not None:
         # Uniform Projection of the Magnetic Induction Equation
@@ -2772,4 +3016,4 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     if gc_worker_end:
         gc.collect()
 
-    return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, induction_uniform, diver_B_percentiles, debug_fields
+    return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields

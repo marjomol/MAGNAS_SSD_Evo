@@ -44,6 +44,31 @@ def log_message(message, tag=None, level=0):
         print(f"{prefix}[{tag}] {message}")
     else:
         print(f"{prefix}{message}")
+        
+
+def resolve_iteration_selection(it_list, selector):
+    """Resolve selector entries as positional indices and/or explicit iteration values."""
+    if selector is None:
+        return set(it_list)
+
+    if isinstance(selector, (list, tuple, np.ndarray, set)):
+        raw_values = list(selector)
+    else:
+        raw_values = [selector]
+
+    selected = set()
+    n_it = len(it_list)
+    available_values = set(it_list)
+
+    for value in raw_values:
+        if isinstance(value, (int, np.integer)):
+            v = int(value)
+            if -n_it <= v < n_it:
+                selected.add(it_list[v])
+            if v in available_values:
+                selected.add(v)
+
+    return selected
 
 
 def get_last_rad(rad_list):

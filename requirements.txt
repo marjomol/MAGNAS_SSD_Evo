@@ -1,7 +1,8 @@
-numpy
-scipy
-matplotlib
-plotly
-numba
+cython-fortran-file
 h5py
+matplotlib
+numba
+numpy
+plotly
 psutil
+scipy
