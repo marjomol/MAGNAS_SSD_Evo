@@ -2409,10 +2409,10 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                     bitformat=np.float32, mag=False, sim_characteristics=None,
                     energy_evolution_config=None,
                     energy_evolution=True, profiles=True, induction_profiles=None, pd_profiles=False,
-                    projection=True, percentiles=True, 
+                    projection=False, percentiles=True, 
                     percentile_levels=(95, 90, 75, 50, 25), divergence_filter=None, debug_params=None,
                     production_dissipation=None,
-                    return_vectorial=False, return_induction=False, return_induction_energy=False,
+                    return_options=None,
                     gc_worker_end=False, verbose=False):
     '''
     Processes a single iteration of the cosmological magnetic induction equation calculations.
@@ -2462,9 +2462,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         - divergence_filter: dict with divergence filtering settings (default is None)
         - debug_params: dictionary with debug configuration (default is None, uses empty dict)
         - production_dissipation: dict with production/dissipation options
-        - return_vectorial: boolean to return vectorial quantities dictionary (default is False)
-        - return_induction: boolean to return induction equation dictionary (default is False)
-        - return_induction_energy: boolean to return induction energy dictionary (default is False)
+        - return_options: dictionary with export options from IND_PARAMS["return"] (default is None)
         - verbose: boolean to print progress information (default is False)
         
     Returns:
@@ -2483,6 +2481,14 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     '''
 
     start_time_Total = time.time() # Record the start time
+
+    if return_options is None:
+        return_options = {}
+    
+    # Extract return configuration flags (vectorial / induction / energy)
+    return_vectorial = return_options.get("fields", {}).get("vectorial", False)
+    return_induction = return_options.get("fields", {}).get("induction", False)
+    return_induction_energy = return_options.get("fields", {}).get("induction_energy", False)
 
     if energy_evolution_config is None:
         energy_evolution_config = {
@@ -2989,6 +2995,33 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 debug_fields.update(scan_pack)
         else:
             debug_fields = None
+
+    if isinstance(return_options, dict) and return_options.get('enabled', False):
+        start_time_export = time.time()
+        utils.export_snapshot_fields(
+            data=data,
+            vectorial=vectorial,
+            induction=induction,
+            induction_energy=induction_energy,
+            export_cfg=return_options,
+            sim_name=sims,
+            iteration=it,
+            level=level,
+            up_to_level=up_to_level,
+            nmax=nmax,
+            size=size,
+            region_coords=region_coords,
+            bitformat=bitformat,
+            verbose=verbose,
+        )
+        total_time_export = time.time() - start_time_export
+        if verbose == True:
+            log_message(
+                f'Time for writing return data in snap {it} in simulation {sims}: '
+                f'{strftime("%H:%M:%S", gmtime(total_time_export))}',
+                tag="export",
+                level=1
+            )
         
     data = {
         'grid_irr': data['grid_irr'],
@@ -3016,4 +3049,4 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     if gc_worker_end:
         gc.collect()
 
-    return data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields
+    return data, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields

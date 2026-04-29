@@ -102,16 +102,12 @@ if __name__ == "__main__":
         for L, lvl in enumerate(ind_params["level"]):
             # Initialize result dictionaries for this level based on what's enabled
             all_data = {}
-            all_vectorial = {} if return_params["return_vectorial"] else None
-            all_induction = {} if return_params["return_induction"] else None
-            all_magnitudes = {} if return_params["mag"] else None
-            all_induction_energy = {} if return_params["return_induction_energy"] else None
             need_integrals = energy_evolution_plots_enabled or pd_evolution_plots_enabled
             all_induction_energy_integral = {} if need_integrals else None
             all_induction_test_energy_integral = {} if need_integrals else None
             all_induction_energy_profiles = {} if induction_profiles_enabled else None
             all_production_dissipation_profiles = {} if pd_profiles_enabled else None
-            all_induction_uniform = {} if return_params["projection"] else None
+            all_induction_uniform = {} if ind_params.get("projection", {}).get("enabled", False) else None
             all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
@@ -185,22 +181,20 @@ if __name__ == "__main__":
                             parent=diff_params.get("parent", False),
                             parent_interpol=diff_params.get("parent_interpol", diff_params["interpol"]),
                             bitformat=out_params["bitformat"],
-                            mag=return_params["mag"],
+                            mag=return_params["fields"].get("magnitudes_components", False),
                             sim_characteristics=sim_characteristics,
                             energy_evolution_config=ind_params["energy_evolution"],
                             energy_evolution=energy_evolution_plots_enabled,
                             profiles=induction_profiles_flag,
                             induction_profiles=induction_profiles_flag,
                             pd_profiles=pd_profiles_flag,
-                            projection=return_params["projection"],
+                            projection=ind_params.get("projection", {}).get("enabled", False),
                             percentiles=percentile_params_cfg["enabled"],
                             percentile_levels=percentile_params_cfg["percentile_levels"],
                             divergence_filter=ind_params.get("divergence_filter"),
                             debug_params=debug_params_flag,
                             production_dissipation=ind_params.get("production_dissipation"),
-                            return_vectorial=return_params["return_vectorial"],
-                            return_induction=return_params["return_induction"],
-                            return_induction_energy=return_params["return_induction_energy"],
+                            return_options=return_params,
                             gc_worker_end=out_params.get("memory_profiling", {}).get("gc_worker_end", False),
                             verbose=out_params["verbose"],
                         )
@@ -208,7 +202,7 @@ if __name__ == "__main__":
 
                 for fut in futures:
                     # Unpack results with logging information
-                    (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields), log_output, (sim_name, iteration) = fut.result()
+                    (data, induction_energy_integral, induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields), log_output, (sim_name, iteration) = fut.result()
                     
                     # Print the captured logs with a header showing which iteration this is
                     if log_output.strip():  # Only print if there's actual output
@@ -221,18 +215,6 @@ if __name__ == "__main__":
                     if first_iteration:
                         for key in data.keys():
                             all_data[key] = []
-                        if all_vectorial is not None and vectorial is not None:
-                            for key in vectorial.keys():
-                                all_vectorial[key] = []
-                        if all_induction is not None and induction is not None:
-                            for key in induction.keys():
-                                all_induction[key] = []
-                        if all_magnitudes is not None and magnitudes is not None:
-                            for key in magnitudes.keys():
-                                all_magnitudes[key] = []
-                        if all_induction_energy is not None and induction_energy is not None:
-                            for key in induction_energy.keys():
-                                all_induction_energy[key] = []
                         if all_induction_energy_integral is not None and induction_energy_integral is not None:
                             for key in induction_energy_integral.keys():
                                 all_induction_energy_integral[key] = []
@@ -261,18 +243,6 @@ if __name__ == "__main__":
 
                     for key in data.keys():
                         all_data[key].append(data[key])
-                    if all_vectorial is not None and vectorial is not None:
-                        for key in vectorial.keys():
-                            all_vectorial[key].append(vectorial[key])
-                    if all_induction is not None and induction is not None:
-                        for key in induction.keys():
-                            all_induction[key].append(induction[key])
-                    if all_magnitudes is not None and magnitudes is not None:
-                        for key in magnitudes.keys():
-                            all_magnitudes[key].append(magnitudes[key])
-                    if all_induction_energy is not None and induction_energy is not None:
-                        for key in induction_energy.keys():
-                            all_induction_energy[key].append(induction_energy[key])
                     if all_induction_energy_integral is not None and induction_energy_integral is not None:
                         for key in induction_energy_integral.keys():
                             all_induction_energy_integral[key].append(induction_energy_integral[key])
@@ -316,7 +286,7 @@ if __name__ == "__main__":
                         f"parallel level={lvl} sim={sim_name} it={iteration} processed={iteration_counter}",
                         force=memory_monitor.should_log_iteration(iteration_counter)
                     )
-                    del data, vectorial, induction, magnitudes, induction_energy
+                    del data
                     del induction_energy_integral, induction_test_energy_integral
                     del induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
@@ -324,10 +294,6 @@ if __name__ == "__main__":
             debug_module.ensure_temporal_order(
                 all_data,
                 series_dicts=[
-                    all_vectorial,
-                    all_induction,
-                    all_magnitudes,
-                    all_induction_energy,
                     all_induction_energy_integral,
                     all_induction_test_energy_integral,
                     all_induction_energy_profiles,
@@ -544,16 +510,12 @@ if __name__ == "__main__":
             
             # Initialize result dictionaries before the loop (conditional based on config)
             all_data = {}
-            all_vectorial = {} if return_params["return_vectorial"] else None
-            all_induction = {} if return_params["return_induction"] else None
-            all_magnitudes = {} if return_params["mag"] else None
-            all_induction_energy = {} if return_params["return_induction_energy"] else None
             need_integrals = energy_evolution_plots_enabled or pd_evolution_plots_enabled
             all_induction_energy_integral = {} if need_integrals else None
             all_induction_test_energy_integral = {} if need_integrals else None
             all_induction_energy_profiles = {} if induction_profiles_enabled else None
             all_production_dissipation_profiles = {} if pd_profiles_enabled else None
-            all_induction_uniform = {} if return_params["projection"] else None
+            all_induction_uniform = {} if ind_params.get("projection", {}).get("enabled", False) else None
             all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
@@ -596,7 +558,7 @@ if __name__ == "__main__":
                     # Get simulation characteristics for this simulation
                     sim_characteristics = get_sim_characteristics(sims)
 
-                    (data, vectorial, induction, magnitudes, induction_energy, induction_energy_integral,
+                    (data, induction_energy_integral,
                     induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform,
                     diver_B_percentiles, debug_fields) = process_iteration(
                         components=ind_params["components"],
@@ -628,22 +590,20 @@ if __name__ == "__main__":
                         parent=diff_params.get("parent", False),
                         parent_interpol=diff_params.get("parent_interpol", diff_params["interpol"]),
                         bitformat=out_params["bitformat"],
-                        mag=return_params["mag"],
+                        mag=return_params["fields"].get("magnitudes_components", False),
                         sim_characteristics=sim_characteristics,
                         energy_evolution_config=ind_params["energy_evolution"],
                         energy_evolution=energy_evolution_plots_enabled,
                         profiles=induction_profiles_enabled if it in profile_idx_set else False,
                         induction_profiles=induction_profiles_enabled if it in profile_idx_set else False,
                         pd_profiles=pd_profiles_enabled if it in pd_profile_idx_set else False,
-                        projection=return_params["projection"],
+                        projection=ind_params.get("projection", {}).get("enabled", False),
                         percentiles=percentile_params_cfg["enabled"],
                         percentile_levels=percentile_params_cfg["percentile_levels"],
                         divergence_filter=ind_params.get("divergence_filter"),
                         debug_params=debug_params_flag,
                         production_dissipation=ind_params.get("production_dissipation"),
-                        return_vectorial=return_params["return_vectorial"],
-                        return_induction=return_params["return_induction"],
-                        return_induction_energy=return_params["return_induction_energy"],
+                        return_options=return_params,
                         gc_worker_end=out_params.get("memory_profiling", {}).get("gc_worker_end", False),
                         verbose=out_params["verbose"])
                     
@@ -652,22 +612,6 @@ if __name__ == "__main__":
                         # Initialize all result dictionaries with empty lists
                         for key in data.keys():
                             all_data[key] = []
-                        
-                        if vectorial is not None:
-                            for key in vectorial.keys():
-                                all_vectorial[key] = []
-                        
-                        if induction is not None:
-                            for key in induction.keys():
-                                all_induction[key] = []
-                        
-                        if magnitudes is not None:
-                            for key in magnitudes.keys():
-                                all_magnitudes[key] = []
-                        
-                        if induction_energy is not None:
-                            for key in induction_energy.keys():
-                                all_induction_energy[key] = []
                         
                         if induction_energy_integral is not None:
                             for key in induction_energy_integral.keys():
@@ -703,22 +647,6 @@ if __name__ == "__main__":
 
                     for key in data.keys():
                         all_data[key].append(data[key])
-                    
-                    if all_vectorial is not None and vectorial is not None:
-                        for key in vectorial.keys():
-                            all_vectorial[key].append(vectorial[key])
-                    
-                    if all_induction is not None and induction is not None:
-                        for key in induction.keys():
-                            all_induction[key].append(induction[key])
-                    
-                    if all_magnitudes is not None and magnitudes is not None:
-                        for key in magnitudes.keys():
-                            all_magnitudes[key].append(magnitudes[key])
-                    
-                    if all_induction_energy is not None and induction_energy is not None:
-                        for key in induction_energy.keys():
-                            all_induction_energy[key].append(induction_energy[key])
                     
                     if induction_energy_integral is not None:
                         for key in induction_energy_integral.keys():
@@ -766,7 +694,7 @@ if __name__ == "__main__":
                         f"serial level={ind_params['level'][L]} sim={sims} it={it} processed={iteration_counter}",
                         force=memory_monitor.should_log_iteration(iteration_counter)
                     )
-                    del data, vectorial, induction, magnitudes, induction_energy
+                    del data
                     del induction_energy_integral, induction_test_energy_integral
                     del induction_energy_profiles, production_dissipation_profiles, induction_uniform, diver_B_percentiles, debug_fields
 
@@ -774,10 +702,6 @@ if __name__ == "__main__":
             debug_module.ensure_temporal_order(
                 all_data,
                 series_dicts=[
-                    all_vectorial,
-                    all_induction,
-                    all_magnitudes,
-                    all_induction_energy,
                     all_induction_energy_integral,
                     all_induction_test_energy_integral,
                     all_induction_energy_profiles,

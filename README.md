@@ -96,6 +96,21 @@ For animation-friendly profile postprocessing, these controls are available:
 - `area_alpha` (P/D only): opacity of shaded area between production and dissipation.
 - `plot_density`, `plot_magnetic_energy`: optional reference curves in profile plots.
 
+### Volumetric Export Controls (ParaView / Postprocessing)
+
+In `IND_PARAMS["return"]` you can now configure per-snapshot volumetric exports:
+
+- `enabled`: master switch for volumetric export.
+- `format`: `npy`, `npz`, `vtk_ascii`, or `vtk_binary`.
+- `grid`: `amr` (patch lists) or `uniform` (homogeneous grid).
+- `fields`: selects which quantities are exported (`density`, `velocity`, magnetic fields, etc.).
+
+Notes:
+
+- `vtk` is directly compatible with ParaView and is exported as a homogeneous grid.
+- For `vtk`, set `grid="uniform"`.
+- Exported files are written under `OUTPUT_PARAMS["data_folder"] / volumetric_exports / <sim> / it_<snap> / level_<L>`.
+
 ## Processing Notes
 
 - Profiles and temporal evolution are independently gated by configuration.

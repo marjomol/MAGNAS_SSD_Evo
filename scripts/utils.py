@@ -11,6 +11,7 @@ Created by Marco Molina Pradillo
 import numpy as np
 import sys
 import os
+import signal
 from datetime import datetime
 from contextlib import contextmanager
 import io
@@ -26,6 +27,50 @@ from config import OUTPUT_PARAMS as out_params
 from numba import njit, prange
 from numba.typed import List
 import warnings
+import tempfile
+import shutil
+import gc
+
+_TEMP_EXPORT_DIRS = set()
+
+
+def _register_temp_export_dir(path):
+    if path:
+        _TEMP_EXPORT_DIRS.add(path)
+
+
+def _cleanup_temp_export_dirs():
+    while _TEMP_EXPORT_DIRS:
+        temp_dir = _TEMP_EXPORT_DIRS.pop()
+        try:
+            if os.path.isdir(temp_dir):
+                shutil.rmtree(temp_dir)
+        except Exception:
+            pass
+
+
+def _handle_interrupt_signal(signum, frame):
+    _cleanup_temp_export_dirs()
+    if signum == signal.SIGTSTP:
+        signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTSTP)
+    raise SystemExit(128 + int(signum))
+
+
+for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGTSTP):
+    try:
+        signal.signal(_sig, _handle_interrupt_signal)
+    except Exception:
+        pass
+
+import atexit
+
+atexit.register(_cleanup_temp_export_dirs)
+
+try:
+    from pyevtk.hl import gridToVTK
+except Exception:
+    gridToVTK = None
 
 
 def log_message(message, tag=None, level=0):
@@ -47,7 +92,18 @@ def log_message(message, tag=None, level=0):
         
 
 def resolve_iteration_selection(it_list, selector):
-    """Resolve selector entries as positional indices and/or explicit iteration values."""
+    """
+    Resolve selector entries as positional indices and/or explicit iteration values.
+    
+    Args:
+        it_list: list of available iteration values
+        selector: None, single value, or list of values specifying which iterations to select
+    
+    Returns:
+        A set of selected iteration values from it_list based on the selector.
+        
+    Author: Marco Molina
+    """
     if selector is None:
         return set(it_list)
 
@@ -72,7 +128,17 @@ def resolve_iteration_selection(it_list, selector):
 
 
 def get_last_rad(rad_list):
-    """Return the last available radius from nested or flat radius containers."""
+    """
+    Return the last available radius from nested or flat radius containers.
+    
+    Args:
+        rad_list: list of radius values, which can be nested (e.g., list of lists for multiple simulations)
+        
+    Returns:
+        The last available radius value.
+        
+    Author: Marco Molina
+    """
     if not rad_list:
         return 0
     if isinstance(rad_list[0], (list, tuple, np.ndarray)):
@@ -247,6 +313,742 @@ def save_3d_array(filename, array):
         for i in range(array.shape[0]):
             np.savetxt(f, array[i], header=f'Slice {i}', comments='')
             f.write('\n')
+
+
+def _safe_export_name(name):
+    """
+    Convert a name to a safe string for export.
+    
+    Args:
+        - name: the original name
+        
+    Returns:
+        - A safe string for export.
+        
+    Author: Marco Molina
+    """
+    
+    safe = ''.join(ch if (ch.isalnum() or ch in ['_', '-']) else '_' for ch in str(name))
+    return safe.strip('_') or 'field'
+
+
+def _flatten_for_vtk(array):
+    """
+    Flatten a 3D array for VTK export.
+    
+    Args:
+        - array: the 3D array to flatten
+        
+    Returns:
+        - The flattened array.
+        
+    Author: Marco Molina
+    """
+    
+    return np.asarray(array, dtype=np.float64).ravel(order='F')
+
+
+def _write_legacy_vtk_structured_points(filepath, scalar_fields, vector_fields, origin, spacing):
+    """
+    Write a legacy VTK STRUCTURED_POINTS file (ASCII) readable by ParaView.
+    
+    Args:
+        - filepath: the path to the output file
+        - scalar_fields: a dictionary of scalar fields
+        - vector_fields: a dictionary of vector fields
+        - origin: the origin of the grid
+        - spacing: the spacing of the grid
+    
+    Returns:
+        - The path to the written VTK file.
+        - The file will be written in ASCII format and can be read by ParaView.
+        
+    Author: Marco Molina    
+    """
+    if not scalar_fields and not vector_fields:
+        return
+
+    if scalar_fields:
+        reference = next(iter(scalar_fields.values()))
+    else:
+        reference = next(iter(vector_fields.values()))[0]
+
+    # Defensive normalization: some converters may return
+    # (field_uniform, grid_faces_x, grid_faces_y, grid_faces_z).
+    if isinstance(reference, tuple) and len(reference) == 4:
+        reference = reference[0]
+
+    # If reference is a path to a .npy created for streaming, load as memmap
+    if isinstance(reference, str) and os.path.isfile(reference):
+        ref_arr = np.load(reference, mmap_mode='r')
+    else:
+        ref_arr = np.asarray(reference)
+    if ref_arr.ndim != 3:
+        raise ValueError(
+            f"VTK export requires 3D uniform arrays, got shape {ref_arr.shape} "
+            f"for reference field of type {type(reference)}"
+        )
+
+    nx, ny, nz = ref_arr.shape
+    npoints = nx * ny * nz
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write('# vtk DataFile Version 3.0\n')
+        f.write('MAGNAS SSD Evo snapshot export\n')
+        f.write('ASCII\n')
+        f.write('DATASET STRUCTURED_POINTS\n')
+        f.write(f'DIMENSIONS {nx} {ny} {nz}\n')
+        f.write(f'ORIGIN {origin[0]:.12g} {origin[1]:.12g} {origin[2]:.12g}\n')
+        f.write(f'SPACING {spacing[0]:.12g} {spacing[1]:.12g} {spacing[2]:.12g}\n')
+        f.write(f'POINT_DATA {npoints}\n')
+
+        for name, values in scalar_fields.items():
+            # values may be a path to a .npy file (streamed) or an in-memory array
+            if isinstance(values, str) and os.path.isfile(values):
+                m = np.load(values, mmap_mode='r')
+                arr = np.asarray(m)
+                try:
+                    del m
+                except Exception:
+                    pass
+                gc.collect()
+                flat = _flatten_for_vtk(arr)
+                # remove the temporary file after copying
+                try:
+                    os.remove(values)
+                except Exception:
+                    pass
+            else:
+                flat = _flatten_for_vtk(values)
+            f.write(f'SCALARS {_safe_export_name(name)} float 1\n')
+            f.write('LOOKUP_TABLE default\n')
+            for value in flat:
+                f.write(f'{float(value):.12g}\n')
+
+        for name, (vx, vy, vz) in vector_fields.items():
+            # each component may be a path
+            # Load components; if they are on-disk memmaps, copy then free memmap
+            if isinstance(vx, str) and os.path.isfile(vx):
+                ax_m = np.load(vx, mmap_mode='r')
+                ax = np.asarray(ax_m)
+                try:
+                    del ax_m
+                except Exception:
+                    pass
+                gc.collect()
+            else:
+                ax = np.asarray(vx)
+            if isinstance(vy, str) and os.path.isfile(vy):
+                ay_m = np.load(vy, mmap_mode='r')
+                ay = np.asarray(ay_m)
+                try:
+                    del ay_m
+                except Exception:
+                    pass
+                gc.collect()
+            else:
+                ay = np.asarray(vy)
+            if isinstance(vz, str) and os.path.isfile(vz):
+                az_m = np.load(vz, mmap_mode='r')
+                az = np.asarray(az_m)
+                try:
+                    del az_m
+                except Exception:
+                    pass
+                gc.collect()
+            else:
+                az = np.asarray(vz)
+            fx = _flatten_for_vtk(ax)
+            fy = _flatten_for_vtk(ay)
+            fz = _flatten_for_vtk(az)
+            # Now that we've copied the data to memory, remove the temporary files
+            try:
+                if isinstance(vx, str):
+                    os.remove(vx)
+            except Exception:
+                pass
+            try:
+                if isinstance(vy, str):
+                    os.remove(vy)
+            except Exception:
+                pass
+            try:
+                if isinstance(vz, str):
+                    os.remove(vz)
+            except Exception:
+                pass
+            f.write(f'VECTORS {_safe_export_name(name)} float\n')
+            for i in range(npoints):
+                f.write(f'{float(fx[i]):.12g} {float(fy[i]):.12g} {float(fz[i]):.12g}\n')
+
+
+def _write_binary_vtk_rectilinear(basepath_no_ext, scalar_fields, vector_fields, origin, spacing):
+    """
+    Write binary VTK XML (RectilinearGrid) using pyevtk.gridToVTK.
+    
+    Args:
+        - basepath_no_ext: the base path for the output file, without extension
+        - scalar_fields: a dictionary of scalar fields
+        - vector_fields: a dictionary of vector fields
+        - origin: the origin of the grid
+        - spacing: the spacing of the grid
+    
+    Returns:
+        - The path to the written VTK file.
+        - The file will be written in binary format and can be read by ParaView.
+        
+    Author: Marco Molina
+    """
+    if gridToVTK is None:
+        raise ImportError(
+            "pyevtk is required for 'vtk_binary' export. "
+            "Install it in the active interpreter with: pip install pyevtk"
+        )
+
+    if not scalar_fields and not vector_fields:
+        return None
+
+    if scalar_fields:
+        reference = next(iter(scalar_fields.values()))
+    else:
+        reference = next(iter(vector_fields.values()))[0]
+
+    if isinstance(reference, tuple) and len(reference) == 4:
+        reference = reference[0]
+
+    if isinstance(reference, str) and os.path.isfile(reference):
+        ref_arr = np.load(reference, mmap_mode='r')
+    else:
+        ref_arr = np.asarray(reference)
+    if ref_arr.ndim != 3:
+        raise ValueError(
+            f"VTK binary export requires 3D uniform arrays, got shape {ref_arr.shape} "
+            f"for reference field of type {type(reference)}"
+        )
+
+    nx, ny, nz = ref_arr.shape
+    x = origin[0] + np.arange(nx + 1, dtype=np.float64) * spacing[0]
+    y = origin[1] + np.arange(ny + 1, dtype=np.float64) * spacing[1]
+    z = origin[2] + np.arange(nz + 1, dtype=np.float64) * spacing[2]
+
+    cell_scalars = {}
+    for name, values in scalar_fields.items():
+        # values may be a path to a .npy file
+        if isinstance(values, str) and os.path.isfile(values):
+            m = np.load(values, mmap_mode='r')
+            arr = np.ascontiguousarray(m)
+            try:
+                del m
+            except Exception:
+                pass
+            gc.collect()
+            # convert to contiguous in memory (this will copy but only one field at a time)
+            cell_scalars[_safe_export_name(name)] = arr
+            try:
+                os.remove(values)
+            except Exception:
+                pass
+        else:
+            arr = np.asarray(values)
+            if arr.ndim != 3:
+                raise ValueError(f"Scalar field '{name}' must be 3D for vtk_binary, got shape {arr.shape}")
+            cell_scalars[_safe_export_name(name)] = np.ascontiguousarray(arr)
+
+    cell_vectors = {}
+    for name, (vx, vy, vz) in vector_fields.items():
+        # Load components safely: copy memmap to array then free memmap before deleting files
+        if isinstance(vx, str) and os.path.isfile(vx):
+            ax_m = np.load(vx, mmap_mode='r')
+            ax = np.ascontiguousarray(ax_m)
+            try:
+                del ax_m
+            except Exception:
+                pass
+            gc.collect()
+            try:
+                os.remove(vx)
+            except Exception:
+                pass
+        else:
+            ax = np.asarray(vx)
+        if isinstance(vy, str) and os.path.isfile(vy):
+            ay_m = np.load(vy, mmap_mode='r')
+            ay = np.ascontiguousarray(ay_m)
+            try:
+                del ay_m
+            except Exception:
+                pass
+            gc.collect()
+            try:
+                os.remove(vy)
+            except Exception:
+                pass
+        else:
+            ay = np.asarray(vy)
+        if isinstance(vz, str) and os.path.isfile(vz):
+            az_m = np.load(vz, mmap_mode='r')
+            az = np.ascontiguousarray(az_m)
+            try:
+                del az_m
+            except Exception:
+                pass
+            gc.collect()
+            try:
+                os.remove(vz)
+            except Exception:
+                pass
+        else:
+            az = np.asarray(vz)
+        if ax.ndim != 3 or ay.ndim != 3 or az.ndim != 3:
+            raise ValueError(f"Vector field '{name}' components must be 3D for vtk_binary")
+        cell_vectors[_safe_export_name(name)] = (
+            np.ascontiguousarray(ax),
+            np.ascontiguousarray(ay),
+            np.ascontiguousarray(az),
+        )
+
+    cell_data = {}
+    cell_data.update(cell_scalars)
+    cell_data.update(cell_vectors)
+
+    return gridToVTK(basepath_no_ext, x=x, y=y, z=z, cellData=cell_data)
+
+
+def _split_xyz_vectors(source_dict):
+    """
+    Split dictionaries with *_x/*_y/*_z keys into vector and scalar blocks.
+    
+    Args:
+        - source_dict: a dictionary where some keys may end with _x, _y, _z indicating vector components
+        
+    Returns:
+        - A tuple of (scalar_dict, vector_dict) where:
+          - scalar_dict contains entries from source_dict that are not part of a vector
+          - vector_dict contains entries grouped by base name for keys that have _x, _y, _z components
+          
+    Author: Marco Molina    
+    """
+    scalars = {}
+    vectors = {}
+    consumed = set()
+    for key in source_dict.keys():
+        if key in consumed:
+            continue
+        if key.endswith('_x'):
+            base = key[:-2]
+            yk = f'{base}_y'
+            zk = f'{base}_z'
+            if yk in source_dict and zk in source_dict:
+                vectors[base] = (source_dict[key], source_dict[yk], source_dict[zk])
+                consumed.update([key, yk, zk])
+                continue
+        if key.endswith('_y') or key.endswith('_z'):
+            if key not in consumed:
+                scalars[key] = source_dict[key]
+            continue
+        scalars[key] = source_dict[key]
+    return scalars, vectors
+
+
+def _resolve_uniform_box(region_coords, size):
+    """
+    Resolve the Box parameter for uniform grid export based on region_coords or default to the simulation box.
+    
+    Args:
+        - region_coords: the region coordinates which can be a box definition or None
+        - size: the size of the simulation box (used if region_coords does not define a box)
+        
+    Returns:
+        - A list defining the Box for uniform grid export in the format:
+            ['box', x_min, x_max, y_min, y_max, z_min, z_max]
+
+    Author: Marco Molina
+    """
+    if isinstance(region_coords, (list, tuple)) and len(region_coords) >= 7 and region_coords[0] == 'box':
+        return ['box', region_coords[1], region_coords[2], region_coords[3], region_coords[4], region_coords[5], region_coords[6]]
+    half = float(size) / 2.0
+    return ['box', -half, half, -half, half, -half, half]
+
+
+def export_snapshot_fields(
+    data,
+    vectorial,
+    induction,
+    induction_energy,
+    export_cfg,
+    sim_name,
+    iteration,
+    level,
+    up_to_level,
+    nmax,
+    size,
+    region_coords,
+    output_root=None,
+    bitformat=np.float32,
+    verbose=False,
+):
+    """
+    Export configured volumetric fields for one snapshot in AMR or uniform representation.
+    
+    Args:
+        - data: dictionary containing the simulation data arrays
+        - vectorial: dictionary of additional vector fields to export (with _x, _y, _z suffixes)
+        - induction: dictionary of induction-related fields to export (with _x, _y, _z suffixes)
+        - induction_energy: dictionary of induction energy-related fields to export (with _x, _y, _z suffixes)
+        - export_cfg: configuration dictionary for export options
+        - sim_name: name of the simulation
+        - iteration: iteration number of the snapshot
+        - level: AMR level of the snapshot
+        - up_to_level: maximum AMR level to consider for uniform export
+        - nmax: base grid size (used for uniform export)
+        - size: physical size of the simulation box (used for uniform export)
+        - region_coords: region coordinates for export (used for uniform export)
+        - output_root: root directory for output files (optional, defaults to current directory or out_params['data_folder'])
+        - bitformat: numpy dtype for exported arrays (default np.float32)
+        - verbose: whether to print verbose log messages during export
+        
+    Returns:
+        - The path to the exported file or directory, or None if export is disabled or no fields were exported.
+        - The exported file will be in the format specified by export_cfg and can be read by ParaView or numpy depending on the format.
+    
+    Author: Marco Molina    
+    """
+    if not isinstance(export_cfg, dict) or not export_cfg.get('enabled', False):
+        return None
+
+    fields_cfg = export_cfg.get('fields', {})
+    export_format = str(export_cfg.get('format', 'npy')).lower()
+    export_grid = str(export_cfg.get('grid', 'amr')).lower()
+
+    if export_format not in {'npy', 'npz', 'vtk', 'vtk_ascii', 'vtk_binary'}:
+        raise ValueError(f'Unsupported export format: {export_format}')
+    if export_grid not in {'amr', 'uniform'}:
+        raise ValueError(f'Unsupported export grid: {export_grid}')
+    if export_format in {'vtk', 'vtk_ascii', 'vtk_binary'} and export_grid != 'uniform':
+        raise ValueError("VTK export requires export grid to be 'uniform'")
+
+    clus_kp = data['clus_kp']
+    rho_b = float(data['rho_b'])
+
+    scalar_amr = {}
+    vector_amr = {}
+
+    if fields_cfg.get('density', False):
+        scalar_amr['density'] = [
+            (data['clus_rho_rho_b'][p] * rho_b).astype(bitformat) if bool(clus_kp[p]) else 0
+            for p in range(len(data['clus_rho_rho_b']))
+        ]
+    if fields_cfg.get('density_contrast', False):
+        scalar_amr['density_contrast'] = [
+            data['clus_rho_rho_b'][p].astype(bitformat) if bool(clus_kp[p]) else 0
+            for p in range(len(data['clus_rho_rho_b']))
+        ]
+    if fields_cfg.get('velocity', False):
+        vector_amr['velocity'] = (data['clus_vx'], data['clus_vy'], data['clus_vz'])
+    if fields_cfg.get('magnetic_normalized', False):
+        vector_amr['magnetic_normalized'] = (data['clus_Bx'], data['clus_By'], data['clus_Bz'])
+    if fields_cfg.get('magnetic_physical', False):
+        vector_amr['magnetic_physical'] = (data['clus_bx'], data['clus_by'], data['clus_bz'])
+
+    if fields_cfg.get('vectorial', False) and isinstance(vectorial, dict):
+        add_scalars, add_vectors = _split_xyz_vectors(vectorial)
+        scalar_amr.update(add_scalars)
+        vector_amr.update(add_vectors)
+    if fields_cfg.get('induction', False) and isinstance(induction, dict):
+        add_scalars, add_vectors = _split_xyz_vectors(induction)
+        scalar_amr.update(add_scalars)
+        vector_amr.update(add_vectors)
+    if fields_cfg.get('induction_energy', False) and isinstance(induction_energy, dict):
+        add_scalars, add_vectors = _split_xyz_vectors(induction_energy)
+        scalar_amr.update(add_scalars)
+        vector_amr.update(add_vectors)
+
+    if not scalar_amr and not vector_amr:
+        return None
+
+    if output_root is None:
+        output_root = out_params.get('data_folder', '.')
+
+    export_dir = os.path.join(
+        output_root,
+        _safe_export_name(sim_name),
+        'volumetric_exports'
+    )
+    os.makedirs(export_dir, exist_ok=True)
+
+    disk_usage_before = shutil.disk_usage(export_dir)
+    written_paths = []
+
+    def _log_export_disk_summary():
+        disk_usage_after = shutil.disk_usage(export_dir)
+        exported_bytes = 0
+        for path in written_paths:
+            try:
+                exported_bytes += os.path.getsize(path)
+            except OSError:
+                pass
+
+        if verbose:
+            gb = 1024 ** 3
+            log_message(f'Volumetric snapshot export written under: {export_dir}', tag='export', level=1)
+            log_message(
+                f'Disk usage before: used={disk_usage_before.used / gb:.3f} GiB, free={disk_usage_before.free / gb:.3f} GiB; '
+                f'after: used={disk_usage_after.used / gb:.3f} GiB, free={disk_usage_after.free / gb:.3f} GiB',
+                tag='export',
+                level=1,
+            )
+            log_message(
+                f'Exported data size: {exported_bytes / gb:.3f} GiB across {len(written_paths)} file(s); '
+                f'delta used={((disk_usage_after.used - disk_usage_before.used) / gb):.3f} GiB',
+                tag='export',
+                level=2,
+            )
+
+    scalar_out = {}
+    vector_out = {}
+
+    # For uniform exports we stream each uniformized field to temporary .npy files
+    # to avoid holding many large arrays simultaneously in memory. Writers will
+    # load them on demand using mmap or by loading one at a time.
+    if export_grid == 'uniform':
+        box = _resolve_uniform_box(region_coords, size)
+        spacing_value = float(size) / float(nmax) / (2 ** int(up_to_level))
+        origin = (float(box[1]), float(box[3]), float(box[5]))
+        spacing = (spacing_value, spacing_value, spacing_value)
+
+        tmp_dir = tempfile.mkdtemp(prefix=f"vol_export_{int(iteration):05d}_")
+        _register_temp_export_dir(tmp_dir)
+
+        # Scalar fields: uniformize -> save to temporary npy -> free array
+        for name, patches in scalar_amr.items():
+            arr = uniform_field(
+                field=patches,
+                clus_cr0amr=data['clus_cr0amr'],
+                clus_solapst=data['clus_solapst'],
+                grid_npatch=data['grid_npatch'],
+                grid_patchnx=data['grid_patchnx'],
+                grid_patchny=data['grid_patchny'],
+                grid_patchnz=data['grid_patchnz'],
+                grid_patchrx=data['grid_patchrx'],
+                grid_patchry=data['grid_patchry'],
+                grid_patchrz=data['grid_patchrz'],
+                nmax=nmax,
+                size=size,
+                Box=box,
+                up_to_level=up_to_level,
+                ncores=1,
+                clus_kp=clus_kp,
+                verbose=False,
+            )
+            tmp_path = os.path.join(tmp_dir, f"{_safe_export_name(name)}.npy")
+            np.save(tmp_path, np.asarray(arr))
+            scalar_out[name] = tmp_path
+            # free memory
+            try:
+                del arr
+            except Exception:
+                pass
+            gc.collect()
+
+        # Vector fields: uniformize each component separately and save
+        for name, (fx, fy, fz) in vector_amr.items():
+            paths = []
+            for comp, field_comp in zip(('x', 'y', 'z'), (fx, fy, fz)):
+                arrc = uniform_field(
+                    field=field_comp,
+                    clus_cr0amr=data['clus_cr0amr'],
+                    clus_solapst=data['clus_solapst'],
+                    grid_npatch=data['grid_npatch'],
+                    grid_patchnx=data['grid_patchnx'],
+                    grid_patchny=data['grid_patchny'],
+                    grid_patchnz=data['grid_patchnz'],
+                    grid_patchrx=data['grid_patchrx'],
+                    grid_patchry=data['grid_patchry'],
+                    grid_patchrz=data['grid_patchrz'],
+                    nmax=nmax,
+                    size=size,
+                    Box=box,
+                    up_to_level=up_to_level,
+                    ncores=1,
+                    clus_kp=clus_kp,
+                    verbose=False,
+                )
+                tmp_path = os.path.join(tmp_dir, f"{_safe_export_name(name)}_{comp}.npy")
+                np.save(tmp_path, np.asarray(arrc))
+                paths.append(tmp_path)
+                try:
+                    del arrc
+                except Exception:
+                    pass
+                gc.collect()
+            vector_out[name] = tuple(paths)
+    else:
+        # AMR export: no uniformization, keep the AMR patch lists
+        scalar_out = scalar_amr
+        vector_out = vector_amr
+        spacing = None
+        origin = None
+
+    if export_format in {'vtk', 'vtk_ascii'}:
+        vtk_path = os.path.join(
+            export_dir,
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}.vtk"
+        )
+        _write_legacy_vtk_structured_points(vtk_path, scalar_out, vector_out, origin=origin, spacing=spacing)
+        written_paths.append(vtk_path)
+        if verbose:
+            log_message(f'Volumetric snapshot export written: {vtk_path}', tag='export', level=1)
+        _log_export_disk_summary()
+        # cleanup temporary directory if created
+        try:
+            if 'tmp_dir' in locals() and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+                _TEMP_EXPORT_DIRS.discard(tmp_dir)
+        except Exception:
+            pass
+        return vtk_path
+
+    if export_format == 'vtk_binary':
+        vtk_base = os.path.join(
+            export_dir,
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}"
+        )
+        vtk_path = _write_binary_vtk_rectilinear(vtk_base, scalar_out, vector_out, origin=origin, spacing=spacing)
+        if vtk_path:
+            written_paths.append(vtk_path)
+        if verbose:
+            log_message(f'Volumetric snapshot export written: {vtk_path}', tag='export', level=1)
+        _log_export_disk_summary()
+        try:
+            if 'tmp_dir' in locals() and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+                _TEMP_EXPORT_DIRS.discard(tmp_dir)
+        except Exception:
+            pass
+        return vtk_path
+
+    if export_format == 'npz':
+        payload = {}
+        for name, value in scalar_out.items():
+            if export_grid == 'uniform' and isinstance(value, str) and os.path.isfile(value):
+                payload[_safe_export_name(name)] = np.asarray(np.load(value, mmap_mode='r'))
+            elif export_grid == 'uniform':
+                payload[_safe_export_name(name)] = np.asarray(value)
+            else:
+                payload[_safe_export_name(name)] = np.array(value, dtype=object)
+        for name, (vx, vy, vz) in vector_out.items():
+            if export_grid == 'uniform' and all(isinstance(v, str) and os.path.isfile(v) for v in (vx, vy, vz)):
+                payload[_safe_export_name(name)] = np.stack(
+                    [
+                        np.asarray(np.load(vx, mmap_mode='r')),
+                        np.asarray(np.load(vy, mmap_mode='r')),
+                        np.asarray(np.load(vz, mmap_mode='r')),
+                    ],
+                    axis=-1,
+                )
+            elif export_grid == 'uniform':
+                payload[_safe_export_name(name)] = np.stack([np.asarray(vx), np.asarray(vy), np.asarray(vz)], axis=-1)
+            else:
+                payload[_safe_export_name(name)] = np.array([vx, vy, vz], dtype=object)
+        out_path = os.path.join(
+            export_dir,
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}.npz"
+        )
+        np.savez_compressed(out_path, **payload)
+        written_paths.append(out_path)
+        if verbose:
+            log_message(f'Volumetric snapshot export written: {out_path}', tag='export', level=1)
+        _log_export_disk_summary()
+        try:
+            if 'tmp_dir' in locals() and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+                _TEMP_EXPORT_DIRS.discard(tmp_dir)
+        except Exception:
+            pass
+        return out_path
+
+    # export_format == 'npy'
+    for name, value in scalar_out.items():
+        out_path = os.path.join(export_dir, f'{_safe_export_name(name)}.npy')
+        if export_grid == 'uniform' and isinstance(value, str) and os.path.isfile(value):
+            # move temporary file into final location to avoid extra copy
+            try:
+                os.replace(value, out_path)
+            except Exception:
+                # fallback to load+save: load memmap, copy to array, delete memmap, then save
+                mtmp = np.load(value, mmap_mode='r')
+                try:
+                    arrtmp = np.asarray(mtmp)
+                finally:
+                    try:
+                        del mtmp
+                    except Exception:
+                        pass
+                    gc.collect()
+                np.save(out_path, arrtmp)
+                try:
+                    os.remove(value)
+                except Exception:
+                    pass
+        else:
+            if export_grid == 'uniform':
+                np.save(out_path, np.asarray(value))
+            else:
+                np.save(out_path, np.array(value, dtype=object))
+        written_paths.append(out_path)
+    for name, (vx, vy, vz) in vector_out.items():
+        out_path = os.path.join(export_dir, f'{_safe_export_name(name)}.npy')
+        if export_grid == 'uniform' and isinstance(vx, str) and os.path.isfile(vx):
+            # components are stored as temporary .npy files; load memmap and stack then save
+            ax_m = np.load(vx, mmap_mode='r')
+            ay_m = np.load(vy, mmap_mode='r')
+            az_m = np.load(vz, mmap_mode='r')
+            try:
+                ax = np.asarray(ax_m)
+                ay = np.asarray(ay_m)
+                az = np.asarray(az_m)
+            finally:
+                try:
+                    del ax_m
+                except Exception:
+                    pass
+                try:
+                    del ay_m
+                except Exception:
+                    pass
+                try:
+                    del az_m
+                except Exception:
+                    pass
+                gc.collect()
+            np.save(out_path, np.stack([ax, ay, az], axis=-1))
+            try:
+                os.remove(vx)
+            except Exception:
+                pass
+            try:
+                os.remove(vy)
+            except Exception:
+                pass
+            try:
+                os.remove(vz)
+            except Exception:
+                pass
+        else:
+            if export_grid == 'uniform':
+                np.save(out_path, np.stack([np.asarray(vx), np.asarray(vy), np.asarray(vz)], axis=-1))
+            else:
+                np.save(out_path, np.array([vx, vy, vz], dtype=object))
+        written_paths.append(out_path)
+
+    _log_export_disk_summary()
+    try:
+        if 'tmp_dir' in locals() and os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir)
+            _TEMP_EXPORT_DIRS.discard(tmp_dir)
+    except Exception:
+        pass
+    return export_dir
             
 def save_magnetic_field_seed(B, axis, real, dir, format, run):
     '''
@@ -1276,11 +2078,29 @@ def uniform_field(field, clus_cr0amr, clus_solapst, grid_npatch,
         
     cleaned_field = clean_field(field, clus_cr0amr, clus_solapst, grid_npatch, up_to_level=up_to_level)
 
-    uniform_field = a2u.main(box = Box[1:], up_to_level = up_to_level, nmax = nmax, size = size, npatch = grid_npatch, patchnx = grid_patchnx, patchny = grid_patchny,
-                            patchnz = grid_patchnz, patchrx = grid_patchrx, patchry = grid_patchry, patchrz = grid_patchrz,
-                            field = cleaned_field, ncores = ncores, verbose = verbose, kept_patches=clus_kp)
-        
-    return uniform_field
+    # Use the shared unigrid path (same projection engine used by debug tools)
+    # so export and debug behavior remain consistent.
+    box_limits = Box[1:] if (isinstance(Box, (list, tuple)) and len(Box) == 7 and Box[0] == 'box') else Box
+    uniform = unigrid(
+        field=cleaned_field,
+        box_limits=box_limits,
+        up_to_level=up_to_level,
+        npatch=grid_npatch,
+        patchnx=grid_patchnx,
+        patchny=grid_patchny,
+        patchnz=grid_patchnz,
+        patchrx=grid_patchrx,
+        patchry=grid_patchry,
+        patchrz=grid_patchrz,
+        size=size,
+        nmax=nmax,
+        interpolate='DIRECT',
+        verbose=verbose,
+        kept_patches=clus_kp,
+        return_coords=False,
+    )
+
+    return uniform
 
 
 def uniform_grid_zoom_interpolate(field, box_limits, up_to_level, npatch, patchnx, patchny, patchnz, patchrx, patchry,

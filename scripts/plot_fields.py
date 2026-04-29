@@ -31,6 +31,7 @@ from time import gmtime
 import sys
 import hashlib
 from scripts.units import *
+from scripts.utils import log_message
 
 DEFAULT_PLOT_PALETTE = {
     'measured_energy': '#1f77b4',
@@ -126,9 +127,13 @@ def safe_filename(filepath, max_length=255, verbose=False):
     new_filepath = os.path.join(directory, new_filename)
     
     if verbose:
-        print(f"Warning: Filename too long ({len(filename)} chars). Shortened to {len(new_filename)} chars.")
-        print(f"Original: {filename}")
-        print(f"Shortened: {new_filename}")
+        log_message(
+            f"Filename too long ({len(filename)} chars). Shortened to {len(new_filename)} chars.",
+            tag="plot",
+            level=1,
+        )
+        log_message(f"Original: {filename}", tag="plot", level=2)
+        log_message(f"Shortened: {new_filename}", tag="plot", level=2)
     
     return new_filepath
         
@@ -199,7 +204,7 @@ def zoom_animation_3D(arr, size, arrow_scale = 1, units = 'Mpc', title = 'Magnet
     ani.save(data_dir + '/animation.gif', writer='pillow')
     
     if verbose == True:
-        print(f'Plotting... Magnetic Field Seed Zoom Animation computed')
+        log_message('Magnetic Field Seed Zoom Animation computed', tag='plot', level=1)
     
     # Save the plots
     if Save == True:
@@ -425,7 +430,7 @@ def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=No
     ani = FuncAnimation(fig, animate, frames=range(nmaz), interval=inter)
 
     if verbose:
-        print('Plotting... Field Scan Animation computed')
+        log_message('Field Scan Animation computed', tag='plot', level=1)
 
     if save:
         if folder is None:
@@ -457,7 +462,7 @@ def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=No
         filepath = os.path.join(folder, filename)
         ani.save(filepath, writer='pillow', dpi=dpi)
         if verbose:
-            print(f'Scan animation saved to {filepath}')
+            log_message(f'Scan animation saved to {filepath}', tag='plot', level=1)
 
 
     return ani
@@ -580,7 +585,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
     
     if not pct_list or not levels_list:
         if verbose:
-            print('Percentile evolution: no percentile data to plot')
+            log_message('Percentile evolution: no percentile data to plot', tag='percentiles', level=1)
         return None
     
     # Determine reference levels from first non-empty entry
@@ -591,7 +596,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
             break
     if ref_levels is None:
         if verbose:
-            print('Percentile evolution: no valid levels found')
+            log_message('Percentile evolution: no valid levels found', tag='percentiles', level=1)
         return None
 
     # Build a list of valid indices where percentiles exist and align their order to ref_levels when possible
@@ -641,7 +646,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
 
     if not aligned_pct:
         if verbose:
-            print('Percentile evolution: no valid percentile rows to plot')
+            log_message('Percentile evolution: no valid percentile rows to plot', tag='percentiles', level=1)
         return None
 
     # Stack to 2D arrays (n_snap_valid, n_levels)
@@ -652,7 +657,7 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
 
     if pct.size == 0 or levels.size == 0:
         if verbose:
-            print('Percentile evolution: no valid percentile data to plot')
+            log_message('Percentile evolution: no valid percentile data to plot', tag='percentiles', level=1)
         return None
 
     if pct.ndim != 2:
@@ -866,17 +871,15 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
         filename = safe_filename(filename, verbose=verbose)
         fig.savefig(filename, dpi=dpi)
         if verbose:
-            print(f'Percentile evolution plot saved as: {filename}')
+            log_message(f'Percentile evolution plot saved as: {filename}', tag='percentiles', level=1)
 
     if verbose:
         lvl_str = ', '.join([str(l) for l in levels_sorted])
-        print(f'Plotted percentile evolution for levels: {lvl_str}')
+        log_message(f'Plotted percentile evolution for levels: {lvl_str}', tag='percentiles', level=1)
 
     return fig
         
         
-
-
 def plot_integral_evolution(evolution_data, plot_params, induction_params,
                             grid_t, grid_zeta, rad,
                             verbose=True, save=False, folder=None):
@@ -1327,22 +1330,26 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         if peak_m and peak_i:
             global_m = start_meas + peak_m[0]
             global_i = start_pred + peak_i[0]
-            print(
-                "Plotting debug... Peak lag (itemized vs measured): "
+            log_message(
+                "Peak lag (itemized vs measured): "
                 f"d_idx_local={peak_i[0]-peak_m[0]}, d_idx_global={global_i-global_m}, "
                 f"d_{axis_label}={peak_i[1]-peak_m[1]:.6g}, "
                 f"measured_{axis_label}={peak_m[1]:.6g}, itemized_{axis_label}={peak_i[1]:.6g}, "
-                f"idx_measured_global={global_m}, idx_itemized_global={global_i}"
+                f"idx_measured_global={global_m}, idx_itemized_global={global_i}",
+                tag='evolution',
+                level=2,
             )
         if peak_m and peak_c:
             global_m = start_meas + peak_m[0]
             global_c = start_pred + peak_c[0]
-            print(
-                "Plotting debug... Peak lag (compact vs measured): "
+            log_message(
+                "Peak lag (compact vs measured): "
                 f"d_idx_local={peak_c[0]-peak_m[0]}, d_idx_global={global_c-global_m}, "
                 f"d_{axis_label}={peak_c[1]-peak_m[1]:.6g}, "
                 f"measured_{axis_label}={peak_m[1]:.6g}, compact_{axis_label}={peak_c[1]:.6g}, "
-                f"idx_measured_global={global_m}, idx_compact_global={global_c}"
+                f"idx_measured_global={global_m}, idx_compact_global={global_c}",
+                tag='evolution',
+                level=2,
             )
     
     setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font)
@@ -1394,10 +1401,10 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         figures.append(fig2)
     
     if verbose:
-        print(f'Plotting... {plot_type.capitalize()} integrated magnetic energy and induction prediction plot created')
-        print(f'Components plotted: {", ".join(components_plotted)}')
+        log_message(f'{plot_type.capitalize()} integrated magnetic energy and induction prediction plot created', tag='evolution', level=1)
+        log_message(f'Components plotted: {", ".join(components_plotted)}', tag='evolution', level=1)
         if volume_evolution:
-            print(f'Plotting... Volume evolution plot created')
+            log_message('Volume evolution plot created', tag='evolution', level=1)
     
     # Save plots if requested
     if save:
@@ -1430,13 +1437,15 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         fig1.savefig(filename1, dpi=dpi)
         
         if verbose:
-            print(f'Plotting... Main plot saved as: {filename1}')
+            log_message(f'Main plot saved as: {filename1}', tag='evolution', level=1)
         
         # Save volume plot if created
         if volume_evolution:
             filename2 = f'{folder}/{run}_{file_title}_volume_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}_{plotid}.png'
             filename2 = safe_filename(filename2, verbose=verbose)
             fig2.savefig(filename2, dpi=dpi)
+            if verbose:
+                log_message(f'Volume plot saved as: {filename2}', tag='evolution', level=1)
             
             if verbose:
                 print(f'Plotting... Volume plot saved as: {filename2}')
@@ -1820,7 +1829,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
                 print(f'Plotting... Production/Dissipation net plot saved as: {fname_net}')
 
     if verbose and figures:
-        print('Plotting... Production/Dissipation evolution plots created')
+        log_message('Production/Dissipation evolution plots created', tag='production_dissipation', level=1)
 
     return figures
 
@@ -2444,7 +2453,25 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
 def plot_production_dissipation_radial_profiles(profile_data, plot_params, induction_params,
                                             grid_t, grid_zeta, rad,
                                             verbose=True, save=False, folder=None):
-    """Plot radial profiles for production/dissipation components."""
+    """
+    Plot radial profiles for production/dissipation components.
+    
+    Args:
+        profile_data (dict): Dictionary containing radial profile data arrays.
+        plot_params (dict): Dictionary of plotting parameters and options.
+        induction_params (dict): Dictionary of induction calculation parameters.
+        grid_t (array-like): Array of snapshot times.
+        grid_zeta (array-like): Array of snapshot redshifts.
+        rad (float): Virial radius for normalization.
+        verbose (bool): If True, print detailed information about the plotting process.
+        save (bool): If True, save the generated figures to disk.
+        folder (str): Directory to save figures if `save` is True. Defaults to current working directory.
+        
+    Returns:
+        list: A list of matplotlib Figure objects created for each snapshot.
+        
+    Author: Marco Molina
+    """
 
     assert plot_params.get('x_scale', 'lin') in ['lin', 'log'], "x_scale must be 'lin' or 'log'"
     assert plot_params.get('y_scale', 'log') in ['lin', 'log'], "y_scale must be 'lin' or 'log'"

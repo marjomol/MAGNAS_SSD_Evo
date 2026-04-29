@@ -163,13 +163,15 @@ def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
                                     bitformat=None, mag=False, sim_characteristics=None,
                                     energy_evolution_config=None,
                                     energy_evolution=True, profiles=True, induction_profiles=None, pd_profiles=False,
-                                    projection=True, percentiles=True,
+                                    projection=False, percentiles=True,
                                     percentile_levels=(100, 90, 75, 50, 25), divergence_filter=None, debug_params=None,
                                     production_dissipation=None,
-                                    return_vectorial=False, return_induction=False, return_induction_energy=False,
+                                    return_options=None,
                                     gc_worker_end=False, verbose=False):
     if debug_params is None:
         debug_params = {}
+    if return_options is None:
+        return_options = {}
 
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
@@ -219,9 +221,7 @@ def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
                 divergence_filter=divergence_filter,
                 debug_params=debug_params,
                 production_dissipation=production_dissipation,
-                return_vectorial=return_vectorial,
-                return_induction=return_induction,
-                return_induction_energy=return_induction_energy,
+                return_options=return_options,
                 gc_worker_end=gc_worker_end,
                 verbose=verbose
             )

@@ -23,15 +23,15 @@ from scripts.test import test_limits
 # Induction Parameters #
 
 IND_PARAMS = {
-    # "nmax": [128, 128],
-    # "nmay": [128, 128],
-    # "nmaz": [128, 128],
-    "nmax": [64, 64],
-    "nmay": [64, 64],
-    "nmaz": [64, 64],
+    "nmax": [128, 128],
+    "nmay": [128, 128],
+    "nmaz": [128, 128],
+    # "nmax": [64, 64],
+    # "nmay": [64, 64],
+    # "nmaz": [64, 64],
     "size": [40, 40], # Size of the box in Mpc
     "npalev": [7000, 7000],
-    "nlevels": [10],
+    "nlevels": [7],
     "namrx": [32, 32],
     "namry": [32, 32],
     "namrz": [32, 32],
@@ -41,12 +41,12 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [10], # Max. level of the AMR grid to be read
-    "up_to_level": [10], # AMR level up to which calculate
+    "level": [4], # Max. level of the AMR grid to be read
+    "up_to_level": [4], # AMR level up to which calculate
     # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
     "units": 1.0, # Factor to convert the units of the resulting volume integrals
     "logbins": True, # Use logarithmic bins
-    "F": 2, # Factor to multiply the viral radius to define the box size
+    "F": 3, # Factor to multiply the viral radius to define the box size
     "vir_kind": 2, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "region": 'BOX', # Region of interest shape to calculate the induction components (BOX, SPH, or None)
@@ -75,32 +75,41 @@ IND_PARAMS = {
         "magnetic_energy": True # Calculate/plot magnetic energy measured in the simulation
     },
     "return": {
-        "mag": False, # Return magnetic induction components magnitudes
-        "return_vectorial": False, # Return the vectorial components of the induction terms
-        "return_induction": False, # Return the induction terms arrays
-        "return_induction_energy": False, # Return the induction energy terms arrays
-        "projection": False, # Calculate the projection of the induction components
-        "A2U": False # Transform the AMR grid to a uniform grid
+        "enabled": True, # Master switch to export volumetric fields per snapshot
+        "format": 'vtk', # Export format: 'npy', 'npz', or 'vtk'
+        "grid": "uniform", # Export grid representation: 'amr' (patch lists) or 'uniform'
+        "fields": {
+            "density": True, # Physical density field rho
+            "density_contrast": False, # Density contrast field (rho/rho_b)
+            "velocity": True, # Velocity vector (vx, vy, vz)
+            "magnetic_normalized": True, # Normalized magnetic field (Bx, By, Bz)
+            "magnetic_physical": False, # Physical magnetic field (bx, by, bz)
+            "magnitudes_components": False, # Magnitudes of induction components
+            "vectorial": False, # Save vectorial calculus outputs when available
+            "induction": False, # Save induction-equation outputs when available
+            "induction_energy": True # Save induction-energy outputs when available
+        },
+        
     },
     "divergence_filter": {
-        "enabled": True, # Whether to apply a filter to the divergence field based on percentile thresholds
+        "enabled": True, # Master switch for applying a filter to the divergence field based on percentile thresholds
         "method": "mask", # "mask" or "clip" for masking or clipping values above the threshold
         "percentile": 99, # Percentile threshold to apply for the filter (if enabled)
         "use_abs": True, # Whether to use absolute values when applying the percentile threshold (recommended)
         "exclude_zeros": True # Whether to exclude zero values when calculating the percentile threshold (recommended)
     },
     "energy_evolution": {
-        "enabled": True, # Calculate the evolution of the energy budget
+        "enabled": False, # Master switch for calculating the evolution of the energy budget
         "derivative": 'central', # Derivative to use for the evolution (implicit_forward, central, alpha_fit, RK or rate)
         "normalized": False, # True: keeps B/sqrt(rho_b) in magnetic evolution outputs; False: shows results respect to physical B
         "volume_coordinates": 'physical', # Integration volume differential: 'physical' (a^3 dV) or 'comoving' (dV)
         "normalize_by_volume": False, # If True, divide integrated quantities by total integration volume
         "plot_total": True, # Calculate and plot total (integrated) energy evolution
         "plot_differential": True, # Calculate and plot differential (rate of change) energy evolution
-        "plot_profiles": True # Plot radial profiles for induction-energy terms
+        "plot_profiles": False # Plot radial profiles for induction-energy terms
     },
     "production_dissipation": {
-        "enabled": True, # Calculate production/dissipation decomposition from induction-energy terms
+        "enabled": False, # Master switch for calculating production/dissipation decomposition from induction-energy terms
         "normalized": False, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
         "volume_coordinates": 'physical', # Integration volume differential for P/D: 'physical' (a^3 dV) or 'comoving' (dV)
         "normalize_by_volume": False, # If True, divide P/D integrated quantities by total integration volume
@@ -111,11 +120,14 @@ IND_PARAMS = {
         "plot_fractional_profiles": True # Plot fractional contribution profiles for production/dissipation terms
     },
     "percentiles": {
-        "enabled": True, # Calculate percentile thresholds of the magnetic field divergence
+        "enabled": False, # Master switch for calculating percentile thresholds of the magnetic field divergence
         "percentile_levels": (95, 90, 75, 50, 25) # Percentile thresholds to compute
     },
+    "projection": {
+        "enabled": False, # Master switch for calculating the projection of the induction components
+    },
     "test_params": {
-        "test": False,
+        "test": False, # Master switch for running the test module with the specified parameters
         "B0": 2.3e-8
     }
 }
@@ -128,8 +140,8 @@ OUTPUT_PARAMS = {
     "save": True,
     "verbose": True,
     "save_terminal": True,  # Save terminal output to file
-    # "bitformat": np.float32,
-    "bitformat": np.float64,
+    "bitformat": np.float32,
+    # "bitformat": np.float64,
     "format": "npy",
     "ncores": 1,
     "Save_Cores": 2, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
@@ -147,26 +159,26 @@ OUTPUT_PARAMS = {
     # Recycle worker processes every N tasks in parallel mode to mitigate RAM growth
     # (set to None to disable recycling).
     "max_tasks_per_child": 1,
-    "run": f'MAGNAS_SSD_Evo_PD_42',
+    "run": f'MAGNAS_SSD_Evo_PV_1',
     # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
     # "run": f'MAGNAS_SSD_Evo_RAM_test_1_serial',
-    # "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
+    "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
     # "sims": ["box_L40_p32_128_l9_2026_full_box_7_bis"], # Simulation names, must match the nameof the simulations folder in the data directory
-    "sims": ["prova_ORPHEUS_l10_1e4cool"],
+    # "sims": ["prova_ORPHEUS_l10_1e4cool"],
     # "sims": ["cluster_B_low_res_paper_2020", "cluster_L40_p32_agn_sim_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
     # "it": [[1300], [500]], # For different redshift snap iterations analysis
-    # "it": [900],
+    "it": [1200],
     # "it": [2119],
-    "it": list(range(100, 900, 50)), # For different redshift snap iterations analysis
+    # "it": list(range(100, 900, 50)), # For different redshift snap iterations analysis
     # "it": list(range(1900, 2101, 50)) + [2119],
     # "it": list(range(50, 2101, 50)) + [2119], # For different redshift snap iterations analysis
     # "it": list(range(350, 2101, 50)) + [2119], # For different redshift snap iterations analysis
-    # "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    # "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    # "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    "dir_DM": "/mnt/perdiu/scratch/",
-    "dir_gas": "/mnt/perdiu/scratch/",
-    "dir_grids": "/mnt/perdiu/scratch/",
+    "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+    # "dir_DM": "/mnt/perdiu/scratch/",
+    # "dir_gas": "/mnt/perdiu/scratch/",
+    # "dir_grids": "/mnt/perdiu/scratch/",
     "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF/",
     "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX/",
     # "outdir": "/scratch/marcomol/output_files_PRIMAL_",
@@ -175,7 +187,8 @@ OUTPUT_PARAMS = {
     "rawdir": "raw_data_out/",
     "terminaldir": "terminal_output/",
     "ID1": "dynamo/",
-    "ID2": "new_sim_induction_analysis",
+    "ID2": "ParaView",
+    # "ID2": "new_sim_induction_analysis",
     # "ID2": "RAM_test",
     "random_seed": 23 # Set the random seed for reproducibility
 }
@@ -624,6 +637,52 @@ diff_cfg = IND_PARAMS.get("differentiation", {})
 ret_cfg = IND_PARAMS.get("return", {})
 pct_cfg = IND_PARAMS.get("percentiles", {})
 
+proj_cfg = IND_PARAMS.get("projection", {})
+proj_cfg.setdefault("enabled", False)
+if not isinstance(proj_cfg, dict):
+    raise ValueError("IND_PARAMS['projection'] must be a dictionary.")
+if not isinstance(proj_cfg.get("enabled"), bool):
+    raise ValueError("IND_PARAMS['projection']['enabled'] must be a boolean (True or False).")
+IND_PARAMS["projection"] = proj_cfg
+
+ret_cfg.setdefault("enabled", False)
+ret_cfg.setdefault("format", "npy")
+ret_cfg.setdefault("grid", "amr")
+ret_cfg.setdefault("fields", {})
+
+default_return_fields = {
+    "density": True,
+    "density_contrast": False,
+    "velocity": True,
+    "magnetic_normalized": True,
+    "magnetic_physical": False,
+    "magnitudes_components": False,
+    "vectorial": False,
+    "induction": False,
+    "induction_energy": False,
+}
+for _key, _default in default_return_fields.items():
+    ret_cfg["fields"].setdefault(_key, _default)
+
+
+allowed_return_formats = ["npy", "npz", "vtk"]
+allowed_return_grids = ["amr", "uniform"]
+if ret_cfg.get("format") not in allowed_return_formats:
+    raise ValueError("IND_PARAMS['return']['format'] must be one of: 'npy', 'npz', 'vtk'.")
+if ret_cfg.get("grid") not in allowed_return_grids:
+    raise ValueError("IND_PARAMS['return']['grid'] must be either 'amr' or 'uniform'.")
+if not isinstance(ret_cfg.get("enabled"), bool):
+    raise ValueError("IND_PARAMS['return']['enabled'] must be a boolean (True or False).")
+if not isinstance(ret_cfg.get("fields"), dict):
+    raise ValueError("IND_PARAMS['return']['fields'] must be a dictionary.")
+for _key in default_return_fields:
+    if not isinstance(ret_cfg["fields"].get(_key), bool):
+        raise ValueError(f"IND_PARAMS['return']['fields']['{_key}'] must be a boolean (True or False).")
+if ret_cfg.get("format") == "vtk" and ret_cfg.get("grid") != "uniform":
+    raise ValueError("IND_PARAMS['return']['format']='vtk' requires IND_PARAMS['return']['grid']='uniform'.")
+
+IND_PARAMS["return"] = ret_cfg
+
 if diff_cfg.get("stencil") not in [3, 5]:
     raise ValueError("Invalid differentiation stencil value. It must be either 3 or 5.")
 elif diff_cfg.get("stencil") == 3:
@@ -686,31 +745,15 @@ IND_PARAMS["energy_evolution"]["plot_profiles"] = bool(energy_evo.get("plot_prof
 IND_PARAMS["production_dissipation"]["plot_profiles"] = bool(prod_diss_cfg.get("plot_profiles", False))
 IND_PARAMS["production_dissipation"]["plot_fractional_profiles"] = bool(prod_diss_cfg.get("plot_fractional_profiles", False))
 
-# Validate consistency: cannot request plots/returns for disabled subsystems
-if not energy_evo.get("enabled", True) and energy_evo.get("plot_profiles", False):
-    raise ValueError(
-        "Error: energy_evolution['plot_profiles'] = True but energy_evolution['enabled'] = False. "
-        "Cannot request profiles for disabled subsystem."
-    )
-
-if not prod_diss_cfg.get("enabled", True) and prod_diss_cfg.get("plot_profiles", False):
-    raise ValueError(
-        "Error: production_dissipation['plot_profiles'] = True but production_dissipation['enabled'] = False. "
-        "Cannot request profiles for disabled subsystem."
-    )
-if not prod_diss_cfg.get("enabled", True) and prod_diss_cfg.get("plot_fractional_profiles", False):
-    raise ValueError(
-        "Error: production_dissipation['plot_fractional_profiles'] = True but production_dissipation['enabled'] = False. "
-        "Cannot request fractional profiles for disabled subsystem."
-    )
+# Note: enabled acts as master switch; all plot flags are ignored when enabled=False
 
 # Determine if there's actually something to do (coupling: nothing computed unless enabled + something to plot/return)
 # Energy evolution is truly needed if enabled AND has any plot enabled
 energy_evolution_truly_enabled = (
     energy_evo.get("enabled", True) and 
     (energy_evo.get("plot_total", True) or 
-     energy_evo.get("plot_differential", True) or 
-     energy_evo.get("plot_profiles", False))
+    energy_evo.get("plot_differential", True) or 
+    energy_evo.get("plot_profiles", False))
 )
 IND_PARAMS["energy_evolution"]["_truly_enabled"] = energy_evolution_truly_enabled
 
@@ -718,8 +761,8 @@ IND_PARAMS["energy_evolution"]["_truly_enabled"] = energy_evolution_truly_enable
 pd_truly_enabled = (
     prod_diss_cfg.get("enabled", True) and 
     (prod_diss_cfg.get("plot_absolute", True) or 
-     prod_diss_cfg.get("plot_fractional", True) or 
-     prod_diss_cfg.get("plot_net", True) or 
+    prod_diss_cfg.get("plot_fractional", True) or 
+    prod_diss_cfg.get("plot_net", True) or 
     prod_diss_cfg.get("plot_profiles", False) or
     prod_diss_cfg.get("plot_fractional_profiles", False))
 )
