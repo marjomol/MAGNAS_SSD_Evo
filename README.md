@@ -60,9 +60,11 @@ pip install -r requirements.txt
 ## Quick Start
 
 1. Edit `config.py`:
-- Select simulation(s), snapshots, input/output folders.
-- Set numerical options (stencil, interpolation, filter, levels).
-- Enable/disable evolution and profile outputs.
+   - Set `OUTPUT_PARAMS["paths"]` to your preferred output root and organization labels.
+   - Define `OUTPUT_PARAMS["simulations"]` with your simulation(s), input paths, and snapshot iterations.
+   - Set `enabled=True` for simulations to include, `False` to skip.
+   - Adjust `IND_PARAMS` for numerical options (stencil, interpolation, filter, levels).
+   - Enable/disable `EVO_PLOT_PARAMS`, `PROD_DISS_PLOT_PARAMS`, and other output modules as needed.
 
 2. Run pipeline:
 
@@ -71,21 +73,129 @@ python main.py
 ```
 
 3. Check outputs:
-- Plots in `OUTPUT_PARAMS["image_folder"]`.
-- Raw processed arrays in `OUTPUT_PARAMS["data_folder"]`.
-- Terminal logs in `OUTPUT_PARAMS["terminal_folder"]` when `save_terminal=True`.
+   - Plots in `OUTPUT_PARAMS["paths"]["outdir"] / OUTPUT_PARAMS["paths"]["plotdir"]`.
+   - Raw processed arrays in `OUTPUT_PARAMS["paths"]["outdir"] / OUTPUT_PARAMS["paths"]["rawdir"]`.
+   - Terminal logs in `OUTPUT_PARAMS["paths"]["outdir"] / OUTPUT_PARAMS["paths"]["terminaldir"]` when `save_terminal=True`.
 
 ## Configuration Guide
 
 Main configuration blocks are in `config.py`:
 
 - `IND_PARAMS`: numerical and physical analysis options.
-- `OUTPUT_PARAMS`: IO paths, execution mode, output formatting.
+- `OUTPUT_PARAMS`: IO paths, execution mode, output formatting, and per-simulation settings.
 - `EVO_PLOT_PARAMS`: temporal energy-evolution plot settings.
 - `PROD_DISS_PLOT_PARAMS`: temporal production/dissipation plot settings.
 - `INDUCTION_PROFILE_PLOT_PARAMS`: induction radial profile styling and selection.
 - `PROD_DISS_PROFILE_PLOT_PARAMS`: P/D radial profile styling and selection.
 - `DEBUG_PARAMS`: optional diagnostics modules.
+
+### OUTPUT_PARAMS Structure
+
+The `OUTPUT_PARAMS` dictionary now uses a nested structure to support multi-simulation analysis with independent configuration per simulation.
+
+#### Overview
+
+```python
+OUTPUT_PARAMS = {
+    "paths": {
+        "outdir": "/absolute/path/to/outputs/",
+        "plotdir": "plots/",
+        "rawdir": "raw_data_out/",
+        "terminaldir": "terminal_output/",
+        "ID1": "dynamo/",
+        "ID2": "ParaView/",
+        "run": "MAGNAS_SSD_Evo_PV_1"
+    },
+    "simulations": {
+        "cluster_B_low_res_paper_2020": {
+            "enabled": True,
+            "it": [1200, 1300, 1400],
+            "paths": {
+                "dir_DM": "/path/to/DM/snapshots/",
+                "dir_gas": "/path/to/gas/snapshots/",
+                "dir_grids": "/path/to/AMR/grids/",
+                "dir_halos": "/path/to/halo/data/",
+                "dir_vortex": "/path/to/vortex/data/"
+            }
+        },
+        "another_simulation": {
+            "enabled": False,
+            "it": [900, 950],
+            "paths": { ... }
+        }
+    }
+}
+```
+
+#### Key Components
+
+**`paths` (dict)**:
+- Shared output roots used across all enabled simulations.
+- `outdir`: base output directory (absolute path recommended).
+- `plotdir`, `rawdir`, `terminaldir`: relative subdirectories for plots, raw arrays, and logs.
+- `ID1`, `ID2`: additional organization labels for specific output types.
+- `run`: run identifier used in plot titles and filenames.
+
+**`simulations` (dict)**:
+- Per-simulation configuration keyed by simulation name.
+- Each simulation has:
+  - `enabled` (bool): set to `True` to include in analysis, `False` to skip.
+  - `it` (list of ints): snapshot iterations to process for this simulation.
+  - `paths` (dict): simulation-specific data locations:
+    - `dir_DM`, `dir_gas`, `dir_grids`: input AMR snapshot directories.
+    - `dir_halos`, `dir_vortex`: halo and vortex analysis directories (if available).
+
+#### Example: Multi-Simulation Run
+
+To analyze 2 simulations but disable one:
+
+```python
+OUTPUT_PARAMS = {
+    "paths": {
+        "outdir": "/mnt/data/outputs/",
+        "plotdir": "plots/",
+        "rawdir": "processed_arrays/",
+        "run": "Comparison_Run_Apr2026"
+    },
+    "simulations": {
+        "sim_low_res": {
+            "enabled": True,
+            "it": [1000, 1100, 1200],
+            "paths": {
+                "dir_DM": "/data/sim_low_res/dm_snapshots/",
+                "dir_gas": "/data/sim_low_res/gas_snapshots/",
+                "dir_grids": "/data/sim_low_res/grids/",
+                "dir_halos": "/data/sim_low_res/halos/",
+                "dir_vortex": "/data/sim_low_res/vortex/"
+            }
+        },
+        "sim_high_res": {
+            "enabled": False,      # Skip this simulation for now
+            "it": [950, 1050],
+            "paths": {
+                "dir_DM": "/data/sim_high_res/dm_snapshots/",
+                "dir_gas": "/data/sim_high_res/gas_snapshots/",
+                "dir_grids": "/data/sim_high_res/grids/",
+                "dir_halos": "/data/sim_high_res/halos/",
+                "dir_vortex": "/data/sim_high_res/vortex/"
+            }
+        }
+    }
+}
+```
+
+#### Index Mapping in Parallel/Serial Modes
+
+The pipeline automatically:
+1. **Filters active simulations**: only processes simulations with `enabled=True`.
+2. **Preserves index alignment**: maintains mapping between `IND_PARAMS` (per-simulation parameter arrays) and the active simulation subset.
+3. **Generates active lists**:
+   - `active_sim_indices`: original config indices of enabled simulations.
+   - `active_sim_names`: names of enabled simulations.
+   - `active_sim_it`: iteration lists for enabled simulations.
+   - `active_sim_paths`: path dicts for enabled simulations.
+
+This allows per-simulation numerical parameters (e.g., different induction stencil settings) to be correctly aligned with the active simulations during execution.
 
 ### Recent Profile-Plot Controls
 
@@ -109,7 +219,7 @@ Notes:
 
 - `vtk` is directly compatible with ParaView and is exported as a homogeneous grid.
 - For `vtk`, set `grid="uniform"`.
-- Exported files are written under `OUTPUT_PARAMS["data_folder"] / volumetric_exports / <sim> / it_<snap> / level_<L>`.
+- Exported files are written under `OUTPUT_PARAMS["paths"]["outdir"] / OUTPUT_PARAMS["paths"]["rawdir"] / volumetric_exports / <sim> / it_<snap> / level_<L>`.
 
 ## Processing Notes
 

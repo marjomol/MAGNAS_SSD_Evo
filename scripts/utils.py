@@ -18,7 +18,10 @@ import io
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 from scipy.io import FortranFile
-# import h5py
+try:
+    import h5py
+except Exception:
+    h5py = None
 import psutil
 import amr2uniform as a2u
 from multiprocessing import Pool
@@ -178,7 +181,10 @@ def build_terminal_log_filename(sim_name, snapshot_it, ind_params, out_params):
     parent = "parent" if diff_params.get("parent", False) else "noparent"
     siblings = "sib" if diff_params.get("use_siblings", False) else "nosib"
     region = ind_params.get("region", "None")
-    run = out_params.get("run", out_params.get("ID2", "run"))
+    run = out_params.get("paths", {}).get(
+        "run",
+        out_params.get("run", out_params.get("ID2", "run"))
+    )
     
     level = ind_params.get("level", "NA")
     up_to_level = ind_params.get("up_to_level", "NA")
@@ -892,7 +898,7 @@ def export_snapshot_fields(
     if export_format in {'vtk', 'vtk_ascii'}:
         vtk_path = os.path.join(
             export_dir,
-            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}.vtk"
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat}.vtk"
         )
         _write_legacy_vtk_structured_points(vtk_path, scalar_out, vector_out, origin=origin, spacing=spacing)
         written_paths.append(vtk_path)
@@ -911,7 +917,7 @@ def export_snapshot_fields(
     if export_format == 'vtk_binary':
         vtk_base = os.path.join(
             export_dir,
-            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}"
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat}"
         )
         vtk_path = _write_binary_vtk_rectilinear(vtk_base, scalar_out, vector_out, origin=origin, spacing=spacing)
         if vtk_path:
@@ -952,7 +958,7 @@ def export_snapshot_fields(
                 payload[_safe_export_name(name)] = np.array([vx, vy, vz], dtype=object)
         out_path = os.path.join(
             export_dir,
-            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}.npz"
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat}.npz"
         )
         np.savez_compressed(out_path, **payload)
         written_paths.append(out_path)
@@ -1107,6 +1113,8 @@ def save_magnetic_field_seed(B, axis, real, dir, format, run):
         else:
             np.save(os.path.join(dir, f'{name}.npy'), B[0].astype(out_params["complex_bitformat"]))
     elif format == 'hdf5':
+        if h5py is None:
+            raise ImportError("h5py is required for HDF5 export but is not installed")
         with h5py.File(os.path.join(dir, f'{name}.h5'), 'w') as f:
             f.create_dataset(f'{name}', data=B[0], chunks=True)
     elif format == 'fortran':
@@ -1162,6 +1170,8 @@ def load_magnetic_field(axis, real, rshape, dir, format, run):
     elif format == 'npy':
         B = np.load(os.path.join(dir, f'{name}.npy'))
     elif format == 'hdf5':
+        if h5py is None:
+            raise ImportError("h5py is required for HDF5 import but is not installed")
         with h5py.File(os.path.join(dir, f'{name}.h5'), 'r') as f:
             B = f[f'{name}'][:]  # Load the entire dataset
     elif format == 'fortran':

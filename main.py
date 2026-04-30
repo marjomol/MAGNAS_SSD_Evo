@@ -21,6 +21,14 @@ np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibil
 import gc
 memory_monitor = MemoryMonitor(out_params)
 
+active_sim_indices = out_params.get("active_sim_indices", list(range(len(out_params.get("sims", [])))))
+active_sims = out_params.get("active_sim_names", out_params.get("sims", []))
+active_it = out_params.get("active_sim_it", out_params.get("it", []))
+active_dir_params = out_params.get("active_dir_params_list", out_params.get("dir_params", []))
+active_dir_grids = out_params.get("active_dir_grids_list", out_params.get("dir_grids_list", [out_params.get("dir_grids")]))
+active_dir_gas = out_params.get("active_dir_gas_list", out_params.get("dir_gas_list", [out_params.get("dir_gas")]))
+active_dir_halos = out_params.get("active_dir_halos_list", out_params.get("dir_halos_list", [out_params.get("dir_halos")]))
+
 _log_cm = None
 if out_params.get("save_terminal", False):
     log_filename = utils.build_terminal_log_filename("all", "all", ind_params, out_params)
@@ -75,13 +83,14 @@ if __name__ == "__main__":
         Rad = []
         Region_Coord = []
         Region_Size = []
-        for i, sim_name in enumerate(out_params["sims"]):
-            it_list = out_params["it"][i]
+        for active_pos, config_index in enumerate(active_sim_indices):
+            sim_name = active_sims[active_pos]
+            it_list = active_it[active_pos]
             coords_i, rad_i = find_most_massive_halo(
                 sim_name, it_list,
                 ind_params["a0"],
-                out_params["dir_halos"],
-                out_params["dir_grids"],
+                active_dir_halos[active_pos],
+                active_dir_grids[active_pos],
                 out_params["data_folder"],
                 vir_kind=ind_params["vir_kind"],
                 rad_kind=ind_params["rad_kind"],
@@ -89,7 +98,7 @@ if __name__ == "__main__":
             )
             region_coord_i, region_size_i = create_region(
                 sim_name, it_list, coords_i, rad_i,
-                size=ind_params["size"][i], F=ind_params["F"], reg=ind_params["region"],
+                size=ind_params["size"][config_index], F=ind_params["F"], reg=ind_params["region"],
                 verbose=out_params["verbose"]
             )
             Coords.append(coords_i)
@@ -126,8 +135,9 @@ if __name__ == "__main__":
                 out_params.get("max_tasks_per_child", None)
             )
             with ProcessPoolExecutor(**executor_kwargs) as executor:
-                for i, sims in enumerate(out_params["sims"]):
-                    it_list = out_params["it"][i]
+                for active_pos, config_index in enumerate(active_sim_indices):
+                    sims = active_sims[active_pos]
+                    it_list = active_it[active_pos]
                     profile_it_indx = ind_prof_plot_params.get("it_indx", [-1])
                     pd_profile_it_indx = pd_prof_plot_params.get("it_indx", [-1])
                     debug_it_indx = debug_params.get("it_indx", [-1])
@@ -153,24 +163,24 @@ if __name__ == "__main__":
                         fut = executor.submit(
                             process_iteration_with_logging,
                             ind_params["components"],
-                            out_params["dir_grids"],
-                            out_params["dir_gas"],
-                            out_params["dir_params"][i],
+                            active_dir_grids[active_pos],
+                            active_dir_gas[active_pos],
+                            active_dir_params[active_pos],
                             sims,
                             it,
-                            Coords[i][j],
-                            Region_Coord[i][j],
-                            Rad[i][j],
-                            ind_params["rmin"][i],
+                            Coords[active_pos][j],
+                            Region_Coord[active_pos][j],
+                            Rad[active_pos][j],
+                            ind_params["rmin"][config_index],
                             lvl,
                             lvl,
-                            ind_params["nmax"][i],
-                            ind_params["size"][i],
+                            ind_params["nmax"][config_index],
+                            ind_params["size"][config_index],
                             ind_params["H0"],
                             ind_params["a0"],
                             test=ind_params["test_params"],
                             units=ind_params["units"],
-                            nbins=ind_params["nbins"][i],
+                            nbins=ind_params["nbins"][config_index],
                             logbins=ind_params["logbins"],
                             stencil=diff_params["stencil"],
                             buffer=diff_params["buffer"],
@@ -419,8 +429,8 @@ if __name__ == "__main__":
                 
                 for vol_idx, volume in enumerate(scan_volumes):
                     ind_meta = ind_params.copy()
-                    sim = scan_meta_sim[vol_idx] if vol_idx < len(scan_meta_sim) else out_params["sims"][0]
-                    fallback_it = out_params["it"][0][0] if out_params["it"] and out_params["it"][0] else 0
+                    sim = scan_meta_sim[vol_idx] if vol_idx < len(scan_meta_sim) else active_sims[0]
+                    fallback_it = active_it[0][0] if active_it and active_it[0] else 0
                     it_val = scan_meta_it[vol_idx] if vol_idx < len(scan_meta_it) else fallback_it
                     idx = scan_meta_idx[vol_idx] if vol_idx < len(scan_meta_idx) else vol_idx
                     zeta_val = all_data['grid_zeta'][idx]
@@ -485,13 +495,14 @@ if __name__ == "__main__":
             Rad = []
             Region_Coord = []
             Region_Size = []
-            for i, sim_name in enumerate(out_params["sims"]):
-                it_list = out_params["it"][i]
+            for active_pos, config_index in enumerate(active_sim_indices):
+                sim_name = active_sims[active_pos]
+                it_list = active_it[active_pos]
                 coords_i, rad_i = find_most_massive_halo(
                     sim_name, it_list,
                     ind_params["a0"],
-                    out_params["dir_halos"],
-                    out_params["dir_grids"],
+                    active_dir_halos[active_pos],
+                    active_dir_grids[active_pos],
                     out_params["data_folder"],
                     vir_kind=ind_params["vir_kind"],
                     rad_kind=ind_params["rad_kind"],
@@ -499,7 +510,7 @@ if __name__ == "__main__":
                 )
                 region_coord_i, region_size_i = create_region(
                     sim_name, it_list, coords_i, rad_i,
-                    size=ind_params["size"][i], F=ind_params["F"], reg=ind_params["region"],
+                    size=ind_params["size"][config_index], F=ind_params["F"], reg=ind_params["region"],
                     verbose=out_params["verbose"]
                 )
                 Coords.append(coords_i)
@@ -530,8 +541,9 @@ if __name__ == "__main__":
             iteration_counter = 0
             
             # Process each iteration in serial
-            for sims, i in zip(out_params["sims"], range(len(out_params["sims"]))):
-                it_list = out_params["it"][i]
+            for active_pos, config_index in enumerate(active_sim_indices):
+                sims = active_sims[active_pos]
+                it_list = active_it[active_pos]
                 profile_it_indx = ind_prof_plot_params.get("it_indx", [-1])
                 pd_profile_it_indx = pd_prof_plot_params.get("it_indx", [-1])
                 debug_it_indx = debug_params.get("it_indx", [-1])
@@ -562,24 +574,24 @@ if __name__ == "__main__":
                     induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform,
                     diver_B_percentiles, debug_fields) = process_iteration(
                         components=ind_params["components"],
-                        dir_grids=out_params["dir_grids"],
-                        dir_gas=out_params["dir_gas"],
-                        dir_params=out_params["dir_params"][i],
+                        dir_grids=active_dir_grids[active_pos],
+                        dir_gas=active_dir_gas[active_pos],
+                        dir_params=active_dir_params[active_pos],
                         sims=sims,
                         it=it,
-                        coords=Coords[i][j],
-                        region_coords=Region_Coord[i][j],
-                        rad=Rad[i][j],
-                        rmin=ind_params["rmin"][i],
+                        coords=Coords[active_pos][j],
+                        region_coords=Region_Coord[active_pos][j],
+                        rad=Rad[active_pos][j],
+                        rmin=ind_params["rmin"][config_index],
                         level=ind_params["level"][L],
                         up_to_level=ind_params["level"][L],
-                        nmax=ind_params["nmax"][i],
-                        size=ind_params["size"][i],
+                        nmax=ind_params["nmax"][config_index],
+                        size=ind_params["size"][config_index],
                         H0=ind_params["H0"],
                         a0=ind_params["a0"],
                         test=ind_params["test_params"],
                         units=ind_params["units"],
-                        nbins=ind_params["nbins"][i],
+                        nbins=ind_params["nbins"][config_index],
                         logbins=ind_params["logbins"],
                         stencil=diff_params["stencil"],
                         buffer=diff_params["buffer"],
@@ -856,8 +868,8 @@ if __name__ == "__main__":
                 for vol_idx, volume in enumerate(scan_volumes):
                     ind_meta = ind_params.copy()
                     
-                    sim = scan_meta_sim[vol_idx] if vol_idx < len(scan_meta_sim) else out_params["sims"][0]
-                    fallback_it = out_params["it"][0][0] if out_params["it"] and out_params["it"][0] else 0
+                    sim = scan_meta_sim[vol_idx] if vol_idx < len(scan_meta_sim) else active_sims[0]
+                    fallback_it = active_it[0][0] if active_it and active_it[0] else 0
                     it_val = scan_meta_it[vol_idx] if vol_idx < len(scan_meta_it) else fallback_it
                     idx = scan_meta_idx[vol_idx] if vol_idx < len(scan_meta_idx) else vol_idx
                     # In serial mode, all_data stores lists not dicts by sim
@@ -946,8 +958,9 @@ minutes, seconds = divmod(rem, 60)
 
 print(f'***********************************************************')
 print(f"Execution time: {int(hours)}h {int(minutes)}m {seconds:.5f}s")
-for i in range(len(out_params["sims"])):
-    print(f"Simulation: {out_params['sims'][i]}")
-    print(f"Box Cell Size: {ind_params['nmax'][i], ind_params['nmay'][i], ind_params['nmaz'][i]}")
-    print(f"Nº Cells: {ind_params['nmax'][i]*ind_params['nmay'][i]*ind_params['nmaz'][i]}")
+for active_pos, config_index in enumerate(active_sim_indices):
+    sim_name = active_sims[active_pos]
+    print(f"Simulation: {sim_name}")
+    print(f"Box Cell Size: {ind_params['nmax'][config_index], ind_params['nmay'][config_index], ind_params['nmaz'][config_index]}")
+    print(f"Nº Cells: {ind_params['nmax'][config_index]*ind_params['nmay'][config_index]*ind_params['nmaz'][config_index]}")
 print(f'***********************************************************')

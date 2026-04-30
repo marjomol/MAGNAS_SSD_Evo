@@ -89,7 +89,6 @@ IND_PARAMS = {
             "induction": False, # Save induction-equation outputs when available
             "induction_energy": True # Save induction-energy outputs when available
         },
-        
     },
     "divergence_filter": {
         "enabled": True, # Master switch for applying a filter to the divergence field based on percentile thresholds
@@ -135,19 +134,19 @@ IND_PARAMS = {
 # Directories and Results Parameters #
 
 OUTPUT_PARAMS = {
-    # "save": False,
-    # "verbose": False,
+    # General execution and output controls shared by all simulations.
     "save": True,
     "verbose": True,
     "save_terminal": True,  # Save terminal output to file
     "bitformat": np.float32,
-    # "bitformat": np.float64,
-    "format": "npy",
+    "random_seed": 23,  # Set the random seed for reproducibility
     "ncores": 1,
-    "Save_Cores": 2, # Number of cores to save for the system (Increase this number if having troubles with the memory when multiprocessing)
-    "memory_safety_factor": 1.88, # Optional empirical correction for memory estimator (1.0 = no correction).
-        # Increase (e.g. 1.3-2.0) if observed peak RAM is consistently above estimated RAM.
+    "Save_Cores": 2,  # Number of cores to reserve for the system (helps multiprocessing safety)
+    "memory_safety_factor": 1.88,  # Optional empirical correction for memory estimator (1.0 = no correction).
+    # Increase (e.g. 1.3-2.0) if observed peak RAM is consistently above estimated RAM.
     # Optional runtime RAM profiling in main.py
+    "max_tasks_per_child": 1,   # Recycle worker processes every N tasks in parallel mode to mitigate RAM growth
+    # (set to None to disable recycling).
     "memory_profiling": {
         "enabled": False,
         "log_interval": 1,       # Log every N processed snapshots
@@ -156,41 +155,51 @@ OUTPUT_PARAMS = {
         "gc_main_each_iteration": True,  # Run gc.collect() in main process after each processed snapshot
         "gc_worker_end": True     # Run gc.collect() inside each worker at end of process_iteration
     },
-    # Recycle worker processes every N tasks in parallel mode to mitigate RAM growth
-    # (set to None to disable recycling).
-    "max_tasks_per_child": 1,
-    "run": f'MAGNAS_SSD_Evo_PV_1',
-    # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
-    # "run": f'MAGNAS_SSD_Evo_RAM_test_1_serial',
-    "sims": ["cluster_B_low_res_paper_2020"], # Simulation names, must match the name of the simulations folder in the data directory
-    # "sims": ["box_L40_p32_128_l9_2026_full_box_7_bis"], # Simulation names, must match the nameof the simulations folder in the data directory
-    # "sims": ["prova_ORPHEUS_l10_1e4cool"],
-    # "sims": ["cluster_B_low_res_paper_2020", "cluster_L40_p32_agn_sim_7_bis"], # Simulation names, must match the name of the simulations folder in the data directory
-    # "it": [[1300], [500]], # For different redshift snap iterations analysis
-    "it": [1200],
-    # "it": [2119],
-    # "it": list(range(100, 900, 50)), # For different redshift snap iterations analysis
-    # "it": list(range(1900, 2101, 50)) + [2119],
-    # "it": list(range(50, 2101, 50)) + [2119], # For different redshift snap iterations analysis
-    # "it": list(range(350, 2101, 50)) + [2119], # For different redshift snap iterations analysis
-    "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
-    # "dir_DM": "/mnt/perdiu/scratch/",
-    # "dir_gas": "/mnt/perdiu/scratch/",
-    # "dir_grids": "/mnt/perdiu/scratch/",
-    "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF/",
-    "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX/",
-    # "outdir": "/scratch/marcomol/output_files_PRIMAL_",
-    "outdir": "/home/marcomol/trabajo/data/out/",
-    "plotdir": "plots/",
-    "rawdir": "raw_data_out/",
-    "terminaldir": "terminal_output/",
-    "ID1": "dynamo/",
-    "ID2": "ParaView",
-    # "ID2": "new_sim_induction_analysis",
-    # "ID2": "RAM_test",
-    "random_seed": 23 # Set the random seed for reproducibility
+    "paths": {
+        # Shared output roots used to build the final folders.
+        "outdir": "/home/marcomol/trabajo/data/out/",
+        "plotdir": "plots/",
+        "rawdir": "raw_data_out/",
+        "terminaldir": "terminal_output/",
+        "ID1": "dynamo/",
+        "ID2": "ParaView",
+        "run": f'MAGNAS_SSD_Evo_PV_1',
+        # "ID2": "new_sim_induction_analysis",
+        # "ID2": "RAM_test",
+        # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
+        # "run": f'MAGNAS_SSD_Evo_RAM_test_1_serial',
+    },
+    "simulations": {
+        # Simulation names must match the folder names in the data directory.
+        # Each entry will be used to build the order established in simulations.sims.
+        # Scalar values are expanded to match the number of simulations.
+        "cluster_B_low_res_paper_2020": {
+            "enabled": True, # Whether to include this simulation in the analysis (if False, it will be skipped)
+            "it": [1200],
+            # "it": [2119],
+            # "it": list(range(1900, 2101, 50)) + [2119],
+            # "it": list(range(350, 2101, 50)) + [2119],
+            "paths": {
+                "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+                "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+                "dir_grids": "/home/marcomol/trabajo/data/in/scratch/quilis/",
+                "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF/",
+                "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX/",
+            },
+        },
+        "prova_ORPHEUS_l10_1e4cool": {
+            "enabled": False, # Whether to include this simulation in the analysis (if False, it will be skipped)
+            "it": [900],
+            # "it": list(range(100, 900, 50)),
+            "paths": {
+                "dir_DM": "/mnt/perdiu/scratch/",
+                "dir_gas": "/mnt/perdiu/scratch/",
+                "dir_grids": "/mnt/perdiu/scratch/",
+                "dir_halos": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_ASOHF/",
+                "dir_vortex": "/home/marcomol/trabajo/data/in/scratch/marcomol/output_files_VORTEX/",
+            },
+        },
+    },
 }
 
 
@@ -316,7 +325,7 @@ EVO_PLOT_PARAMS = {
     'volume_evolution': True, # bool to plot volume evolution as additional figure
     'title': 'Magnetic Field Evolution Analysis',
     'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
+    'run': OUTPUT_PARAMS["paths"]["run"]
 }
 
 PROD_DISS_PLOT_PARAMS = {
@@ -333,7 +342,7 @@ PROD_DISS_PLOT_PARAMS = {
     'line_widths': [5.0, 3.0], # [main, components]
     'title': 'Production and Dissipation Evolution',
     'dpi': 300,
-    'run': OUTPUT_PARAMS["run"],
+    'run': OUTPUT_PARAMS["paths"]["run"],
     'units': IND_PARAMS["units"],
     'plot_total_prod_diss': False, # If False, hide total production/dissipation curves (green/red). Net curves are still plotted when available.
     'plot_absolute': IND_PARAMS["production_dissipation"]["plot_absolute"],
@@ -348,7 +357,7 @@ INDUCTION_PROFILE_PLOT_PARAMS = {
     # 'it_indx': [-1],
     "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
     # 'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
-    # 'it_indx': list(range(len(OUTPUT_PARAMS['it']))), # Index to plot all iterations
+    # 'it_indx': list(range(len(simulation_it))), # Index to plot all iterations
     'x_scale': 'log', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
     'xlim': None, # None for auto
@@ -369,7 +378,7 @@ INDUCTION_PROFILE_PLOT_PARAMS = {
     'fixed_legend': True, # If True, place legend at a fixed position inside axes (best for animations)
     'title': 'Induction Radial Profile',
     'dpi': 300,
-    'run': OUTPUT_PARAMS["run"],
+    'run': OUTPUT_PARAMS["paths"]["run"],
     'plot_density': False, # Whether to plot the density profile as a reference
     'plot_magnetic_energy': False, # Whether to plot the magnetic energy profile as a reference
 }
@@ -401,7 +410,7 @@ PROD_DISS_PROFILE_PLOT_PARAMS = {
     'plot_absolute': False, # Plot production/dissipation component profiles
     'title': 'Production and Dissipation Radial Profile',
     'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
+    'run': OUTPUT_PARAMS["paths"]["run"]
 }
 
 PERCENTILE_PLOT_PARAMS = {
@@ -419,7 +428,7 @@ PERCENTILE_PLOT_PARAMS = {
     'title': 'Divergence Relative Error',
     # 'title': ' Percentile Threshold Evolution',
     'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
+    'run': OUTPUT_PARAMS["paths"]["run"]
 }
 
 SCAN_PLOT_PARAMS = {
@@ -435,15 +444,15 @@ SCAN_PLOT_PARAMS = {
     'interval': 100,             # ms between frames
     'title': 'Buffer Assignment Scan',
     'dpi': 300,
-    'run': OUTPUT_PARAMS["run"]
+    'run': OUTPUT_PARAMS["paths"]["run"]
 }
 
 DEBUG_PARAMS = {
     # Iteration indexes where debug modules (except percentile thresholds) are executed.
-    # Uses Python indexing over OUTPUT_PARAMS['it'] per simulation.
+    # Uses Python indexing over simulation_it per simulation.
     "it_indx": [-1],
     # "it_indx": [0, -1],
-    # "it_indx": list(range(len(OUTPUT_PARAMS['it']))),
+    # "it_indx": list(range(len(simulation_it))),
     # ==== Unigrid Interpolation Mode ====
     "unigrid_interp_mode": 'DIRECT',  # 'DIRECT', 'NGP', or 'TRILINEAR'
                                        # 'DIRECT' (recommended): avoids spurious artifacts from zero-division in base grid
@@ -532,7 +541,7 @@ DEBUG_PARAMS = {
                     "X-Divergence Induction", "Y-Divergence Induction", 
                     "Z-Divergence Induction", "Divergence Induction Energy"],
         "dpi": 300,
-        "run": OUTPUT_PARAMS["run"]
+        "run": OUTPUT_PARAMS["paths"]["run"]
     }
 }
 
@@ -556,21 +565,42 @@ def _expand_per_sim_param(value, sims_count, param_name):
         )
     return [value for _ in range(sims_count)]
 
-def _normalize_it_list(it_value, sims_count):
+def _normalize_it_list(it_value):
     if isinstance(it_value, (list, tuple, np.ndarray)):
-        it_list = list(it_value)
-        if len(it_list) > 0 and all(isinstance(v, (list, tuple, np.ndarray)) for v in it_list):
-            if len(it_list) == 1 and sims_count > 1:
-                return [list(it_list[0]) for _ in range(sims_count)]
-            if len(it_list) == sims_count:
-                return [list(v) for v in it_list]
-            raise ValueError(
-                f"OUTPUT_PARAMS['it'] must have length 1 or {sims_count} when using per-sim lists"
-            )
-        return [list(it_list) for _ in range(sims_count)]
-    return [[it_value] for _ in range(sims_count)]
+        return list(it_value)
+    return [it_value]
 
-sims_count = len(OUTPUT_PARAMS["sims"])
+simulations_cfg = OUTPUT_PARAMS["simulations"]
+common_paths_cfg = OUTPUT_PARAMS["paths"]
+
+simulation_names = []
+simulation_enabled = []
+simulation_it = []
+simulation_paths = []
+simulation_records = {}
+
+for simulation_name, simulation_cfg in simulations_cfg.items():
+    if not isinstance(simulation_cfg, dict):
+        continue
+    enabled = bool(simulation_cfg.get("enabled", True))
+    it_list = _normalize_it_list(simulation_cfg.get("it", []))
+    effective_paths = {**common_paths_cfg, **simulation_cfg.get("paths", {})}
+
+    simulation_names.append(simulation_name)
+    simulation_enabled.append(enabled)
+    simulation_it.append(it_list)
+    simulation_paths.append(effective_paths)
+    simulation_records[simulation_name] = {
+        "enabled": enabled,
+        "it": it_list,
+        "paths": effective_paths,
+    }
+
+active_sim_indices = [i for i, enabled in enumerate(simulation_enabled) if enabled]
+active_sim_names = [simulation_names[i] for i in active_sim_indices]
+active_sim_it = [simulation_it[i] for i in active_sim_indices]
+active_sim_paths = [simulation_paths[i] for i in active_sim_indices]
+sims_count = len(simulation_names)
 
 per_sim_keys = [
     "nmax",
@@ -589,8 +619,16 @@ per_sim_keys = [
 for key in per_sim_keys:
     IND_PARAMS[key] = _expand_per_sim_param(IND_PARAMS[key], sims_count, key)
 
-OUTPUT_PARAMS["it"] = _normalize_it_list(OUTPUT_PARAMS["it"], sims_count)
-OUTPUT_PARAMS["total_iterations"] = sum(len(it_list) for it_list in OUTPUT_PARAMS["it"])
+OUTPUT_PARAMS["simulation_records"] = simulation_records
+OUTPUT_PARAMS["simulation_names"] = simulation_names
+OUTPUT_PARAMS["simulation_it"] = simulation_it
+OUTPUT_PARAMS["simulation_enabled"] = simulation_enabled
+OUTPUT_PARAMS["simulation_paths"] = simulation_paths
+OUTPUT_PARAMS["active_sim_indices"] = active_sim_indices
+OUTPUT_PARAMS["active_sim_names"] = active_sim_names
+OUTPUT_PARAMS["active_sim_it"] = active_sim_it
+OUTPUT_PARAMS["active_sim_paths"] = active_sim_paths
+OUTPUT_PARAMS["total_iterations"] = sum(len(it_list) for i, it_list in enumerate(simulation_it) if simulation_enabled[i])
 
 ## The output parameters are used to create the image directories and other formatting parameters
 
@@ -609,9 +647,9 @@ parameters_folders = []
 
 # List of folders to check
 folders = [image_folder, data_folder, terminal_folder]
-for i in range(len(OUTPUT_PARAMS['sims'])):
-    folders.append(data_folder + '/' + OUTPUT_PARAMS['sims'][i] + '/')
-    parameters_folders.append(data_folder + '/' + OUTPUT_PARAMS['sims'][i] + '/')
+for i in range(len(simulation_names)):
+     folders.append(data_folder + '/' + simulation_names[i] + '/')
+     parameters_folders.append(data_folder + '/' + simulation_names[i] + '/')
 
 for folder in folders:
     # Check if the directory already exists
@@ -808,7 +846,7 @@ H0 = IND_PARAMS["H0"]
 dx = [size[i]/nmax[i] for i in range(len(size))]  # Cell size in Mpc/h
 volume = [] # (Mpc)^3
 
-for i in range(len(OUTPUT_PARAMS['sims'])):
+for i in range(len(simulation_names)):
     
     volume.append(size[i]**3) # (Mpc/h)^3
     write_parameters(IND_PARAMS['nmax'][i], IND_PARAMS['nmay'][i], IND_PARAMS['nmaz'][i],
@@ -817,7 +855,7 @@ for i in range(len(OUTPUT_PARAMS['sims'])):
     
 IND_PARAMS["dx"] = dx
 IND_PARAMS["volume"] = volume
-OUTPUT_PARAMS["dir_params"] = parameters_folders
+OUTPUT_PARAMS["active_dir_params_list"] = [parameters_folders[i] for i in active_sim_indices]
 
 # Helper function to get simulation characteristics
 def get_sim_characteristics(sim_name):
@@ -845,9 +883,16 @@ if "percentile_params" in DEBUG_PARAMS:
     PERCENTILE_PLOT_PARAMS.update(DEBUG_PARAMS["percentile_params"])
 
 if IND_PARAMS["test_params"]["test"]:
-    TEST = test_limits(a0, OUTPUT_PARAMS['dir_grids'], OUTPUT_PARAMS['dir_params'][0], 
-                                            OUTPUT_PARAMS['sims'][0], OUTPUT_PARAMS['it'],
-                                            nmax[0], size[0])
+    test_sim_index = active_sim_indices[0] if active_sim_indices else 0
+    TEST = test_limits(
+        a0,
+        simulation_paths[test_sim_index]["dir_grids"],
+        parameters_folders[test_sim_index],
+        simulation_names[test_sim_index],
+        simulation_it[test_sim_index],
+        nmax[test_sim_index],
+        size[test_sim_index],
+    )
     
     (
         x_test,
@@ -935,7 +980,7 @@ amr_complexity_multiplier = 1.0 + 3.0 * np.log10(1.0 + patch_cell_ratio) * (1.0 
 refinement_multiplier = min(max(refinement_multiplier, amr_complexity_multiplier, 1.0), 40.0)
 
 single_array_gb = array_size_bytes / (1024 ** 3)
-total_snapshots = OUTPUT_PARAMS.get("total_iterations", sum(len(it_list) for it_list in OUTPUT_PARAMS["it"]))
+total_snapshots = OUTPUT_PARAMS.get("total_iterations", sum(len(it_list) for it_list in simulation_it if it_list))
 
 induction_component_keys = ["divergence", "compression", "stretching", "advection", "drag", "total"]
 enabled_components = sum(bool(IND_PARAMS["components"].get(k, False)) for k in induction_component_keys)

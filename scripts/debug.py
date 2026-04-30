@@ -3251,12 +3251,19 @@ def main():
     snapshot_it = int(sys.argv[2])
 
     # Resolve config-driven parameters
-    sim_index = out_params["sims"].index(sim_name) if sim_name in out_params["sims"] else 0
+    simulation_names = out_params.get("simulation_names", out_params.get("sims", []))
+    simulation_records = out_params.get("simulation_records", {})
+    sim_index = simulation_names.index(sim_name) if sim_name in simulation_names else 0
     level = ind_params["level"][0] if isinstance(ind_params["level"], list) else ind_params["level"]
     up_to_level = ind_params["up_to_level"][0] if isinstance(ind_params["up_to_level"], list) else ind_params["up_to_level"]
     nmax = ind_params["nmax"][0] if isinstance(ind_params["nmax"], list) else ind_params["nmax"]
     size = ind_params["size"][0] if isinstance(ind_params["size"], list) else ind_params["size"]
-    dir_params = out_params["dir_params"][sim_index]
+    dir_params_list = out_params.get("dir_params", out_params.get("active_dir_params_list", []))
+    dir_params = dir_params_list[sim_index] if sim_index < len(dir_params_list) else out_params.get("dir_params", [None])[0]
+    sim_paths = simulation_records.get(sim_name, {}).get("paths", {})
+    dir_halos = sim_paths.get("dir_halos", out_params.get("dir_halos"))
+    dir_grids = sim_paths.get("dir_grids", out_params.get("dir_grids"))
+    dir_gas = sim_paths.get("dir_gas", out_params.get("dir_gas"))
 
     # Terminal logging is handled globally at startup
     
@@ -3269,8 +3276,8 @@ def main():
                 sim_name,
                 [snapshot_it],
                 ind_params["a0"],
-                out_params["dir_halos"],
-                out_params["dir_grids"],
+                dir_halos,
+                dir_grids,
                 out_params["data_folder"],
                 vir_kind=ind_params.get("vir_kind", 1),
                 rad_kind=ind_params.get("rad_kind", 1),
@@ -3296,12 +3303,12 @@ def main():
 
     _run_debug_main_logic(
         sim_name, snapshot_it, level, up_to_level, nmax, size,
-        dir_params, region_coords, rad_val
+        dir_params, dir_grids, dir_gas, region_coords, rad_val
     )
 
 
 def _run_debug_main_logic(sim_name, snapshot_it, level, up_to_level, nmax, size, 
-                         dir_params, region_coords, rad_val=None):
+                         dir_params, dir_grids, dir_gas, region_coords, rad_val=None):
     '''
     Core debug logic extracted for use with or without output redirection.
     '''
@@ -3323,8 +3330,8 @@ def _run_debug_main_logic(sim_name, snapshot_it, level, up_to_level, nmax, size,
         snapshot_it,
         ind_params["a0"],
         ind_params["H0"],
-        out_params["dir_grids"],
-        out_params["dir_gas"],
+        dir_grids,
+        dir_gas,
         dir_params,
         level,
         test=ind_params["test_params"],
