@@ -738,7 +738,7 @@ if __name__ == "__main__":
             
             # Actual evolution calculation
             if not energy_evolution_plots_enabled:
-                print("Energy evolution plots are disabled (or profiles-only mode). Skipping evolution plots.")
+                utils.log_message("Energy evolution plots are disabled (or profiles-only mode). Skipping evolution plots.", tag='plots', level=1)
             else:
                 induction_energy_integral_evo = induction_energy_integral_evolution(
                     ind_params["components"], all_induction_energy_integral,
@@ -759,10 +759,10 @@ if __name__ == "__main__":
                     folder=out_params['image_folder']
                 )
 
-                print(f"Ploting " + evo_plot_params["title"] + " completed.")
+                utils.log_message(f"Plotting {evo_plot_params['title']} completed.", tag='plots', level=1)
 
             if not pd_evolution_plots_enabled:
-                print("P/D evolution plots are disabled. Skipping P/D evolution plots.")
+                utils.log_message("P/D evolution plots are disabled. Skipping P/D evolution plots.", tag='plots', level=1)
             else:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = ind_params["level"][L]
@@ -778,12 +778,12 @@ if __name__ == "__main__":
                     folder=out_params['image_folder']
                 )
                 if pd_figs:
-                    print(f"Ploting " + prod_diss_plot_params["title"] + " completed.")
+                    utils.log_message(f"Plotting {prod_diss_plot_params['title']} completed.", tag='plots', level=1)
                 else:
-                    print(f"Ploting " + prod_diss_plot_params["title"] + " skipped (no valid integrated P/D data).")
+                    utils.log_message(f"Plotting {prod_diss_plot_params['title']} skipped (no valid integrated P/D data).", tag='plots', level=1)
             
             if induction_profiles_enabled == False:
-                print("Induction profile plotting is disabled in the configuration. Skipping induction profile plots.")
+                utils.log_message("Induction profile plotting is disabled in the configuration. Skipping induction profile plots.", tag='plots', level=1)
             else:
                 # Create local params with current level for plotting
                 plot_ind_params = ind_params.copy()
@@ -802,10 +802,10 @@ if __name__ == "__main__":
                         folder=out_params['image_folder']                
                     )
                     
-                    print(f"Ploting " + ind_prof_plot_params["title"] + " completed.")
+                    utils.log_message(f"Plotting {ind_prof_plot_params['title']} completed.", tag='plots', level=1)
 
             if pd_profiles_enabled == False:
-                print("P/D profile plotting is disabled in the configuration. Skipping P/D profile plots.")
+                utils.log_message("P/D profile plotting is disabled in the configuration. Skipping P/D profile plots.", tag='plots', level=1)
             else:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = ind_params["level"][L]
@@ -820,10 +820,10 @@ if __name__ == "__main__":
                         utils.get_last_rad(Rad), verbose=out_params['verbose'], save=out_params['save'],
                         folder=out_params['image_folder']
                     )
-                    print(f"Ploting " + pd_prof_plot_params["title"] + " completed.")
+                    utils.log_message(f"Plotting {pd_prof_plot_params['title']} completed.", tag='plots', level=1)
             
             if percentile_params_cfg["enabled"] == False:
-                print("Percentiles calculation is disabled in the configuration. Skipping percentile evolution plots.")
+                utils.log_message("Percentiles calculation is disabled in the configuration. Skipping percentile evolution plots.", tag='plots', level=1)
             else:
                 # Create local params with current level for plotting
                 plot_ind_params = ind_params.copy()
@@ -836,7 +836,7 @@ if __name__ == "__main__":
                     folder=out_params['image_folder']
                 )
                 
-                print(f"Ploting " + percentile_plot_params["title"] + " completed.")
+                utils.log_message(f"Plotting {percentile_plot_params['title']} completed.", tag='plots', level=1)
                 
             if debug_params.get("field_analysis", {}).get("enabled", False) and ind_params["components"]["divergence"]:
                 # Create local params with current level for plotting

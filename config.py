@@ -46,7 +46,7 @@ IND_PARAMS = {
     # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
     "units": 1.0, # Factor to convert the units of the resulting volume integrals
     "logbins": True, # Use logarithmic bins
-    "F": 3, # Factor to multiply the viral radius to define the box size
+    "F": 2, # Factor to multiply the viral radius to define the box size
     "vir_kind": 2, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
     "region": 'BOX', # Region of interest shape to calculate the induction components (BOX, SPH, or None)
@@ -75,15 +75,15 @@ IND_PARAMS = {
         "magnetic_energy": True # Calculate/plot magnetic energy measured in the simulation
     },
     "return": {
-        "enabled": True, # Master switch to export volumetric fields per snapshot
-        "format": 'vtk', # Export format: 'npy', 'npz', or 'vtk'
+        "enabled": False, # Master switch to export volumetric fields per snapshot
+        "format": 'vtk_binary', # Export format: 'npy', 'npz', 'vtk' (ASCII), 'vtk_binary' (pyevtk) or 'vtk_ascii'
         "grid": "uniform", # Export grid representation: 'amr' (patch lists) or 'uniform'
         "fields": {
             "density": True, # Physical density field rho
             "density_contrast": False, # Density contrast field (rho/rho_b)
             "velocity": True, # Velocity vector (vx, vy, vz)
-            "magnetic_normalized": True, # Normalized magnetic field (Bx, By, Bz)
-            "magnetic_physical": False, # Physical magnetic field (bx, by, bz)
+            "magnetic_normalized": False, # Normalized magnetic field (Bx, By, Bz)
+            "magnetic_physical": True, # Physical magnetic field (bx, by, bz)
             "magnitudes_components": False, # Magnitudes of induction components
             "vectorial": False, # Save vectorial calculus outputs when available
             "induction": False, # Save induction-equation outputs when available
@@ -98,7 +98,7 @@ IND_PARAMS = {
         "exclude_zeros": True # Whether to exclude zero values when calculating the percentile threshold (recommended)
     },
     "energy_evolution": {
-        "enabled": False, # Master switch for calculating the evolution of the energy budget
+        "enabled": True, # Master switch for calculating the evolution of the energy budget
         "derivative": 'central', # Derivative to use for the evolution (implicit_forward, central, alpha_fit, RK or rate)
         "normalized": False, # True: keeps B/sqrt(rho_b) in magnetic evolution outputs; False: shows results respect to physical B
         "volume_coordinates": 'physical', # Integration volume differential: 'physical' (a^3 dV) or 'comoving' (dV)
@@ -108,15 +108,15 @@ IND_PARAMS = {
         "plot_profiles": False # Plot radial profiles for induction-energy terms
     },
     "production_dissipation": {
-        "enabled": False, # Master switch for calculating production/dissipation decomposition from induction-energy terms
+        "enabled": True, # Master switch for calculating production/dissipation decomposition from induction-energy terms
         "normalized": False, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
         "volume_coordinates": 'physical', # Integration volume differential for P/D: 'physical' (a^3 dV) or 'comoving' (dV)
         "normalize_by_volume": False, # If True, divide P/D integrated quantities by total integration volume
-        "plot_absolute": False, # Plot absolute production and dissipation rates
-        "plot_fractional": False, # Plot fractional production/dissipation contributions and net efficiency
-        "plot_net": False, # Plot net contributions (production - dissipation)
-        "plot_profiles": True, # Plot radial profiles for production/dissipation terms
-        "plot_fractional_profiles": True # Plot fractional contribution profiles for production/dissipation terms
+        "plot_absolute": True, # Plot absolute production and dissipation rates evolution
+        "plot_fractional": True, # Plot fractional production/dissipation contributions and net efficiency evolution
+        "plot_net": True, # Plot net contributions (production - dissipation) evolution
+        "plot_profiles": False, # Plot radial profiles for production/dissipation terms
+        "plot_fractional_profiles": False # Plot fractional contribution profiles for production/dissipation terms
     },
     "percentiles": {
         "enabled": False, # Master switch for calculating percentile thresholds of the magnetic field divergence
@@ -162,8 +162,9 @@ OUTPUT_PARAMS = {
         "rawdir": "raw_data_out/",
         "terminaldir": "terminal_output/",
         "ID1": "dynamo/",
-        "ID2": "ParaView",
-        "run": f'MAGNAS_SSD_Evo_PV_1',
+        # "ID2": "ParaView",
+        "ID2": "new_sim_induction_analysis",
+        "run": f'MAGNAS_SSD_Evo_comulativeB_7', # Apendix for the results names to distinguish different runs with different aims
         # "ID2": "new_sim_induction_analysis",
         # "ID2": "RAM_test",
         # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
@@ -175,10 +176,10 @@ OUTPUT_PARAMS = {
         # Scalar values are expanded to match the number of simulations.
         "cluster_B_low_res_paper_2020": {
             "enabled": True, # Whether to include this simulation in the analysis (if False, it will be skipped)
-            "it": [1200],
+            # "it": [1200],
             # "it": [2119],
             # "it": list(range(1900, 2101, 50)) + [2119],
-            # "it": list(range(350, 2101, 50)) + [2119],
+            "it": list(range(350, 2101, 50)) + [2119],
             "paths": {
                 "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
                 "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
@@ -323,6 +324,8 @@ EVO_PLOT_PARAMS = {
     'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
     'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
     'volume_evolution': True, # bool to plot volume evolution as additional figure
+    'plot_cumulative_magnetic_energy': True, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on differential evolution plot using a right y-axis
+    'plot_cumulative_magnetic_energy_headroom': 0.05, # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
     'title': 'Magnetic Field Evolution Analysis',
     'dpi': 300,
     'run': OUTPUT_PARAMS["paths"]["run"]
@@ -337,7 +340,7 @@ PROD_DISS_PLOT_PARAMS = {
     # 'xlim': [2.5, 0], # None for auto
     'xlim': None, # None for auto
     'ylim': None, # None for auto
-    'cancel_limits': False, # If True, ignore manual xlim/ylim; for zeta plots, also invert x-axis automatically
+    'cancel_limits': True, # If True, ignore manual xlim/ylim; for zeta plots, also invert x-axis automatically
     'figure_size': [12, 8], # [width, height]
     'line_widths': [5.0, 3.0], # [main, components]
     'title': 'Production and Dissipation Evolution',
@@ -347,7 +350,9 @@ PROD_DISS_PLOT_PARAMS = {
     'plot_total_prod_diss': False, # If False, hide total production/dissipation curves (green/red). Net curves are still plotted when available.
     'plot_absolute': IND_PARAMS["production_dissipation"]["plot_absolute"],
     'plot_fractional': IND_PARAMS["production_dissipation"]["plot_fractional"],
-    'plot_net': IND_PARAMS["production_dissipation"]["plot_net"]
+    'plot_net': IND_PARAMS["production_dissipation"]["plot_net"],
+    'plot_cumulative_magnetic_energy': True # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on P/D evolution plots using a right y-axis
+    ,'plot_cumulative_magnetic_energy_headroom': 0.05 # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
 }
 
 INDUCTION_PROFILE_PLOT_PARAMS = {
@@ -630,14 +635,27 @@ OUTPUT_PARAMS["active_sim_it"] = active_sim_it
 OUTPUT_PARAMS["active_sim_paths"] = active_sim_paths
 OUTPUT_PARAMS["total_iterations"] = sum(len(it_list) for i, it_list in enumerate(simulation_it) if simulation_enabled[i])
 
+# Extract per-directory-type lists for active simulations
+active_dir_halos_list = [active_sim_paths[i].get("dir_halos") for i in range(len(active_sim_paths))]
+active_dir_grids_list = [active_sim_paths[i].get("dir_grids") for i in range(len(active_sim_paths))]
+active_dir_gas_list = [active_sim_paths[i].get("dir_gas") for i in range(len(active_sim_paths))]
+active_dir_dm_list = [active_sim_paths[i].get("dir_DM") for i in range(len(active_sim_paths))]
+active_dir_vortex_list = [active_sim_paths[i].get("dir_vortex") for i in range(len(active_sim_paths))]
+
+OUTPUT_PARAMS["active_dir_halos_list"] = active_dir_halos_list
+OUTPUT_PARAMS["active_dir_grids_list"] = active_dir_grids_list
+OUTPUT_PARAMS["active_dir_gas_list"] = active_dir_gas_list
+OUTPUT_PARAMS["active_dir_dm_list"] = active_dir_dm_list
+OUTPUT_PARAMS["active_dir_vortex_list"] = active_dir_vortex_list
+
 ## The output parameters are used to create the image directories and other formatting parameters
 
-outdir = OUTPUT_PARAMS["outdir"]
-plotdir = OUTPUT_PARAMS["plotdir"]
-rawdir = OUTPUT_PARAMS["rawdir"]
-terminaldir = OUTPUT_PARAMS["terminaldir"]
-ID1 = OUTPUT_PARAMS["ID1"]
-ID2 = OUTPUT_PARAMS["ID2"]
+outdir = OUTPUT_PARAMS["paths"]["outdir"]
+plotdir = OUTPUT_PARAMS["paths"]["plotdir"]
+rawdir = OUTPUT_PARAMS["paths"]["rawdir"]
+terminaldir = OUTPUT_PARAMS["paths"]["terminaldir"]
+ID1 = OUTPUT_PARAMS["paths"]["ID1"]
+ID2 = OUTPUT_PARAMS["paths"]["ID2"]
 
 # We create the folder for the plots and data
 image_folder = outdir + plotdir + ID1 + f'MAGNAS_SSD_{ID2}'
@@ -703,7 +721,7 @@ for _key, _default in default_return_fields.items():
     ret_cfg["fields"].setdefault(_key, _default)
 
 
-allowed_return_formats = ["npy", "npz", "vtk"]
+allowed_return_formats = ["npy", "npz", "vtk", "vtk_ascii", "vtk_binary"]
 allowed_return_grids = ["amr", "uniform"]
 if ret_cfg.get("format") not in allowed_return_formats:
     raise ValueError("IND_PARAMS['return']['format'] must be one of: 'npy', 'npz', 'vtk'.")
@@ -716,8 +734,8 @@ if not isinstance(ret_cfg.get("fields"), dict):
 for _key in default_return_fields:
     if not isinstance(ret_cfg["fields"].get(_key), bool):
         raise ValueError(f"IND_PARAMS['return']['fields']['{_key}'] must be a boolean (True or False).")
-if ret_cfg.get("format") == "vtk" and ret_cfg.get("grid") != "uniform":
-    raise ValueError("IND_PARAMS['return']['format']='vtk' requires IND_PARAMS['return']['grid']='uniform'.")
+if ret_cfg.get("format") in {"vtk", "vtk_ascii", "vtk_binary"} and ret_cfg.get("grid") != "uniform":
+    raise ValueError("IND_PARAMS['return']['format'] starting with 'vtk' requires IND_PARAMS['return']['grid']='uniform'.")
 
 IND_PARAMS["return"] = ret_cfg
 

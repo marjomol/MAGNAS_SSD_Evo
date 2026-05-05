@@ -79,6 +79,45 @@ def get_plot_palette(plot_params=None, induction_params=None):
     resolved['component_colors'] = component_colors
     return resolved
 
+
+def align_cumulative_overlay_zero(ax, ax_aux, y_aux_max=None, headroom=0.05):
+    """
+    Align y=0 horizontally between a primary axis and a cumulative-overlay twin axis.
+
+    The left axis defines the zero proportion. The right axis is then forced so that
+    its minimum matches that same proportion, using the supplied cumulative maximum
+    plus a configurable headroom.
+    """
+    try:
+        y1_min, y1_max = ax.get_ylim()
+        if not np.isfinite(y1_min) or not np.isfinite(y1_max) or y1_max == y1_min:
+            return
+
+        p = (0.0 - y1_min) / (y1_max - y1_min)
+        p = float(np.clip(p, 1e-6, 1.0 - 1e-6))
+
+        if y_aux_max is None or not np.isfinite(y_aux_max):
+            _, y2_max_current = ax_aux.get_ylim()
+            y_aux_max = y2_max_current
+
+        try:
+            headroom = float(headroom)
+        except (TypeError, ValueError):
+            headroom = 0.05
+        if not np.isfinite(headroom) or headroom < 0.0:
+            headroom = 0.05
+
+        y_aux_max = (1.0 + headroom) * float(y_aux_max)
+        if y_aux_max <= 0.0:
+            _, y2_max_current = ax_aux.get_ylim()
+            y_aux_max = float(max(y2_max_current, 1e-30))
+
+        y2_min_forced = -(p / (1.0 - p)) * y_aux_max
+        ax_aux.set_ylim(y2_min_forced, y_aux_max)
+        ax_aux.set_autoscale_on(False)
+    except Exception:
+        pass
+
 def safe_filename(filepath, max_length=255, verbose=False):
     """
     Ensures the filename doesn't exceed the filesystem limit by shortening it intelligently.
@@ -996,6 +1035,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     elif plot_type == 'interpolated':
         interpolation_points = plot_params.get('interpolation_points', {'years': 500, 'zeta': 5000})
         interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
+    cumulative_headroom = plot_params.get('plot_cumulative_magnetic_energy_headroom', 0.05)
     
     # Extract induction parameters
     units = plot_params.get('units', induction_params.get('units', 1.0))
@@ -1004,6 +1044,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     components_cfg = induction_params.get('components', {})
     plot_magnetic_energy = bool(components_cfg.get('magnetic_energy', True))
     plot_kinetic_energy = bool(components_cfg.get('kinetic_energy', True))
+    plot_cumulative_magnetic_energy = bool(plot_params.get('plot_cumulative_magnetic_energy', False))
     palette = get_plot_palette(plot_params, induction_params)
     component_colors = palette.get('component_colors', {})
     color_negative_interval = palette.get('negative_interval', DEFAULT_PLOT_PALETTE['negative_interval'])
@@ -1219,19 +1260,20 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                 f'len={upper-lower} (len_y={ylen}, y_offset={i0})'
             )
 
-        print(f'Plotting debug... x_axis={x_axis}, plot_type={plot_type}, derivative={derivative}')
-        print(f'Plotting debug... base axis len={len(axis_values)}, range {axis_label}:[{axis_values[0]:.6g}, {axis_values[-1]:.6g}]')
+        # Log hierarchical debug using utils.log_message for consistent formatting
+        log_message(f'Plotting debug: x_axis={x_axis}, plot_type={plot_type}, derivative={derivative}', tag='plots', level=1)
+        log_message(f'  Base axis len={len(axis_values)}, range {axis_label}:[{axis_values[0]:.6g}, {axis_values[-1]:.6g}]', tag='plots', level=1)
         if plot_magnetic_energy:
-            print(f'Plotting debug... Magnetic Energy (n1): {_range_from_indices(n1_data, index_O_plot, index_F_plot)}')
+            log_message(f'    Magnetic Energy (n1): {_range_from_indices(n1_data, index_O_plot, index_F_plot)}', tag='plots', level=2)
         if plot_kinetic_energy:
-            print(f'Plotting debug... Kinetic Energy: {_range_from_indices(kinetic_work_data, index_O_plot, index_F_plot)}')
-        print(f'Plotting debug... Itemized Prediction (n0): {_range_from_offset(n0_data, index_o_plot, index_f_plot)}')
-        print(f'Plotting debug... Compact Prediction (total): {_range_from_offset(total_work_data, index_o_plot, index_f_plot)}')
-        print(f'Plotting debug... Compression: {_range_from_offset(compres_work_data, index_o_plot, index_f_plot)}')
-        print(f'Plotting debug... Stretching: {_range_from_offset(stretch_work_data, index_o_plot, index_f_plot)}')
-        print(f'Plotting debug... Advection: {_range_from_offset(advec_work_data, index_o_plot, index_f_plot)}')
-        print(f'Plotting debug... Divergence: {_range_from_offset(diver_work_data, index_o_plot, index_f_plot)}')
-        print(f'Plotting debug... Cosmic Drag: {_range_from_offset(drag_work_data, index_o_plot, index_f_plot)}')
+            log_message(f'    Kinetic Energy: {_range_from_indices(kinetic_work_data, index_O_plot, index_F_plot)}', tag='plots', level=2)
+        log_message(f'    Itemized Prediction (n0): {_range_from_offset(n0_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
+        log_message(f'    Compact Prediction (total): {_range_from_offset(total_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
+        log_message(f'    Compression: {_range_from_offset(compres_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
+        log_message(f'    Stretching: {_range_from_offset(stretch_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
+        log_message(f'    Advection: {_range_from_offset(advec_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
+        log_message(f'    Divergence: {_range_from_offset(diver_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
+        log_message(f'    Cosmic Drag: {_range_from_offset(drag_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
     
     # Create figures list
     figures = []
@@ -1306,6 +1348,39 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                     linewidth=line2, label=latex_label, color=color)
             components_plotted.append(label.lower())
 
+    ax1_aux = None
+    yb2_cumulative = None
+    if evolution_type == 'differential' and plot_cumulative_magnetic_energy:
+        cumulative_units = plot_params.get('units', induction_params.get('units', 1.0))
+        b2_total = cumulative_units * np.asarray(evolution_data.get('evo_b2', []), dtype=float)
+        xb2, yb2 = _slice_xy(x_data, b2_total, index_O_plot, index_F_plot)
+        if len(yb2) > 0 and should_plot_component(yb2, threshold=0.0):
+            yb2_cumulative = np.cumsum(np.nan_to_num(yb2, nan=0.0))
+            ax1_aux = ax1.twinx()
+            ax1_aux.plot(
+                xb2,
+                yb2_cumulative,
+                '-',
+                linewidth=max(1.2, line2),
+                color=color_measured,
+                alpha=0.45,
+                label='Cumulative Magnetic Energy',
+                zorder=1
+            )
+            ax1_aux.fill_between(
+                xb2,
+                0.0,
+                yb2_cumulative,
+                color=color_measured,
+                alpha=0.06,
+                label='_nolegend_',
+                zorder=1
+            )
+            norm_suffix_cum = r' ($\rho_B^{-1}$)' if normalized else ''
+            ax1_aux.set_ylabel(f'Cumulative Magnetic Energy{norm_suffix_cum}', fontproperties=font, color=color_measured)
+            ax1_aux.tick_params(axis='y', colors=color_measured)
+            components_plotted.append('cumulative_magnetic_energy')
+
     if verbose and evolution_type == 'total':
         # Quantify temporal lag between measured magnetic energy and predictions.
         xm, ym = _slice_xy(x_data, n1_data, index_O_plot, index_F_plot)
@@ -1353,6 +1428,13 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             )
     
     setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font)
+    if ax1_aux is not None:
+        align_cumulative_overlay_zero(
+            ax1,
+            ax1_aux,
+            y_aux_max=np.nanmax(yb2_cumulative) if yb2_cumulative is not None else None,
+            headroom=cumulative_headroom,
+        )
     norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
     vol_suffix = r' / Volume' if normalize_by_volume else ''
     if evolution_type == 'total':
@@ -1360,7 +1442,12 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     else:
         ax1.set_ylabel(f'Magnetic Evolution{norm_suffix}{vol_suffix}', fontproperties=font)
     ax1.grid(alpha=0.3)
-    ax1.legend(prop=font_legend, ncol=2)
+    handles, labels = ax1.get_legend_handles_labels()
+    if ax1_aux is not None:
+        aux_handles, aux_labels = ax1_aux.get_legend_handles_labels()
+        handles = handles + aux_handles
+        labels = labels + aux_labels
+    ax1.legend(handles, labels, prop=font_legend, ncol=2)
 
     if region == 'None':
         plot_title = f'{title} - {np.round(induction_params["size"][0]/2, 1)} Mpc'
@@ -1540,6 +1627,8 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
     plot_density = bool(plot_params.get('plot_density', False))
     plot_magnetic_energy = bool(plot_params.get('plot_magnetic_energy', False))
+    plot_cumulative_magnetic_energy = bool(plot_params.get('plot_cumulative_magnetic_energy', False))
+    cumulative_headroom = plot_params.get('plot_cumulative_magnetic_energy_headroom', 0.05)
     color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
     if not isinstance(normalized, bool):
         normalized = True
@@ -1638,6 +1727,65 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
     figures = []
 
+    def _overlay_cumulative_magnetic_energy(ax):
+        if not plot_cumulative_magnetic_energy:
+            return None
+        if 'int_b2' not in pd_data:
+            return None
+
+        b2_snap = units * np.asarray(pd_data.get('int_b2', []), dtype=float)
+        nxy = min(len(x), len(b2_snap))
+        if nxy == 0:
+            return None
+
+        x_aux = np.asarray(x[:nxy], dtype=float)
+        y_aux = np.asarray(b2_snap[:nxy], dtype=float)
+        if not should_plot_component(y_aux, threshold=0.0):
+            return None
+
+        y_aux_cumulative = np.cumsum(np.nan_to_num(y_aux, nan=0.0))
+        ax_aux = ax.twinx()
+        ax_aux.plot(
+            x_aux,
+            y_aux_cumulative,
+            '-',
+            linewidth=max(1.2, line_comp),
+            color=palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy']),
+            alpha=0.45,
+            label='Cumulative Magnetic Energy',
+            zorder=1
+        )
+        ax_aux.fill_between(
+            x_aux,
+            0.0,
+            y_aux_cumulative,
+            color=palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy']),
+            alpha=0.06,
+            label='_nolegend_',
+            zorder=1
+        )
+        norm_suffix_cum = r' ($\rho_B^{-1}$)' if normalized else ''
+        ax_aux.set_ylabel(
+            f'Cumulative Magnetic Energy{norm_suffix_cum}',
+            fontproperties=font,
+            color=palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
+        )
+        ax_aux.tick_params(
+            axis='y',
+            colors=palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
+        )
+        y_aux_max = np.nanmax(y_aux_cumulative) if len(y_aux_cumulative) > 0 else None
+        align_cumulative_overlay_zero(ax, ax_aux, y_aux_max=y_aux_max, headroom=cumulative_headroom)
+        return ax_aux
+
+    def _set_combined_legend(ax, ax_aux=None):
+        handles, labels = ax.get_legend_handles_labels()
+        if ax_aux is not None:
+            aux_handles, aux_labels = ax_aux.get_legend_handles_labels()
+            handles = handles + aux_handles
+            labels = labels + aux_labels
+        ax.legend(handles, labels, prop=font_legend, ncol=2)
+
     # Absolute production/dissipation rates
     if plot_absolute:
         fig_abs, ax_abs = plt.subplots(figsize=figure_size, dpi=dpi)
@@ -1687,7 +1835,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
         ax_abs.grid(alpha=0.3)
         ax_abs.set_title(f'{title} - {region_label}', y=y_title, fontproperties=font_title)
-        ax_abs.legend(prop=font_legend, ncol=2)
+        _set_combined_legend(ax_abs, None)
         fig_abs.tight_layout()
         figures.append(fig_abs)
 
@@ -1727,7 +1875,8 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
         ax_frac.grid(alpha=0.3)
         ax_frac.set_title(f'{title} (Fractions) - {region_label}', y=y_title, fontproperties=font_title)
-        ax_frac.legend(prop=font_legend, ncol=2)
+        ax_frac_aux = _overlay_cumulative_magnetic_energy(ax_frac)
+        _set_combined_legend(ax_frac, ax_frac_aux)
         fig_frac.tight_layout()
         figures.append(fig_frac)
 
@@ -1768,7 +1917,8 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
         ax_net.grid(alpha=0.3)
         ax_net.set_title(f'{title} (Net) - {region_label}', y=y_title, fontproperties=font_title)
-        ax_net.legend(prop=font_legend, ncol=2)
+        ax_net_aux = _overlay_cumulative_magnetic_energy(ax_net)
+        _set_combined_legend(ax_net, ax_net_aux)
         fig_net.tight_layout()
         figures.append(fig_net)
 

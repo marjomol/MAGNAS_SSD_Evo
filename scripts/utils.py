@@ -351,7 +351,7 @@ def _flatten_for_vtk(array):
     Author: Marco Molina
     """
     
-    return np.asarray(array, dtype=np.float64).ravel(order='F')
+    return np.asarray(array, dtype=out_params["bitformat"]).ravel(order='F')
 
 
 def _write_legacy_vtk_structured_points(filepath, scalar_fields, vector_fields, origin, spacing):
@@ -533,9 +533,9 @@ def _write_binary_vtk_rectilinear(basepath_no_ext, scalar_fields, vector_fields,
         )
 
     nx, ny, nz = ref_arr.shape
-    x = origin[0] + np.arange(nx + 1, dtype=np.float64) * spacing[0]
-    y = origin[1] + np.arange(ny + 1, dtype=np.float64) * spacing[1]
-    z = origin[2] + np.arange(nz + 1, dtype=np.float64) * spacing[2]
+    x = origin[0] + np.arange(nx + 1, dtype=out_params["bitformat"]) * spacing[0]
+    y = origin[1] + np.arange(ny + 1, dtype=out_params["bitformat"]) * spacing[1]
+    z = origin[2] + np.arange(nz + 1, dtype=out_params["bitformat"]) * spacing[2]
 
     cell_scalars = {}
     for name, values in scalar_fields.items():
@@ -796,7 +796,6 @@ def export_snapshot_fields(
 
         if verbose:
             gb = 1024 ** 3
-            log_message(f'Volumetric snapshot export written under: {export_dir}', tag='export', level=1)
             log_message(
                 f'Disk usage before: used={disk_usage_before.used / gb:.3f} GiB, free={disk_usage_before.free / gb:.3f} GiB; '
                 f'after: used={disk_usage_after.used / gb:.3f} GiB, free={disk_usage_after.free / gb:.3f} GiB',
@@ -895,10 +894,12 @@ def export_snapshot_fields(
         spacing = None
         origin = None
 
+    bitformat_label = np.dtype(bitformat).name
+
     if export_format in {'vtk', 'vtk_ascii'}:
         vtk_path = os.path.join(
             export_dir,
-            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat}.vtk"
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat_label}.vtk"
         )
         _write_legacy_vtk_structured_points(vtk_path, scalar_out, vector_out, origin=origin, spacing=spacing)
         written_paths.append(vtk_path)
@@ -917,7 +918,7 @@ def export_snapshot_fields(
     if export_format == 'vtk_binary':
         vtk_base = os.path.join(
             export_dir,
-            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat}"
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat_label}"
         )
         vtk_path = _write_binary_vtk_rectilinear(vtk_base, scalar_out, vector_out, origin=origin, spacing=spacing)
         if vtk_path:
@@ -958,7 +959,7 @@ def export_snapshot_fields(
                 payload[_safe_export_name(name)] = np.array([vx, vy, vz], dtype=object)
         out_path = os.path.join(
             export_dir,
-            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat}.npz"
+            f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat_label}.npz"
         )
         np.savez_compressed(out_path, **payload)
         written_paths.append(out_path)
