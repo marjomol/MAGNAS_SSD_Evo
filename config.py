@@ -100,23 +100,23 @@ IND_PARAMS = {
     "energy_evolution": {
         "enabled": True, # Master switch for calculating the evolution of the energy budget
         "derivative": 'central', # Derivative to use for the evolution (implicit_forward, central, alpha_fit, RK or rate)
-        "normalized": False, # True: keeps B/sqrt(rho_b) in magnetic evolution outputs; False: shows results respect to physical B
+        "normalized": True, # True: keeps B/sqrt(rho_b) in magnetic evolution outputs; False: shows results respect to physical B
         "volume_coordinates": 'physical', # Integration volume differential: 'physical' (a^3 dV) or 'comoving' (dV)
         "normalize_by_volume": False, # If True, divide integrated quantities by total integration volume
         "plot_total": True, # Calculate and plot total (integrated) energy evolution
         "plot_differential": True, # Calculate and plot differential (rate of change) energy evolution
-        "plot_profiles": False # Plot radial profiles for induction-energy terms
+        "plot_profiles": True # Calculate and plot radial profiles for induction-energy terms
     },
     "production_dissipation": {
         "enabled": True, # Master switch for calculating production/dissipation decomposition from induction-energy terms
-        "normalized": False, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
+        "normalized": True, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
         "volume_coordinates": 'physical', # Integration volume differential for P/D: 'physical' (a^3 dV) or 'comoving' (dV)
         "normalize_by_volume": False, # If True, divide P/D integrated quantities by total integration volume
-        "plot_absolute": True, # Plot absolute production and dissipation rates evolution
-        "plot_fractional": True, # Plot fractional production/dissipation contributions and net efficiency evolution
-        "plot_net": True, # Plot net contributions (production - dissipation) evolution
-        "plot_profiles": False, # Plot radial profiles for production/dissipation terms
-        "plot_fractional_profiles": False # Plot fractional contribution profiles for production/dissipation terms
+        "plot_absolute": True, # Calculate and plot absolute production and dissipation rates evolution
+        "plot_fractional": True, # Calculate and plot fractional production/dissipation contributions and net efficiency evolution
+        "plot_net": True, # Calculate and plot net contributions (production - dissipation) evolution
+        "plot_profiles": True, # Calculate and plot radial profiles for production/dissipation terms
+        "plot_fractional_profiles": True # Calculate and plot fractional contribution profiles for production/dissipation terms
     },
     "percentiles": {
         "enabled": False, # Master switch for calculating percentile thresholds of the magnetic field divergence
@@ -163,8 +163,8 @@ OUTPUT_PARAMS = {
         "terminaldir": "terminal_output/",
         "ID1": "dynamo/",
         # "ID2": "ParaView",
-        "ID2": "new_sim_induction_analysis",
-        "run": f'MAGNAS_SSD_Evo_comulativeB_7', # Apendix for the results names to distinguish different runs with different aims
+        "ID2": "clean_induction_analysis",
+        "run": f'MAGNAS_SSD_Evo_scientific_3', # Apendix for the results names to distinguish different runs with different aims
         # "ID2": "new_sim_induction_analysis",
         # "ID2": "RAM_test",
         # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
@@ -297,12 +297,15 @@ PLOT_PALETTES = {
     }
 }
 
+PLOT_TEXT_PARAMS = {
+    "label_mode": "math"  # "verbal" (descriptive text) or "math" (mathematical notation)
+}
+
 EVO_PLOT_PARAMS = {
     'palette_name': PLOT_PALETTES["active"],
     'palettes': PLOT_PALETTES["available"],
+    'label_mode': PLOT_TEXT_PARAMS["label_mode"],
     'units': IND_PARAMS["units"],
-    'plot_total': IND_PARAMS["energy_evolution"]["plot_total"],
-    'plot_differential': IND_PARAMS["energy_evolution"]["plot_differential"],
     'derivative': IND_PARAMS["energy_evolution"]["derivative"],
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
@@ -323,17 +326,21 @@ EVO_PLOT_PARAMS = {
     'smoothing_sigma': 1.1, # sigma for Gaussian smoothing (only for 'smoothed' type)
     'interpolation_points': 100, # number of points for interpolation (only for 'interpolated' type)
     'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest' for interpolation method (only for 'interpolated' type)
-    'volume_evolution': True, # bool to plot volume evolution as additional figure
-    'plot_cumulative_magnetic_energy': True, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on differential evolution plot using a right y-axis
-    'plot_cumulative_magnetic_energy_headroom': 0.05, # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
     'title': 'Magnetic Field Evolution Analysis',
     'dpi': 300,
-    'run': OUTPUT_PARAMS["paths"]["run"]
+    'run': OUTPUT_PARAMS["paths"]["run"],
+    'plot_total': IND_PARAMS["energy_evolution"]["plot_total"],
+    'plot_differential': IND_PARAMS["energy_evolution"]["plot_differential"],
+    'volume_evolution': True, # bool to plot volume evolution as additional figure
+    "plot_integrals": True, # Plot the cumulative integral of the differential (rate of change) energy evolution curves
+    'plot_cumulative_magnetic_energy': True, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on differential evolution plot using a right y-axis
+    'plot_cumulative_magnetic_energy_headroom': 0.05 # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
 }
 
 PROD_DISS_PLOT_PARAMS = {
     'palette_name': PLOT_PALETTES["active"],
     'palettes': PLOT_PALETTES["available"],
+    'label_mode': PLOT_TEXT_PARAMS["label_mode"],
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
@@ -351,26 +358,27 @@ PROD_DISS_PLOT_PARAMS = {
     'plot_absolute': IND_PARAMS["production_dissipation"]["plot_absolute"],
     'plot_fractional': IND_PARAMS["production_dissipation"]["plot_fractional"],
     'plot_net': IND_PARAMS["production_dissipation"]["plot_net"],
-    'plot_cumulative_magnetic_energy': True # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on P/D evolution plots using a right y-axis
-    ,'plot_cumulative_magnetic_energy_headroom': 0.05 # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
+    "plot_integrals": True, # Plot the cumulative integral of the net (rate of change) production evolution curves
+    'plot_cumulative_magnetic_energy': True, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on P/D evolution plots using a right y-axis
+    'plot_cumulative_magnetic_energy_headroom': 0.05 # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
 }
 
 INDUCTION_PROFILE_PLOT_PARAMS = {
     'palette_name': PLOT_PALETTES["active"],
     'palettes': PLOT_PALETTES["available"],
     'units': IND_PARAMS["units"],
-    # 'it_indx': [-1],
-    "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
+    'it_indx': [-1],
+    # "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
     # 'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
     # 'it_indx': list(range(len(simulation_it))), # Index to plot all iterations
     'x_scale': 'log', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
     'xlim': None, # None for auto
-    # 'ylim': None, # None for auto
+    'ylim': None, # None for auto
     'rylim': None, # None for auto
     'dylim': None, # None for auto
     # 'xlim': [1e-17,1e-5], # None for auto
-    'ylim': [1e-17,1e-5], # None for auto
+    # 'ylim': [1e-17,1e-5], # None for auto
     # 'rylim': [1e-21,1e-14], # None for auto
     # 'dylim': [1e-28,1e-25], # None for auto
     'figure_size': [12, 8], # [width, height]
@@ -392,14 +400,14 @@ PROD_DISS_PROFILE_PLOT_PARAMS = {
     'palette_name': PLOT_PALETTES["active"],
     'palettes': PLOT_PALETTES["available"],
     'units': IND_PARAMS["units"],
-    # 'it_indx': [-1],
-    "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
+    'it_indx': [-1],
+    # "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
     'x_scale': 'log', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
     'xlim': None, # None for auto
     # 'xlim': [1e-17,1e-5], # None for auto
-    # 'ylim': None, # None for auto
-    'ylim': [1e-17,1e-5], # None for auto
+    'ylim': None, # None for auto
+    # 'ylim': [1e-17,1e-5], # None for auto
     'figure_size': [12, 8], # [width, height]
     'line_widths': [5.0, 3.0], # [line_main, line_components]
     'plot_type': 'smoothed', # 'raw', 'smoothed', or 'interpolated'
@@ -801,6 +809,26 @@ IND_PARAMS["energy_evolution"]["plot_profiles"] = bool(energy_evo.get("plot_prof
 IND_PARAMS["production_dissipation"]["plot_profiles"] = bool(prod_diss_cfg.get("plot_profiles", False))
 IND_PARAMS["production_dissipation"]["plot_fractional_profiles"] = bool(prod_diss_cfg.get("plot_fractional_profiles", False))
 
+# Ensure integral-plot flags follow IND_PARAMS
+
+try:
+    evo_diff_flag = bool(IND_PARAMS.get('energy_evolution', {}).get('plot_differential', False))
+except Exception:
+    evo_diff_flag = False
+try:
+    pd_net_flag = bool(IND_PARAMS.get('production_dissipation', {}).get('plot_net', False))
+except Exception:
+    pd_net_flag = False
+
+# If evolution integrals requested but differential evolution not enabled, disable and warn
+if EVO_PLOT_PARAMS.get('plot_integrals', False) and not evo_diff_flag:
+    print('Warning: EVO_PLOT_PARAMS["plot_integrals"] requested but IND_PARAMS.energy_evolution.plot_differential is False. Disabling evolution integral plots.')
+    EVO_PLOT_PARAMS['plot_integrals'] = False
+
+# If P/D integrals requested but net P/D not enabled, disable and warn
+if PROD_DISS_PLOT_PARAMS.get('plot_integrals', False) and not pd_net_flag:
+    print('Warning: PROD_DISS_PLOT_PARAMS["plot_integrals"] requested but IND_PARAMS.production_dissipation.plot_net is False. Disabling P/D integral plots.')
+    PROD_DISS_PLOT_PARAMS['plot_integrals'] = False
 # Note: enabled acts as master switch; all plot flags are ignored when enabled=False
 
 # Determine if there's actually something to do (coupling: nothing computed unless enabled + something to plot/return)
@@ -950,6 +978,7 @@ if IND_PARAMS["test_params"]["test"]:
     IND_PARAMS["test_params"]["evo_plot_params"]["title"] = 'Analytic Magnetic Field Evolution Analysis'
 
 ## Parallelization configuration based on available resources
+
 
 # Get system information
 ram_capacity = psutil.virtual_memory().total  # Total RAM in bytes

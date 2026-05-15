@@ -80,6 +80,82 @@ def get_plot_palette(plot_params=None, induction_params=None):
     return resolved
 
 
+def _get_label_mode(plot_params=None):
+    """Return plotting label mode: 'verbal' or 'math'."""
+    mode = (plot_params or {}).get('label_mode', 'verbal')
+    if isinstance(mode, str) and mode.lower() in ('verbal', 'math'):
+        return mode.lower()
+    return 'verbal'
+
+
+def _axis_label_x(x_axis, x_scale='lin', label_mode='verbal'):
+    """Build x-axis label in verbal or math mode."""
+    if label_mode == 'math':
+        if x_axis == 'years':
+            return r'$\log_{10}(t/\mathrm{yr})$' if x_scale == 'log' else r'$t\,[\mathrm{yr}]$'
+        return r'$\log_{10}(z)$' if x_scale == 'log' else r'$z$'
+
+    if x_scale == 'log':
+        return 'Time log[yr]' if x_axis == 'years' else 'Redshift log[z]'
+    return 'Time (yr)' if x_axis == 'years' else 'Redshift (z)'
+
+
+def _axis_label_evolution_y(evolution_type, y_scale='lin', label_mode='verbal'):
+    """Build evolution y-axis label in verbal or math mode."""
+    if label_mode == 'math':
+        if evolution_type == 'total':
+            return r'$\log_{10}(E_B)$' if y_scale == 'log' else r'$E_B$'
+        return r'$\partial_t E_B$'
+
+    if y_scale == 'log':
+        return 'Magnetic Energy log[erg]' if evolution_type == 'total' else 'Magnetic Energy Induction log[erg/s]'
+    return 'Magnetic Energy (erg)' if evolution_type == 'total' else 'Magnetic Energy Induction (erg/s)'
+
+
+def _axis_label_pd_y(kind, y_scale='lin', label_mode='verbal'):
+    """Build production/dissipation y-axis labels in verbal or math mode."""
+    if label_mode == 'math':
+        if kind == 'absolute':
+            return r'$\log_{10}|P,\,D,\,N|$' if y_scale == 'log' else r'$P,\,D,\,N$'
+        if kind == 'fractional':
+            return r'$p_i,\,-d_i,\,\iota$'
+        if kind == 'net':
+            return r'$N\equiv P-D$'
+        if kind == 'net_integral':
+            return r'$\int N\,dt$'
+        if kind == 'cumulative_b':
+            return r'$\sum_k E_{B,k}$'
+
+    if kind == 'absolute':
+        return 'Integrated Production / Dissipation log' if y_scale == 'log' else 'Integrated Production / Dissipation'
+    if kind == 'fractional':
+        return 'Fractional Contribution (+prod / -diss)'
+    if kind == 'net':
+        return 'Integrated Net Contribution'
+    if kind == 'net_integral':
+        return 'Integrated Net Contribution'
+    if kind == 'cumulative_b':
+        return 'Cumulative Magnetic Energy'
+    return ''
+
+
+def _apply_norm_vol_suffix(label, normalized=False, normalize_by_volume=False, label_mode='verbal'):
+    """Append normalization/volume suffix preserving the selected label style."""
+    if label_mode == 'math':
+        suffix = ''
+        if normalized:
+            suffix += r'\,\rho_B^{-1}'
+        if normalize_by_volume:
+            suffix += r'\,V^{-1}'
+        if suffix and label.startswith('$') and label.endswith('$'):
+            return label[:-1] + suffix + '$'
+        return label + suffix
+
+    norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
+    vol_suffix = r' / Volume' if normalize_by_volume else ''
+    return f'{label}{norm_suffix}{vol_suffix}'
+
+
 def align_cumulative_overlay_zero(ax, ax_aux, y_aux_max=None, headroom=0.05):
     """
     Align y=0 horizontally between a primary axis and a cumulative-overlay twin axis.
@@ -117,6 +193,77 @@ def align_cumulative_overlay_zero(ax, ax_aux, y_aux_max=None, headroom=0.05):
         ax_aux.set_autoscale_on(False)
     except Exception:
         pass
+
+
+def _cumulative_integral_series(x_values, y_values):
+    x = np.asarray(x_values, dtype=float)
+    y = np.asarray(y_values, dtype=float)
+    n = min(len(x), len(y))
+    if n == 0:
+        return np.asarray([], dtype=float)
+
+    x = x[:n]
+    y = np.nan_to_num(y[:n], nan=0.0)
+    cumulative = np.zeros(n, dtype=float)
+    if n > 1:
+        dx = np.abs(np.diff(x))
+        cumulative[1:] = np.cumsum(0.5 * (y[1:] + y[:-1]) * dx)
+    return cumulative
+
+
+def _smart_legend(ax, fig, plot_params=None, font_legend=None):
+    """Place legend inside or outside depending on number of entries."""
+    if font_legend is None:
+        from matplotlib.font_manager import FontProperties
+        font_legend = FontProperties()
+        font_legend.set_size(11)
+
+    # Collect handles/labels from the requested axis and all axes in the figure
+    handles, labels = ax.get_legend_handles_labels()
+    for other_ax in fig.axes:
+        if other_ax is ax:
+            continue
+        oh, ol = other_ax.get_legend_handles_labels()
+        if oh:
+            handles = list(handles) + list(oh)
+            labels = list(labels) + list(ol)
+
+    # Filter no-legend entries and deduplicate preserving order
+    entries = []
+    seen_labels = set()
+    for h, l in zip(handles, labels):
+        if not l or l.startswith('_'):
+            continue
+        if l in seen_labels:
+            continue
+        seen_labels.add(l)
+        entries.append((h, l))
+    if not entries:
+        return False
+    legend_outside = len(entries) > (plot_params or {}).get('legend_outside_threshold', 12)
+    labels_to_plot = [l for _, l in entries]
+    handles_to_plot = [h for h, _ in entries]
+    if legend_outside:
+        fig.legend(
+            handles_to_plot,
+            labels_to_plot,
+            prop=font_legend,
+            ncol=min(4, len(entries)),
+            loc='lower center',
+            bbox_to_anchor=(0.5, -0.03),
+            borderaxespad=0.0,
+        )
+        # remove legends from all axes to avoid duplicates
+        for other_ax in fig.axes:
+            try:
+                if getattr(other_ax, 'legend_', None) is not None:
+                    other_ax.legend_.remove()
+            except Exception:
+                pass
+    else:
+        # Add legend only to the requested axis
+        ax.legend(handles_to_plot, labels_to_plot, prop=font_legend, ncol=2)
+    return legend_outside
 
 def safe_filename(filepath, max_length=255, verbose=False):
     """
@@ -507,7 +654,7 @@ def scan_animation_3D(arr, size, plot_params, induction_params, volume_params=No
     return ani
 
 
-def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font):
+def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font, plot_params=None):
         '''
         Helper function to set up axis properties
         
@@ -528,18 +675,9 @@ def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolutio
         Author: Marco Molina
         '''
 
-        if x_axis == 'years':
-            ax.set_xlabel('Time (yr)', fontproperties=font)
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
-        else:  # zeta
-            ax.set_xlabel('Redshift (z)', fontproperties=font)
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy (erg)', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction (erg/s)', fontproperties=font)
+        label_mode = _get_label_mode(plot_params)
+        ax.set_xlabel(_axis_label_x(x_axis, x_scale='lin', label_mode=label_mode), fontproperties=font)
+        ax.set_ylabel(_axis_label_evolution_y(evolution_type, y_scale='lin', label_mode=label_mode), fontproperties=font)
         
         if not cancel_limits and xlim:
             ax.set_xlim(xlim[0], xlim[1])
@@ -548,17 +686,11 @@ def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolutio
             
         if x_scale == 'log':
             ax.set_xscale('log')
-            if x_axis == 'years':
-                ax.set_xlabel('Time log[yr]', fontproperties=font)
-            else:
-                ax.set_xlabel('Redshift log[z]', fontproperties=font)
+            ax.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
                 
         if y_scale == 'log':
             ax.set_yscale('log')
-            if evolution_type == 'total':
-                ax.set_ylabel('Magnetic Energy log[erg]', fontproperties=font)
-            else:
-                ax.set_ylabel('Magnetic Energy Induction log[erg/s]', fontproperties=font)
+            ax.set_ylabel(_axis_label_evolution_y(evolution_type, y_scale='log', label_mode=label_mode), fontproperties=font)
                 
 def should_plot_component(data, threshold=1e-30):
         '''
@@ -708,14 +840,15 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
 
     # Prepare x-axis (plots all snapshots like plot_integral_evolution)
     x_axis = plot_params.get('x_axis', 'zeta')
+    label_mode = _get_label_mode(plot_params)
     if x_axis == 'years':
         x = np.array([grid_t[i] * time_to_yr / 1e9 for i in valid_indices], dtype=float)  # Convert to Gyr
-        xlabel = 'Time (Gyr)'
+        xlabel = _axis_label_x('years', x_scale='lin', label_mode=label_mode).replace('yr', 'Gyr')
     else:
         x = np.array([grid_zeta[i] for i in valid_indices], dtype=float)
         if x.size and x[-1] < 0:
             x[-1] = abs(x[-1])
-        xlabel = 'Redshift (z)'
+        xlabel = _axis_label_x('zeta', x_scale='lin', label_mode=label_mode)
 
     # Sort levels ascending for consistent shading
     sort_idx = np.argsort(levels)
@@ -967,6 +1100,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     """
     
     # Validate plot_params
+    label_mode = _get_label_mode(plot_params)
     plot_type = plot_params.get('plot_type', 'raw')
     assert plot_type in ['raw', 'smoothed', 'interpolated'], "plot_type must be 'raw', 'smoothed', or 'interpolated'"
     assert plot_params.get('interpolation_kind', 'linear') in ['linear', 'cubic', 'nearest'], "interpolation_kind must be 'linear', 'cubic', or 'nearest'"
@@ -1036,6 +1170,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         interpolation_points = plot_params.get('interpolation_points', {'years': 500, 'zeta': 5000})
         interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
     cumulative_headroom = plot_params.get('plot_cumulative_magnetic_energy_headroom', 0.05)
+    plot_integrals = bool(plot_params.get('plot_integrals', False))
     
     # Extract induction parameters
     units = plot_params.get('units', induction_params.get('units', 1.0))
@@ -1349,37 +1484,44 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             components_plotted.append(label.lower())
 
     ax1_aux = None
+    xb2 = None
     yb2_cumulative = None
-    if evolution_type == 'differential' and plot_cumulative_magnetic_energy:
+    if evolution_type == 'differential':
         cumulative_units = plot_params.get('units', induction_params.get('units', 1.0))
         b2_total = cumulative_units * np.asarray(evolution_data.get('evo_b2', []), dtype=float)
         xb2, yb2 = _slice_xy(x_data, b2_total, index_O_plot, index_F_plot)
         if len(yb2) > 0 and should_plot_component(yb2, threshold=0.0):
             yb2_cumulative = np.cumsum(np.nan_to_num(yb2, nan=0.0))
-            ax1_aux = ax1.twinx()
-            ax1_aux.plot(
-                xb2,
-                yb2_cumulative,
-                '-',
-                linewidth=max(1.2, line2),
-                color=color_measured,
-                alpha=0.45,
-                label='Cumulative Magnetic Energy',
-                zorder=1
-            )
-            ax1_aux.fill_between(
-                xb2,
-                0.0,
-                yb2_cumulative,
-                color=color_measured,
-                alpha=0.06,
-                label='_nolegend_',
-                zorder=1
-            )
-            norm_suffix_cum = r' ($\rho_B^{-1}$)' if normalized else ''
-            ax1_aux.set_ylabel(f'Cumulative Magnetic Energy{norm_suffix_cum}', fontproperties=font, color=color_measured)
-            ax1_aux.tick_params(axis='y', colors=color_measured)
-            components_plotted.append('cumulative_magnetic_energy')
+            if plot_cumulative_magnetic_energy:
+                ax1_aux = ax1.twinx()
+                ax1_aux.plot(
+                    xb2,
+                    yb2_cumulative,
+                    '-',
+                    linewidth=max(1.2, line2),
+                    color=color_measured,
+                    alpha=0.45,
+                    label='Cumulative Magnetic Energy',
+                    zorder=1
+                )
+                ax1_aux.fill_between(
+                    xb2,
+                    0.0,
+                    yb2_cumulative,
+                    color=color_measured,
+                    alpha=0.06,
+                    label='_nolegend_',
+                    zorder=1
+                )
+                bcum_label = _apply_norm_vol_suffix(
+                    _axis_label_pd_y('cumulative_b', label_mode=label_mode),
+                    normalized=normalized,
+                    normalize_by_volume=False,
+                    label_mode=label_mode,
+                )
+                ax1_aux.set_ylabel(bcum_label, fontproperties=font, color=color_measured)
+                ax1_aux.tick_params(axis='y', colors=color_measured)
+                components_plotted.append('cumulative_magnetic_energy')
 
     if verbose and evolution_type == 'total':
         # Quantify temporal lag between measured magnetic energy and predictions.
@@ -1427,7 +1569,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                 level=2,
             )
     
-    setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font)
+    setup_axis(ax1, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolution_type, font, plot_params=plot_params)
     if ax1_aux is not None:
         align_cumulative_overlay_zero(
             ax1,
@@ -1435,19 +1577,18 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             y_aux_max=np.nanmax(yb2_cumulative) if yb2_cumulative is not None else None,
             headroom=cumulative_headroom,
         )
-    norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
-    vol_suffix = r' / Volume' if normalize_by_volume else ''
-    if evolution_type == 'total':
-        ax1.set_ylabel(f'Magnetic Energy{norm_suffix}{vol_suffix}', fontproperties=font)
-    else:
-        ax1.set_ylabel(f'Magnetic Evolution{norm_suffix}{vol_suffix}', fontproperties=font)
+    evo_base_label = _axis_label_evolution_y(evolution_type, y_scale='lin', label_mode=label_mode)
+    ax1.set_ylabel(
+        _apply_norm_vol_suffix(
+            evo_base_label,
+            normalized=normalized,
+            normalize_by_volume=normalize_by_volume,
+            label_mode=label_mode,
+        ),
+        fontproperties=font,
+    )
     ax1.grid(alpha=0.3)
-    handles, labels = ax1.get_legend_handles_labels()
-    if ax1_aux is not None:
-        aux_handles, aux_labels = ax1_aux.get_legend_handles_labels()
-        handles = handles + aux_handles
-        labels = labels + aux_labels
-    ax1.legend(handles, labels, prop=font_legend, ncol=2)
+    _smart_legend(ax1, fig1, plot_params=plot_params, font_legend=font_legend)
 
     if region == 'None':
         plot_title = f'{title} - {np.round(induction_params["size"][0]/2, 1)} Mpc'
@@ -1468,28 +1609,128 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         fig2, ax2 = plt.subplots(figsize=figure_size, dpi=dpi)
         
         if x_axis == 'years':
-            ax2.set_xlabel('Time (yr)', fontproperties=font)
+            ax2.set_xlabel(_axis_label_x('years', x_scale='lin', label_mode=label_mode), fontproperties=font)
             ax2.plot(t, volume_phi, linewidth=line1, label='Physical')
             ax2.plot(t, volume_co, linewidth=line1, label='Comoving')
             ax2.set_xscale('log')
         else:  # zeta
-            ax2.set_xlabel('Redshift (z)', fontproperties=font)
+            ax2.set_xlabel(_axis_label_x('zeta', x_scale='lin', label_mode=label_mode), fontproperties=font)
             ax2.plot(z, volume_phi, linewidth=line1, label='Physical')
             ax2.plot(z, volume_co, linewidth=line1, label='Comoving')
             ax2.set_xscale('log')
         
         ax2.set_ylabel('Integration Volume', fontproperties=font)
+        # Use smart legend for volume plot
         ax2.legend(prop=font_legend)
+        legend_outside_vol = _smart_legend(ax2, fig2, plot_params=plot_params, font_legend=font_legend)
         ax2.set_yscale('log')
         ax2.grid(alpha=0.3)
         
         ax2.set_title('Integrated Volume', y=y_title, fontproperties=font_title)
         fig2.tight_layout()
         figures.append(fig2)
+
+    fig_integral = None
+    if plot_integrals and evolution_type == 'differential':
+        fig_integral, ax_integral = plt.subplots(figsize=figure_size, dpi=dpi)
+        integral_components_plotted = []
+
+        def _plot_integral_curve(source_x, source_y, label, color, linestyle='-', linewidth=None, threshold=component_threshold):
+            if not should_plot_component(source_y, threshold=threshold):
+                return
+            cumulative_y = _cumulative_integral_series(source_x, source_y)
+            if len(cumulative_y) == 0:
+                return
+            ax_integral.plot(
+                source_x[:len(cumulative_y)],
+                cumulative_y,
+                linestyle=linestyle,
+                linewidth=linewidth if linewidth is not None else line1,
+                color=color,
+                label=label,
+            )
+            integral_components_plotted.append(label)
+
+        if plot_kinetic_energy:
+            _plot_integral_curve(x_data, kinetic_work_data, 'Integrated Kinetic Energy', color_kinetic, linewidth=line1)
+
+        if plot_magnetic_energy:
+            label = 'Integrated Magnetic Energy' if evolution_type == 'total' else 'Integrated Magnetic Energy Induction'
+            _plot_integral_curve(x_data, n1_data, label, color_measured, linewidth=line1)
+
+        _plot_integral_curve(x_data, total_work_data, 'Integrated ...from Compact Induction', color_compact, linewidth=line1)
+        _plot_integral_curve(x_data, n0_data, 'Integrated ...from Itemize Induction', color_itemized, linestyle='--', linewidth=line1)
+
+        component_integral_configs = [
+            (compres_work_data, 'Integrated Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression'])),
+            (stretch_work_data, 'Integrated Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching'])),
+            (advec_work_data, 'Integrated Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection'])),
+            (diver_work_data, 'Integrated Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence'])),
+            (drag_work_data, 'Integrated Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag'])),
+        ]
+        for data, label, color in component_integral_configs:
+            _plot_integral_curve(x_data, data, label, color, linestyle='--', linewidth=line2)
+
+        setup_axis(ax_integral, x_scale, 'lin', xlim, ylim, cancel_limits, x_axis, evolution_type, font, plot_params=plot_params)
+        integral_base_label = r'$\int \partial_t E_B\,dt$' if label_mode == 'math' else 'Cumulative Integrated Contribution'
+        ax_integral.set_ylabel(
+            _apply_norm_vol_suffix(
+                integral_base_label,
+                normalized=normalized,
+                normalize_by_volume=normalize_by_volume,
+                label_mode=label_mode,
+            ),
+            fontproperties=font,
+        )
+        ax_integral_aux = None
+        if yb2_cumulative is not None and len(yb2_cumulative) > 0:
+            ax_integral_aux = ax_integral.twinx()
+            ax_integral_aux.plot(
+                xb2,
+                yb2_cumulative,
+                '-',
+                linewidth=max(1.2, line2),
+                color=color_measured,
+                alpha=0.45,
+                label='Cumulative Magnetic Energy',
+                zorder=1,
+            )
+            ax_integral_aux.fill_between(
+                xb2,
+                0.0,
+                yb2_cumulative,
+                color=color_measured,
+                alpha=0.06,
+                label='_nolegend_',
+                zorder=1,
+            )
+            bcum_label = _apply_norm_vol_suffix(
+                _axis_label_pd_y('cumulative_b', label_mode=label_mode),
+                normalized=normalized,
+                normalize_by_volume=False,
+                label_mode=label_mode,
+            )
+            ax_integral_aux.set_ylabel(bcum_label, fontproperties=font, color=color_measured)
+            ax_integral_aux.tick_params(axis='y', colors=color_measured)
+            align_cumulative_overlay_zero(
+                ax_integral,
+                ax_integral_aux,
+                y_aux_max=np.nanmax(yb2_cumulative),
+                headroom=cumulative_headroom,
+            )
+        ax_integral.grid(alpha=0.3)
+        _smart_legend(ax_integral, fig_integral, plot_params=plot_params, font_legend=font_legend)
+        ax_integral.set_title(f'{title} (Cumulative Integrals)', y=y_title, fontproperties=font_title)
+        if cancel_limits and x_axis == 'zeta':
+            ax_integral.invert_xaxis()
+        fig_integral.tight_layout()
+        figures.append(fig_integral)
     
     if verbose:
         log_message(f'{plot_type.capitalize()} integrated magnetic energy and induction prediction plot created', tag='evolution', level=1)
         log_message(f'Components plotted: {", ".join(components_plotted)}', tag='evolution', level=1)
+        if fig_integral is not None:
+            log_message(f'Cumulative integral plot created with: {", ".join(integral_components_plotted)}', tag='evolution', level=1)
         if volume_evolution:
             log_message('Volume evolution plot created', tag='evolution', level=1)
     
@@ -1536,6 +1777,14 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             
             if verbose:
                 print(f'Plotting... Volume plot saved as: {filename2}')
+
+        if fig_integral is not None:
+            filename3 = f'{folder}/{run}_{file_title}_integrals_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}_{plotid}{plot_suffix}.png'
+            filename3 = safe_filename(filename3, verbose=verbose)
+            fig_integral.savefig(filename3, dpi=dpi)
+            if verbose:
+                log_message(f'Cumulative integral plot saved as: {filename3}', tag='evolution', level=1)
+                print(f'Plotting... Cumulative integral plot saved as: {filename3}')
                 
     if verbose:       
         for i, sim in enumerate(induction_params.get('sims', ['default'])):
@@ -1600,6 +1849,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             print('Production/dissipation plot skipped: required integrated keys are missing')
         return []
 
+    label_mode = _get_label_mode(plot_params)
     x_axis = plot_params.get('x_axis', 'zeta')
     x_scale = plot_params.get('x_scale', 'lin')
     y_scale = plot_params.get('y_scale', 'log')
@@ -1615,6 +1865,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     plot_absolute = plot_params.get('plot_absolute', True)
     plot_fractional = plot_params.get('plot_fractional', True)
     plot_net = plot_params.get('plot_net', False)
+    plot_integrals = bool(plot_params.get('plot_integrals', False))
     units = plot_params.get('units', induction_params.get('units', 1.0))
     normalized = plot_params.get('normalized', induction_params.get('production_dissipation', {}).get('normalized', True))
     normalize_by_volume = induction_params.get('production_dissipation', {}).get('normalize_by_volume', False)
@@ -1673,12 +1924,12 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
     if x_axis == 'years':
         x = np.array([grid_t[i] * time_to_yr for i in range(len(grid_t))], dtype=float)
-        xlabel = 'Time (yr)'
+        xlabel = _axis_label_x('years', x_scale='lin', label_mode=label_mode)
     else:
         x = np.array([grid_zeta[i] for i in range(len(grid_zeta))], dtype=float)
         if x.size and x[-1] < 0:
             x[-1] = abs(x[-1])
-        xlabel = 'Redshift (z)'
+        xlabel = _axis_label_x('zeta', x_scale='lin', label_mode=label_mode)
 
     if rad is None:
         if induction_params.get('region', None) == 'None':
@@ -1727,13 +1978,21 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
 
     figures = []
 
-    def _overlay_cumulative_magnetic_energy(ax):
-        if not plot_cumulative_magnetic_energy:
+    def _overlay_cumulative_magnetic_energy(ax, enabled=True, use_normalized=True):
+        if not enabled:
             return None
-        if 'int_b2' not in pd_data:
+        
+        # Prefer normalized version (int_B2) if it exists and is requested; fall back to int_b2
+        b2_key = None
+        if use_normalized and normalized and 'int_B2' in pd_data:
+            b2_key = 'int_B2'
+        elif 'int_b2' in pd_data:
+            b2_key = 'int_b2'
+        
+        if b2_key is None:
             return None
 
-        b2_snap = units * np.asarray(pd_data.get('int_b2', []), dtype=float)
+        b2_snap = units * np.asarray(pd_data.get(b2_key, []), dtype=float)
         nxy = min(len(x), len(b2_snap))
         if nxy == 0:
             return None
@@ -1764,9 +2023,14 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             label='_nolegend_',
             zorder=1
         )
-        norm_suffix_cum = r' ($\rho_B^{-1}$)' if normalized else ''
+        b_label = _apply_norm_vol_suffix(
+            _axis_label_pd_y('cumulative_b', label_mode=label_mode),
+            normalized=normalized,
+            normalize_by_volume=False,
+            label_mode=label_mode,
+        )
         ax_aux.set_ylabel(
-            f'Cumulative Magnetic Energy{norm_suffix_cum}',
+            b_label,
             fontproperties=font,
             color=palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
         )
@@ -1784,7 +2048,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             aux_handles, aux_labels = ax_aux.get_legend_handles_labels()
             handles = handles + aux_handles
             labels = labels + aux_labels
-        ax.legend(handles, labels, prop=font_legend, ncol=2)
+        _smart_legend(ax, ax.get_figure(), plot_params=None, font_legend=font_legend)
 
     # Absolute production/dissipation rates
     if plot_absolute:
@@ -1814,18 +2078,25 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
                     ax_abs.plot(x, arr_d, ':', linewidth=line_comp, color=color, label=rf'{label} $D_{{\mathrm{{{sym}}}}}$')
 
         ax_abs.set_xlabel(xlabel, fontproperties=font)
-        norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
-        vol_suffix = r' / Volume' if normalize_by_volume else ''
-        ax_abs.set_ylabel(f'Integrated Production / Dissipation{norm_suffix}{vol_suffix}', fontproperties=font)
+        abs_label = _apply_norm_vol_suffix(
+            _axis_label_pd_y('absolute', y_scale='lin', label_mode=label_mode),
+            normalized=normalized,
+            normalize_by_volume=normalize_by_volume,
+            label_mode=label_mode,
+        )
+        ax_abs.set_ylabel(abs_label, fontproperties=font)
         if x_scale == 'log':
             ax_abs.set_xscale('log')
-            if x_axis == 'years':
-                ax_abs.set_xlabel('Time log[yr]', fontproperties=font)
-            else:
-                ax_abs.set_xlabel('Redshift log[z]', fontproperties=font)
+            ax_abs.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
         if y_scale == 'log':
             ax_abs.set_yscale('log')
-            ax_abs.set_ylabel(f'Integrated Production / Dissipation log{norm_suffix}{vol_suffix}', fontproperties=font)
+            abs_log_label = _apply_norm_vol_suffix(
+                _axis_label_pd_y('absolute', y_scale='log', label_mode=label_mode),
+                normalized=normalized,
+                normalize_by_volume=normalize_by_volume,
+                label_mode=label_mode,
+            )
+            ax_abs.set_ylabel(abs_log_label, fontproperties=font)
         if not cancel_limits and xlim:
             ax_abs.set_xlim(xlim[0], xlim[1])
         if not cancel_limits and ylim:
@@ -1834,9 +2105,16 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_abs.invert_xaxis()
 
         ax_abs.grid(alpha=0.3)
-        ax_abs.set_title(f'{title} - {region_label}', y=y_title, fontproperties=font_title)
-        _set_combined_legend(ax_abs, None)
-        fig_abs.tight_layout()
+        # Unified title (short) and smart legend
+        plot_title_short = title.split('-')[0].strip()
+        if _get_label_mode(plot_params) == 'math':
+            plot_title_short = r'$E_B$ Evolution'
+        ax_abs.set_title(f'{plot_title_short} - {region_label}', y=y_title, fontproperties=font_title)
+        legend_outside = _smart_legend(ax_abs, fig_abs, plot_params=plot_params, font_legend=font_legend)
+        if legend_outside:
+            fig_abs.tight_layout(rect=[0, 0.08, 1, 1])
+        else:
+            fig_abs.tight_layout()
         figures.append(fig_abs)
 
     # Fractional contributions and net efficiency
@@ -1860,13 +2138,10 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_frac.plot(x, iota, '-', linewidth=line_main, color=color_efficiency, label=r'Net Efficiency $\iota$')
 
         ax_frac.set_xlabel(xlabel, fontproperties=font)
-        ax_frac.set_ylabel('Fractional Contribution (+prod / -diss)', fontproperties=font)
+        ax_frac.set_ylabel(_axis_label_pd_y('fractional', label_mode=label_mode), fontproperties=font)
         if x_scale == 'log':
             ax_frac.set_xscale('log')
-            if x_axis == 'years':
-                ax_frac.set_xlabel('Time log[yr]', fontproperties=font)
-            else:
-                ax_frac.set_xlabel('Redshift log[z]', fontproperties=font)
+            ax_frac.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
         if not cancel_limits and xlim:
             ax_frac.set_xlim(xlim[0], xlim[1])
         ax_frac.set_ylim(-1.05, 1.05)
@@ -1874,10 +2149,15 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_frac.invert_xaxis()
 
         ax_frac.grid(alpha=0.3)
-        ax_frac.set_title(f'{title} (Fractions) - {region_label}', y=y_title, fontproperties=font_title)
-        ax_frac_aux = _overlay_cumulative_magnetic_energy(ax_frac)
-        _set_combined_legend(ax_frac, ax_frac_aux)
-        fig_frac.tight_layout()
+        frac_title = f'{title} (Fractions)'
+        if _get_label_mode(plot_params) == 'math':
+            frac_title = r'Fractional Contributions'
+        ax_frac.set_title(f'{frac_title} - {region_label}', y=y_title, fontproperties=font_title)
+        legend_outside = _smart_legend(ax_frac, fig_frac, plot_params=plot_params, font_legend=font_legend)
+        if legend_outside:
+            fig_frac.tight_layout(rect=[0, 0.08, 1, 1])
+        else:
+            fig_frac.tight_layout()
         figures.append(fig_frac)
 
     # Net contributions: per-component net and total net curves
@@ -1899,15 +2179,16 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_net.plot(x, compact_net, '-', linewidth=line_main, color=color_compact_net, label='Net total (compact)')
 
         ax_net.set_xlabel(xlabel, fontproperties=font)
-        norm_suffix = r' ($\rho_B^{-1}$)' if normalized else ''
-        vol_suffix = r' / Volume' if normalize_by_volume else ''
-        ax_net.set_ylabel(f'Integrated Net Contribution{norm_suffix}{vol_suffix}', fontproperties=font)
+        net_label = _apply_norm_vol_suffix(
+            _axis_label_pd_y('net', label_mode=label_mode),
+            normalized=normalized,
+            normalize_by_volume=normalize_by_volume,
+            label_mode=label_mode,
+        )
+        ax_net.set_ylabel(net_label, fontproperties=font)
         if x_scale == 'log':
             ax_net.set_xscale('log')
-            if x_axis == 'years':
-                ax_net.set_xlabel('Time log[yr]', fontproperties=font)
-            else:
-                ax_net.set_xlabel('Redshift log[z]', fontproperties=font)
+            ax_net.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
         if not cancel_limits and xlim:
             ax_net.set_xlim(xlim[0], xlim[1])
         if not cancel_limits and ylim:
@@ -1916,11 +2197,82 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_net.invert_xaxis()
 
         ax_net.grid(alpha=0.3)
-        ax_net.set_title(f'{title} (Net) - {region_label}', y=y_title, fontproperties=font_title)
-        ax_net_aux = _overlay_cumulative_magnetic_energy(ax_net)
-        _set_combined_legend(ax_net, ax_net_aux)
-        fig_net.tight_layout()
+        net_title = f'{title} (Net)'
+        if _get_label_mode(plot_params) == 'math':
+            net_title = r'Net Contributions $N$'
+        ax_net.set_title(f'{net_title} - {region_label}', y=y_title, fontproperties=font_title)
+        ax_net_aux = _overlay_cumulative_magnetic_energy(ax_net, enabled=plot_cumulative_magnetic_energy, use_normalized=normalized)
+        legend_outside = _smart_legend(ax_net, fig_net, plot_params=plot_params, font_legend=font_legend)
+        if legend_outside:
+            fig_net.tight_layout(rect=[0, 0.08, 1, 1])
+        else:
+            fig_net.tight_layout()
         figures.append(fig_net)
+
+    fig_net_integral = None
+    if plot_net and plot_integrals:
+        fig_net_integral, ax_net_integral = plt.subplots(figsize=figure_size, dpi=dpi)
+        integral_components_plotted = []
+
+        def _plot_integral_curve(source_x, source_y, label, color, linestyle='-', linewidth=None, threshold=epsilon):
+            if not should_plot_component(source_y, threshold=threshold):
+                return
+            cumulative_y = _cumulative_integral_series(source_x, source_y)
+            if len(cumulative_y) == 0:
+                return
+            ax_net_integral.plot(
+                source_x[:len(cumulative_y)],
+                cumulative_y,
+                linestyle=linestyle,
+                linewidth=linewidth if linewidth is not None else line_main,
+                color=color,
+                label=label,
+            )
+            integral_components_plotted.append(label)
+
+        for prefix, label, color, sym in component_map:
+            prod_key = f'int_{prefix}_prod'
+            diss_key = f'int_{prefix}_diss'
+            if prod_key in pd_data and diss_key in pd_data:
+                arr_p = units * np.asarray(pd_data[prod_key], dtype=float)
+                arr_d = units * np.asarray(pd_data[diss_key], dtype=float)
+                net_i = arr_p - arr_d
+                _plot_integral_curve(x, net_i, rf'Integrated {label} $N_{{\mathrm{{{sym}}}}}$', color, linestyle='--', linewidth=line_comp)
+
+        _plot_integral_curve(x, itemized_net, 'Integrated Net total (itemized)', color_itemized_net, linestyle='--', linewidth=line_main)
+        if compact_net is not None:
+            _plot_integral_curve(x, compact_net, 'Integrated Net total (compact)', color_compact_net, linestyle='-', linewidth=line_main)
+
+        ax_net_integral.set_xlabel(xlabel, fontproperties=font)
+        net_int_label = _apply_norm_vol_suffix(
+            _axis_label_pd_y('net_integral', label_mode=label_mode),
+            normalized=normalized,
+            normalize_by_volume=normalize_by_volume,
+            label_mode=label_mode,
+        )
+        ax_net_integral.set_ylabel(net_int_label, fontproperties=font)
+        if x_scale == 'log':
+            ax_net_integral.set_xscale('log')
+            ax_net_integral.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
+        if not cancel_limits and xlim:
+            ax_net_integral.set_xlim(xlim[0], xlim[1])
+        if not cancel_limits and ylim:
+            ax_net_integral.set_ylim(ylim[0], ylim[1])
+        if cancel_limits and x_axis == 'zeta':
+            ax_net_integral.invert_xaxis()
+
+        ax_net_integral.grid(alpha=0.3)
+        net_int_title = f'{title} (Net Integrals)'
+        if _get_label_mode(plot_params) == 'math':
+            net_int_title = r'Integrated Net Contributions $\int N\,dt$'
+        ax_net_integral.set_title(f'{net_int_title} - {region_label}', y=y_title, fontproperties=font_title)
+        ax_net_integral_aux = _overlay_cumulative_magnetic_energy(ax_net_integral, enabled=plot_cumulative_magnetic_energy, use_normalized=normalized)
+        legend_outside = _smart_legend(ax_net_integral, fig_net_integral, plot_params=plot_params, font_legend=font_legend)
+        if legend_outside:
+            fig_net_integral.tight_layout(rect=[0, 0.08, 1, 1])
+        else:
+            fig_net_integral.tight_layout()
+        figures.append(fig_net_integral)
 
     if save and figures:
         if folder is None:
@@ -1977,6 +2329,13 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             figures[net_idx].savefig(fname_net, dpi=dpi)
             if verbose:
                 print(f'Plotting... Production/Dissipation net plot saved as: {fname_net}')
+
+        if fig_net_integral is not None:
+            fname_integral = f'{folder}/{run}_{base_title}_prod_diss_integrals_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_integral = safe_filename(fname_integral, verbose=verbose)
+            fig_net_integral.savefig(fname_integral, dpi=dpi)
+            if verbose:
+                print(f'Plotting... Production/Dissipation cumulative integrals plot saved as: {fname_integral}')
 
     if verbose and figures:
         log_message('Production/Dissipation evolution plots created', tag='production_dissipation', level=1)
@@ -2379,6 +2738,7 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
         return vmin - pad * span, vmax + pad * span
     
     for snap_i in range(len(it_indx)):
+        label_mode = _get_label_mode(plot_params)
         fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
         ax_energy = None
         ax_density = None
@@ -2446,9 +2806,15 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
 
         if x_scale == 'log':
             ax1.set_xscale('log')
-            ax1.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
+            if label_mode == 'math':
+                ax1.set_xlabel(r'$\log_{10}igl(r/R_{\mathrm{Vir}}\bigr)$', fontproperties=font)
+            else:
+                ax1.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
         else:
-            ax1.set_xlabel('Radial Distance [r/$R_{Vir}$]', fontproperties=font)
+            if label_mode == 'math':
+                ax1.set_xlabel(r'$r/R_{\mathrm{Vir}}$', fontproperties=font)
+            else:
+                ax1.set_xlabel('Radial Distance [r/$R_{Vir}$]', fontproperties=font)
         ax1.tick_params(axis='x', labelsize=11)
 
         if xlim is not None:
@@ -2485,17 +2851,35 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
                     ax_density.set_ylim(y_density_auto[0], y_density_auto[1])
 
         if units == energy_to_erg:
-            ax1.set_ylabel('Induction Density (erg/$Mpc^{3}$/s)', fontproperties=font)
+            if label_mode == 'math':
+                ax1.set_ylabel(r'$\mathrm{Induction\ Density}\ (\mathrm{erg}\,\mathrm{Mpc}^{-3}\,\mathrm{s}^{-1})$', fontproperties=font)
+            else:
+                ax1.set_ylabel('Induction Density (erg/$Mpc^{3}$/s)', fontproperties=font)
             if ax_energy is not None:
-                ax_energy.set_ylabel('Energy Density (erg/$Mpc^{3}$)', fontproperties=font)
+                if label_mode == 'math':
+                    ax_energy.set_ylabel(r'$\mathrm{Energy\ Density}\ (\mathrm{erg}\,\mathrm{Mpc}^{-3})$', fontproperties=font)
+                else:
+                    ax_energy.set_ylabel('Energy Density (erg/$Mpc^{3}$)', fontproperties=font)
             if ax_density is not None:
-                ax_density.set_ylabel('Density (g/cm³)', fontproperties=font)
+                if label_mode == 'math':
+                    ax_density.set_ylabel(r'$\mathrm{Density}\ (\mathrm{g\,cm}^{-3})$', fontproperties=font)
+                else:
+                    ax_density.set_ylabel('Density (g/cm³)', fontproperties=font)
         elif units == energy_to_J:
-            ax1.set_ylabel('Induction Density (J/$Mpc^{3}$/s)', fontproperties=font)
+            if label_mode == 'math':
+                ax1.set_ylabel(r'$\mathrm{Induction\ Density}\ (\mathrm{J}\,\mathrm{Mpc}^{-3}\,\mathrm{s}^{-1})$', fontproperties=font)
+            else:
+                ax1.set_ylabel('Induction Density (J/$Mpc^{3}$/s)', fontproperties=font)
             if ax_energy is not None:
-                ax_energy.set_ylabel('Energy Density (J/$Mpc^{3}$)', fontproperties=font)
+                if label_mode == 'math':
+                    ax_energy.set_ylabel(r'$\mathrm{Energy\ Density}\ (\mathrm{J}\,\mathrm{Mpc}^{-3})$', fontproperties=font)
+                else:
+                    ax_energy.set_ylabel('Energy Density (J/$Mpc^{3}$)', fontproperties=font)
             if ax_density is not None:
-                ax_density.set_ylabel('Density (M$_{\odot}$/Mpc³)', fontproperties=font)
+                if label_mode == 'math':
+                    ax_density.set_ylabel(r'$M_{\odot}\,\mathrm{Mpc}^{-3}$', fontproperties=font)
+                else:
+                    ax_density.set_ylabel('Density (M$_{\odot}$/Mpc³)', fontproperties=font)
         else:
             ax1.set_ylabel('Induction Density (arb. units / s)', fontproperties=font)
             if ax_energy is not None:
@@ -2526,12 +2910,17 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
                 ax1.legend(unique_handles, unique_labels, prop=font_legend,
                            loc='lower left', bbox_to_anchor=(0.02, 0.02),
                            bbox_transform=ax1.transAxes, ncol=2, frameon=True)
+                legend_outside = False
             else:
-                fig1.legend(unique_handles, unique_labels, prop=font_legend,
-                            loc='lower left', bbox_to_anchor=(0.02, 0.02),
-                            bbox_transform=ax1.transAxes, ncol=2, frameon=True)
-
-        fig1.tight_layout()
+                # place axis legend first and let _smart_legend decide if it must move below
+                ax1.legend(unique_handles, unique_labels, prop=font_legend, ncol=2, frameon=True)
+                legend_outside = _smart_legend(ax1, fig1, plot_params=plot_params, font_legend=font_legend)
+            if legend_outside:
+                fig1.tight_layout(rect=[0, 0.08, 1, 1])
+            else:
+                fig1.tight_layout()
+        else:
+            fig1.tight_layout()
 
         if ylim is not None:
             ax1.set_ylim(ylim[0], ylim[1])
@@ -3044,10 +3433,16 @@ def plot_production_dissipation_radial_profiles(profile_data, plot_params, induc
                 ax.legend(legend_handles, legend_labels, prop=font_legend,
                           loc='lower left', bbox_to_anchor=(0.02, 0.02),
                           bbox_transform=ax.transAxes, ncol=2, frameon=True)
+                legend_outside = False
             else:
                 ax.legend(legend_handles, legend_labels, prop=font_legend, ncol=2)
-
-        fig.tight_layout()
+                legend_outside = _smart_legend(ax, fig, plot_params=plot_params, font_legend=font_legend)
+            if legend_outside:
+                fig.tight_layout(rect=[0, 0.08, 1, 1])
+            else:
+                fig.tight_layout()
+        else:
+            fig.tight_layout()
         figures.append(fig)
 
         if plot_fractional_profiles:
@@ -3089,9 +3484,15 @@ def plot_production_dissipation_radial_profiles(profile_data, plot_params, induc
                 ax_frac.legend(prop=font_legend,
                                loc='lower left', bbox_to_anchor=(0.02, 0.02),
                                bbox_transform=ax_frac.transAxes, ncol=2, frameon=True)
+                legend_outside = False
             else:
                 ax_frac.legend(prop=font_legend, ncol=2)
-            fig_frac.tight_layout()
+                legend_outside = _smart_legend(ax_frac, fig_frac, plot_params=plot_params, font_legend=font_legend)
+            if legend_outside:
+                fig_frac.tight_layout(rect=[0, 0.08, 1, 1])
+            else:
+                fig_frac.tight_layout()
+            figures.append(fig_frac)
             figures.append(fig_frac)
 
     if verbose:

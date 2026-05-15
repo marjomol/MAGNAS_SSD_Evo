@@ -1290,6 +1290,15 @@ def induction_vol_integral(components, induction_energy, clus_b2,
             - int_kinetic_energy: volume integral of the kinetic energy density
             - int_b2: volume integral of the magnetic energy density
             - volume: volume of the studied region
+            - production/dissipation integrals if production_dissipation is enabled:
+                - int_MIE_diver_B2_prod, int_MIE_diver_B2_diss
+                - int_MIE_compres_B2_prod, int_MIE_compres_B2_diss
+                - int_MIE_stretch_B2_prod, int_MIE_stretch_B2_diss
+                - int_MIE_advec_B2_prod, int_MIE_advec_B2_diss
+                - int_MIE_drag_B2_prod, int_MIE_drag_B2_diss
+                - int_MIE_total_B2_prod_compact, int_MIE_total_B2_diss_compact
+                - int_MIE_total_B2_prod_itemized, int_MIE_total_B2_diss_itemized
+                - int_PD_iota: fractional imbalance between total production and dissipation (only if compute_fractional_integrals is True)
         
     Author: Marco Molina
     '''
@@ -1421,8 +1430,22 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         results['int_b2'] = _integrate_field(clus_b2)
         if verbose == True:
             log_message(f'Snap {it} in {sims}: Magnetic energy density volume integral done', tag="integral", level=1)
+        
+        # If production_dissipation with normalized=True, also compute normalized B2 integral
+        if pd_enabled and isinstance(production_dissipation, dict):
+            if production_dissipation.get('normalized', True):
+                # Compute normalized version (divided by rho_b)
+                try:
+                    rho_b_val = float(rho_b)
+                    if rho_b_val > 0:
+                        results['int_B2'] = results['int_b2'] / rho_b_val
+                    else:
+                        results['int_B2'] = results['int_b2']
+                except (TypeError, ValueError):
+                    results['int_B2'] = results['int_b2']
     else:
         results['int_b2'] = 0.0
+        results['int_B2'] = 0.0
 
     # Use a stable reference field for volume integration (content is ignored when vol=True).
     if components.get('total', False):
@@ -2820,7 +2843,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 pd_only = {
                     key: value
                     for key, value in pd_integral.items()
-                    if key.startswith('int_PD_') or ('_prod' in key) or ('_diss' in key)
+                    if key in ('int_b2', 'int_B2') or key.startswith('int_PD_') or ('_prod' in key) or ('_diss' in key)
                 }
                 induction_energy_integral.update(pd_only)
             else:
