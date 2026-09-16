@@ -232,7 +232,7 @@ def create_region(sim_name, it, coords, rad, size, F=1.0, reg='BOX', verbose=Fal
     return region, region_size
 
 
-def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bitformat=np.float32, region=None, sim_characteristics=None, verbose=False, debug=False):
+def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, dir_vortex, velocity_field, level, test, bitformat=np.float32, region=None, sim_characteristics=None, verbose=False, debug=False):
     '''
     Loads the data from the simulations for the given snapshots and prepares it for further analysis.
     This are the parameters we will need for each cell together with the magnetic field and the velocity,
@@ -246,6 +246,8 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         - dir_grids: directory where the grids are stored
         - dir_gas: directory where the gas data is stored
         - dir_params: directory where the parameters are stored
+        - dir_vortex: directory where the vortex data is stored
+        - velocity_field: dictionary containing the target velocity field components to be processed (total, solenoidal, compressive)
         - level: level of the AMR grid to be used
         - test: Dictionary containing the parameters for the test fields:
             - test: boolean to use test fields or not
@@ -271,7 +273,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             - grid_pare: parent patch of each patch
             - vector_levels: levels of refinement for each patch
             - clus_rho_rho_b: density contrast in the cluster
-            - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
+            - clus_vx, clus_vy, clus_vz: total velocity field components in the cluster
+            - clus_vsolx, clus_vsoly, clus_vsolz: solenoidal velocity field components in the cluster
+            - clus_vcompx, clus_vcompy, clus_vcompz: compressive velocity field components in the cluster
             - clus_cr0amr: cosmic ray energy density in the cluster (or refinement flag)
             - clus_solapst: solenoidal fraction in the cluster (or mask flag)
             - clus_kp: mask for valid patches
@@ -279,7 +283,9 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             - clus_B: normalized magnetic field magnitude in the cluster
             - clus_B2: normalized magnetic field squared in the cluster
             - clus_b2: magnetic field squared in the cluster
-            - clus_v2: velocity field squared in the cluster
+            - clus_v2: total velocity field squared in the cluster
+            - clus_vsol2: solenoidal velocity field squared in the cluster
+            - clus_vcomp2: compressible velocity field squared in the cluster
             - clus_pres: pressure (optional, None if not requested)
             - clus_pot: gravitational potential (optional, None if not requested)
             - clus_opot: old gravitational potential (optional, None if not requested)
@@ -313,11 +319,16 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
             "output_temp": False,
             "output_metalicity": False
         }
+
+    use_total_velocity = bool(velocity_field.get("total", True))
+    use_solenoidal_velocity = bool(velocity_field.get("solenoidal", False))
+    use_compressive_velocity = bool(velocity_field.get("compressive", False))
+    vortex_requested = bool(use_solenoidal_velocity or use_compressive_velocity)
     
     # Log simulation characteristics if verbose
     if verbose:
         log_message(f"Loading data with characteristics: is_cooling={sim_characteristics.get('is_cooling', False)}, "
-                   f"is_mascletB={sim_characteristics.get('is_mascletB', True)}")
+                    f"is_mascletB={sim_characteristics.get('is_mascletB', True)}")
 
     if test['test'] == False:
         # Read grid data using the reader
@@ -402,12 +413,35 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
 
         # Unpack cluster data based on what was actually read
         clus_data = reader.unpack_clus_data(clus, clus_kwargs, region)
-        
+
+        if vortex_requested:
+            vsolx, vsoly, vsolz, vcompx, vcompy, vcompz = reader.read_vortex_velocity_fields(
+                it,
+                path=dir_vortex + sims,
+                parameters_path=dir_params,
+                digits=5,
+                grids_path=dir_grids + sims,
+                grids_filename='grids',
+                max_refined_level=level,
+                read_solenoidal=use_solenoidal_velocity,
+                read_compressive=use_compressive_velocity
+            )
+            if use_solenoidal_velocity:
+                clus_vsolx, clus_vsoly, clus_vsolz = vsolx, vsoly, vsolz
+            if use_compressive_velocity:
+                clus_vcompx, clus_vcompy, clus_vcompz = vcompx, vcompy, vcompz
+        else:
+            clus_vsolx = clus_vsoly = clus_vsolz = None
+            clus_vcompx = clus_vcompy = clus_vcompz = None
+
         # Extract the variables we need
         clus_rho_rho_b = clus_data['delta']
-        clus_vx = clus_data['vx']
-        clus_vy = clus_data['vy']
-        clus_vz = clus_data['vz']
+        if velocity_field.get("total", True):
+            clus_vx = clus_data['vx']
+            clus_vy = clus_data['vy']
+            clus_vz = clus_data['vz']
+        else:
+            clus_vx = clus_vy = clus_vz = None
         clus_cr0amr = clus_data['cr0amr']
         clus_solapst = clus_data['solapst']
         clus_mbx = clus_data['Bx']
@@ -619,26 +653,59 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
     clus_by = [clus_mby[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_bz = [clus_mbz[p] * np.sqrt(rho_b) if bool(clus_kp[p]) else 0 for p in range(n)]
 
+    if clus_vx is not None and clus_vy is not None and clus_vz is not None:
+        clus_vx = [clus_vx[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+        clus_vy = [clus_vy[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+        clus_vz = [clus_vz[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+    if clus_vsolx is not None and clus_vsoly is not None and clus_vsolz is not None:
+        clus_vsolx = [clus_vsolx[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+        clus_vsoly = [clus_vsoly[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+        clus_vsolz = [clus_vsolz[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+    if clus_vcompx is not None and clus_vcompy is not None and clus_vcompz is not None:
+        clus_vcompx = [clus_vcompx[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+        clus_vcompy = [clus_vcompy[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+        clus_vcompz = [clus_vcompz[p] if bool(clus_kp[p]) else 0 for p in range(n)]
+
     if verbose == True:
         log_message('Data type loaded for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype), tag="data", level=1)
 
     # Convert to float64 if not transforming to uniform grid
     if bitformat == np.float64:
         clus_rho_rho_b = [(1+clus_rho_rho_b[p]).astype(np.float64) if bool(clus_kp[p]) else (1+clus_rho_rho_b[p]) for p in range(n)] # Delta is (rho/rho_b) - 1
-        clus_vx = [clus_vx[p].astype(np.float64) if bool(clus_kp[p]) else clus_vx[p] for p in range(n)]
-        clus_vy = [clus_vy[p].astype(np.float64) if bool(clus_kp[p]) else clus_vy[p] for p in range(n)]
-        clus_vz = [clus_vz[p].astype(np.float64) if bool(clus_kp[p]) else clus_vz[p] for p in range(n)]
         clus_bx = [clus_bx[p].astype(np.float64) if bool(clus_kp[p]) else clus_bx[p] for p in range(n)]
         clus_by = [clus_by[p].astype(np.float64) if bool(clus_kp[p]) else clus_by[p] for p in range(n)]
         clus_bz = [clus_bz[p].astype(np.float64) if bool(clus_kp[p]) else clus_bz[p] for p in range(n)]
         clus_Bx = [clus_Bx[p].astype(np.float64) if bool(clus_kp[p]) else clus_Bx[p] for p in range(n)]
         clus_By = [clus_By[p].astype(np.float64) if bool(clus_kp[p]) else clus_By[p] for p in range(n)]
         clus_Bz = [clus_Bz[p].astype(np.float64) if bool(clus_kp[p]) else clus_Bz[p] for p in range(n)]
+        if clus_vx is not None and clus_vy is not None and clus_vz is not None:
+            clus_vx = [clus_vx[p].astype(np.float64) if bool(clus_kp[p]) else clus_vx[p] for p in range(n)]
+            clus_vy = [clus_vy[p].astype(np.float64) if bool(clus_kp[p]) else clus_vy[p] for p in range(n)]
+            clus_vz = [clus_vz[p].astype(np.float64) if bool(clus_kp[p]) else clus_vz[p] for p in range(n)]
+        if clus_vsolx is not None and clus_vsoly is not None and clus_vsolz is not None:
+            clus_vsolx = [clus_vsolx[p].astype(np.float64) if bool(clus_kp[p]) else clus_vsolx[p] for p in range(n)]
+            clus_vsoly = [clus_vsoly[p].astype(np.float64) if bool(clus_kp[p]) else clus_vsoly[p] for p in range(n)]
+            clus_vsolz = [clus_vsolz[p].astype(np.float64) if bool(clus_kp[p]) else clus_vsolz[p] for p in range(n)]
+        if clus_vcompx is not None and clus_vcompy is not None and clus_vcompz is not None:
+            clus_vcompx = [clus_vcompx[p].astype(np.float64) if bool(clus_kp[p]) else clus_vcompx[p] for p in range(n)]
+            clus_vcompy = [clus_vcompy[p].astype(np.float64) if bool(clus_kp[p]) else clus_vcompy[p] for p in range(n)]
+            clus_vcompz = [clus_vcompz[p].astype(np.float64) if bool(clus_kp[p]) else clus_vcompz[p] for p in range(n)]
 
     clus_b2 = [clus_bx[p]**2 + clus_by[p]**2 + clus_bz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_B2 = [clus_Bx[p]**2 + clus_By[p]**2 + clus_Bz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
     clus_B = [np.sqrt(clus_B2[p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-    clus_v2 = [clus_vx[p]**2 + clus_vy[p]**2 + clus_vz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
+    if clus_vx is not None and clus_vy is not None and clus_vz is not None:
+        clus_v2 = [clus_vx[p]**2 + clus_vy[p]**2 + clus_vz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
+    else:
+        clus_v2 = None
+    if clus_vsolx is not None and clus_vsoly is not None and clus_vsolz is not None:
+        clus_vsol2 = [clus_vsolx[p]**2 + clus_vsoly[p]**2 + clus_vsolz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
+    else:
+        clus_vsol2 = None
+    if clus_vcompx is not None and clus_vcompy is not None and clus_vcompz is not None:
+        clus_vcomp2 = [clus_vcompx[p]**2 + clus_vcompy[p]**2 + clus_vcompz[p]**2 if bool(clus_kp[p]) else 0 for p in range(n)]
+    else:
+        clus_vcomp2 = None
 
     if verbose == True:
         log_message('Working data type for snap '+ str(grid_irr) + ': ' + str(clus_vx[0].dtype), tag="data", level=1)
@@ -663,6 +730,12 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         'clus_vx': clus_vx,
         'clus_vy': clus_vy,
         'clus_vz': clus_vz,
+        'clus_vsolx': clus_vsolx,
+        'clus_vsoly': clus_vsoly,
+        'clus_vsolz': clus_vsolz,
+        'clus_vcompx': clus_vcompx,
+        'clus_vcompy': clus_vcompy,
+        'clus_vcompz': clus_vcompz,
         'clus_cr0amr': clus_cr0amr,
         'clus_solapst': clus_solapst,
         'clus_kp': clus_kp,
@@ -676,6 +749,8 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
         'clus_b2': clus_b2,
         'clus_B2': clus_B2,
         'clus_v2': clus_v2,
+        'clus_vsol2': clus_vsol2,
+        'clus_vcomp2': clus_vcomp2,
         # Optional variables (may be None if not requested)
         'clus_pres': clus_pres,
         'clus_pot': clus_pot,
@@ -692,7 +767,7 @@ def load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test, bit
 
 
 def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
-                        clus_vx, clus_vy, clus_vz,
+                        active_velocities,
                         clus_kp, grid_npatch, grid_irr,
                         dx, stencil=3, verbose=False):
     '''
@@ -702,7 +777,7 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
         - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
-        - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
+        - active_velocities: dictionary containing the active velocity fields
         - clus_kp: mask for valid patches
         - grid_npatch: number of patches in the grid
         - grid_irr: index of the snapshot
@@ -713,7 +788,7 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
-        - results: dictionary containing the computed vectorial quantities:
+        - results: dictionary containing the computed vectorial quantities (sufix indicates the velocity field type, e.g. _solenoidal, _compressive, no sufix for total velocity field):
             - diver_B: divergence of the magnetic field
             - diver_v: divergence of the velocity field
             - v_nabla_B_x, v_nabla_B_y, v_nabla_B_z: directional derivative of the magnetic field along the velocity field
@@ -734,7 +809,6 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
     
     n = 1 + np.sum(grid_npatch)
     zero = [0] * n
-    
     if clus_kp is None:
         clus_kp = np.ones(n, dtype=bool)
     
@@ -745,51 +819,48 @@ def vectorial_quantities(components, clus_Bx, clus_By, clus_Bz,
         results['diver_B'] = diff.divergence(clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
     else:
         results['diver_B'] = zero
-        
-    if components.get('compression', False):
-        ### We compute the divergence of the velocity field
-        results['diver_v'] = diff.divergence(clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
-    else:
-        results['diver_v'] = zero
-        
-    if components.get('stretching', False):
-        ### We compute the directional derivative of the velocity field along the magnetic field
-        
-        results['B_nabla_v_x'], results['B_nabla_v_y'], results['B_nabla_v_z'] = diff.directional_derivative_vector_field(clus_vx, clus_vy, clus_vz, clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
-    else:
-        results['B_nabla_v_x'] = zero
-        results['B_nabla_v_y'] = zero
-        results['B_nabla_v_z'] = zero
-        
-    if components.get('advection', False):
-        ### We compute the directional derivative of the magnetic field along the velocity field
-    
-        results['v_nabla_B_x'], results['v_nabla_B_y'], results['v_nabla_B_z'] = diff.directional_derivative_vector_field(clus_Bx, clus_By, clus_Bz, clus_vx, clus_vy, clus_vz, dx, grid_npatch, clus_kp, stencil)
-    else:
-        results['v_nabla_B_x'] = zero
-        results['v_nabla_B_y'] = zero
-        results['v_nabla_B_z'] = zero
-        
-    if components.get('total', False):
-        ### We compute the cross product of the velocity and magnetic field
 
-        v_X_B_x = [clus_vy[p] * clus_Bz[p] - clus_vz[p] * clus_By[p] if bool(clus_kp[p]) else 0 for p in range(n)] # We run across all the patches with the levels we are interested in
-        v_X_B_y = [clus_vz[p] * clus_Bx[p] - clus_vx[p] * clus_Bz[p] if bool(clus_kp[p]) else 0 for p in range(n)] # We only want the patches inside the region of interest
-        v_X_B_z = [clus_vx[p] * clus_By[p] - clus_vy[p] * clus_Bx[p] if bool(clus_kp[p]) else 0 for p in range(n)]
-
-        ### The total induction as the curl of the cross product of the velocity and magnetic field with drag term.
+    ### Velocity dependent quantities, iterate over the active velocity fields (total, solenoidal, compressive)
+    for vel_type, v_field in active_velocities.items():
+        sfx = f"_{vel_type}" if vel_type != "total" else ""
         
-        results['curl_v_X_B_x'], results['curl_v_X_B_y'], results['curl_v_X_B_z'] = diff.curl(v_X_B_x, v_X_B_y, v_X_B_z, dx, grid_npatch, clus_kp, stencil)
-    else:
-        results['curl_v_X_B_x'] = zero
-        results['curl_v_X_B_y'] = zero
-        results['curl_v_X_B_z'] = zero
+        vx, vy, vz = v_field['x'], v_field['y'], v_field['z']
+        
+        if components.get('compression', False):
+            ### We compute the divergence of the velocity field
+            results[f'diver_v{sfx}'] = diff.divergence(vx, vy, vz, dx, grid_npatch, clus_kp, stencil)
+        else:
+            results[f'diver_v{sfx}'] = zero
+            
+        if components.get('stretching', False):
+            ### We compute the directional derivative of the velocity field along the magnetic field
+            results[f'B_nabla_v_x{sfx}'], results[f'B_nabla_v_y{sfx}'], results[f'B_nabla_v_z{sfx}'] = \
+                diff.directional_derivative_vector_field(vx, vy, vz, clus_Bx, clus_By, clus_Bz, dx, grid_npatch, clus_kp, stencil)
+        else:
+            results[f'B_nabla_v_x{sfx}'] = results[f'B_nabla_v_y{sfx}'] = results[f'B_nabla_v_z{sfx}'] = zero
+            
+        if components.get('advection', False):
+            ### We compute the directional derivative of the magnetic field along the velocity field
+            results[f'v_nabla_B_x{sfx}'], results[f'v_nabla_B_y{sfx}'], results[f'v_nabla_B_z{sfx}'] = \
+                diff.directional_derivative_vector_field(clus_Bx, clus_By, clus_Bz, vx, vy, vz, dx, grid_npatch, clus_kp, stencil)
+        else:
+            results[f'v_nabla_B_x{sfx}'] = results[f'v_nabla_B_y{sfx}'] = results[f'v_nabla_B_z{sfx}'] = zero
+            
+        if components.get('total', False):
+            ### We compute the cross product of the velocity and magnetic field
+            v_X_B_x = [vy[p] * clus_Bz[p] - vz[p] * clus_By[p] if clus_kp[p] else 0 for p in range(n)] # We run across all the patches with the levels we are interested in
+            v_X_B_y = [vz[p] * clus_Bx[p] - vx[p] * clus_Bz[p] if clus_kp[p] else 0 for p in range(n)] # We only want the patches inside the region of interest
+            v_X_B_z = [vx[p] * clus_By[p] - vy[p] * clus_Bx[p] if clus_kp[p] else 0 for p in range(n)]
+            
+            ### The total induction as the curl of the cross product of the velocity and magnetic field with drag term.
+            results[f'curl_v_X_B_x{sfx}'], results[f'curl_v_X_B_y{sfx}'], results[f'curl_v_X_B_z{sfx}'] = \
+                diff.curl(v_X_B_x, v_X_B_y, v_X_B_z, dx, grid_npatch, clus_kp, stencil)
+        else:
+            results[f'curl_v_X_B_x{sfx}'] = results[f'curl_v_X_B_y{sfx}'] = results[f'curl_v_X_B_z{sfx}'] = zero
 
     end_time_vector = time.time()
-
-    total_time_vector = end_time_vector - start_time_vector
-    
     if verbose == True:
+        total_time_vector = end_time_vector - start_time_vector
         log_message('Time for vector calculations in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_vector))), tag="vector", level=1)
         
     return results
@@ -908,7 +979,7 @@ def filter_divergence_outliers(diver_B, kept_patches=None, method="mask",
 
 def induction_equation(components, vectorial_quantities,
                         clus_Bx, clus_By, clus_Bz,
-                        clus_vx, clus_vy, clus_vz,
+                        active_velocities,
                         clus_kp, grid_npatch, grid_irr,
                         H, a, mag=False, verbose=False):
     '''
@@ -924,7 +995,8 @@ def induction_equation(components, vectorial_quantities,
             - v_nabla_B_x, v_nabla_B_y, v_nabla_B_z: directional derivative of the magnetic field along the velocity field
             - curl_v_X_B_x, curl_v_X_B_y, curl_v_X_B_z: total induction as the curl of the cross product of the velocity and magnetic field with drag term
         - clus_Bx, clus_By, clus_Bz: magnetic field components in the cluster
-        - clus_vx, clus_vy, clus_vz: velocity field components in the cluster
+        - active_velocities: dictionary containing the active velocity fields
+            - e.g. total: total velocity field (clus_vx, clus_vy, clus_vz)
         - clus_kp: mask for valid patches
         - grid_npatch: number of patches in the grid
         - grid_irr: index of the snapshot
@@ -934,7 +1006,7 @@ def induction_equation(components, vectorial_quantities,
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
-        - results: dictionary containing the computed components of the magnetic induction equation:
+        - results: dictionary containing the computed components of the magnetic induction equation (sufix indicates the velocity field type, e.g. _solenoidal, _compressive, no sufix for total velocity field):
             - MIE_diver_x, MIE_diver_y, MIE_diver_z: null divergence of the magnetic field
             - MIE_compres_x, MIE_compres_y, MIE_compres_z: compressive component of the magnetic field induction
             - MIE_stretch_x, MIE_stretch_y, MIE_stretch_z: stretching component of the magnetic field induction
@@ -964,108 +1036,96 @@ def induction_equation(components, vectorial_quantities,
         clus_kp = np.ones(n, dtype=bool)
     
     results = {}
+    magnitudes = {} if mag else None
     
-    if components.get('divergence', False):
-        ### The null divergence of the magnetic field for numerical error purposes.
+    ### Cosmic drag does not depend on velocity, we calculate it once
+    if components.get('drag', False) or components.get('total', False):
+        factor_drag = -0.5 * H
+        results['MIE_drag_x'] = [(factor_drag * clus_Bx[p] if clus_kp[p] else 0) for p in range(n)]
+        results['MIE_drag_y'] = [(factor_drag * clus_By[p] if clus_kp[p] else 0) for p in range(n)]
+        results['MIE_drag_z'] = [(factor_drag * clus_Bz[p] if clus_kp[p] else 0) for p in range(n)]
+        if mag:
+            magnitudes['MIE_drag_mag'] = utils.magnitude(results['MIE_drag_x'], results['MIE_drag_y'], results['MIE_drag_z'], clus_kp)
+    else:
+        results['MIE_drag_x'] = results['MIE_drag_y'] = results['MIE_drag_z'] = zero
+        if mag:
+            magnitudes['MIE_drag_mag'] = zero
+
+    ### The rest of the components depend on the velocity field, we iterate over the active velocity fields (total, solenoidal, compressive)
+    inv_a = 1.0 / a
+    
+    for vel_type, v_field in active_velocities.items():
+        sfx = f"_{vel_type}" if vel_type != "total" else ""
+        vx, vy, vz = v_field['x'], v_field['y'], v_field['z']
         
-        results['MIE_diver_x'] = [((1/a) * clus_vx[p] * vectorial_quantities['diver_B'][p]) if bool(clus_kp[p]) else 0 for p in range(n)] # We have to run across all the patches.
-        results['MIE_diver_y'] = [((1/a) * clus_vy[p] * vectorial_quantities['diver_B'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_diver_z'] = [((1/a) * clus_vz[p] * vectorial_quantities['diver_B'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-    else:
-        results['MIE_diver_x'] = zero
-        results['MIE_diver_y'] = zero
-        results['MIE_diver_z'] = zero
-
-    if components.get('compression', False):
-        ### The compressive component.
-
-        results['MIE_compres_x'] = [(-(1/a) * clus_Bx[p] * vectorial_quantities['diver_v'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_compres_y'] = [(-(1/a) * clus_By[p] * vectorial_quantities['diver_v'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_compres_z'] = [(-(1/a) * clus_Bz[p] * vectorial_quantities['diver_v'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-    else:
-        results['MIE_compres_x'] = zero
-        results['MIE_compres_y'] = zero
-        results['MIE_compres_z'] = zero
-
-    if components.get('stretching', False):
-        ### The stretching component.
-
-        results['MIE_stretch_x'] = [((1/a) * vectorial_quantities['B_nabla_v_x'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_stretch_y'] = [((1/a) * vectorial_quantities['B_nabla_v_y'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_stretch_z'] = [((1/a) * vectorial_quantities['B_nabla_v_z'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-    else:
-        results['MIE_stretch_x'] = zero
-        results['MIE_stretch_y'] = zero
-        results['MIE_stretch_z'] = zero
-
-    if components.get('advection', False):
-        ### The advection component.
-
-        results['MIE_advec_x'] = [(-(1/a) * vectorial_quantities['v_nabla_B_x'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_advec_y'] = [(-(1/a) * vectorial_quantities['v_nabla_B_y'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_advec_z'] = [(-(1/a) * vectorial_quantities['v_nabla_B_z'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-    else:
-        results['MIE_advec_x'] = zero
-        results['MIE_advec_y'] = zero
-        results['MIE_advec_z'] = zero
-
-    if components.get('drag', False):
-        ### The cosmic drag component.
-
-        results['MIE_drag_x'] = [(-(1/2) * H * clus_Bx[p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_drag_y'] = [(-(1/2) * H * clus_By[p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        results['MIE_drag_z'] = [(-(1/2) * H * clus_Bz[p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-    else:
-        results['MIE_drag_x'] = zero
-        results['MIE_drag_y'] = zero
-        results['MIE_drag_z'] = zero
-
-    if components.get('total', False):
-        ### The total magnetic induction energy in the compact way.
-        
-        if components.get('drag', False):
-            results['MIE_total_x'] = [((1/a) * vectorial_quantities['curl_v_X_B_x'][p] + results['MIE_drag_x'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-            results['MIE_total_y'] = [((1/a) * vectorial_quantities['curl_v_X_B_y'][p] + results['MIE_drag_y'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-            results['MIE_total_z'] = [((1/a) * vectorial_quantities['curl_v_X_B_z'][p] + results['MIE_drag_z'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
+        if components.get('divergence', False):
+            ### The null divergence of the magnetic field for numerical error purposes.
+            div_B = vectorial_quantities['diver_B']
+            results[f'MIE_diver_x{sfx}'] = [(inv_a * vx[p] * div_B[p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_diver_y{sfx}'] = [(inv_a * vy[p] * div_B[p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_diver_z{sfx}'] = [(inv_a * vz[p] * div_B[p] if clus_kp[p] else 0) for p in range(n)]
         else:
-            results['MIE_total_x'] = [((1/a) * vectorial_quantities['curl_v_X_B_x'][p] + (-(1/2) * H * clus_Bx[p])) if bool(clus_kp[p]) else 0 for p in range(n)]
-            results['MIE_total_y'] = [((1/a) * vectorial_quantities['curl_v_X_B_y'][p] + (-(1/2) * H * clus_By[p])) if bool(clus_kp[p]) else 0 for p in range(n)]
-            results['MIE_total_z'] = [((1/a) * vectorial_quantities['curl_v_X_B_z'][p] + (-(1/2) * H * clus_Bz[p])) if bool(clus_kp[p]) else 0 for p in range(n)]
+            results[f'MIE_diver_x{sfx}'] = results[f'MIE_diver_y{sfx}'] = results[f'MIE_diver_z{sfx}'] = zero
 
-    else:
-        results['MIE_total_x'] = zero
-        results['MIE_total_y'] = zero
-        results['MIE_total_z'] = zero
+        if components.get('compression', False):
+            ### The compressive component.
+            div_v = vectorial_quantities[f'diver_v{sfx}']
+            results[f'MIE_compres_x{sfx}'] = [(-inv_a * clus_Bx[p] * div_v[p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_compres_y{sfx}'] = [(-inv_a * clus_By[p] * div_v[p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_compres_z{sfx}'] = [(-inv_a * clus_Bz[p] * div_v[p] if clus_kp[p] else 0) for p in range(n)]
+        else:
+            results[f'MIE_compres_x{sfx}'] = results[f'MIE_compres_y{sfx}'] = results[f'MIE_compres_z{sfx}'] = zero
 
-    # Compute magnitudes if requested
-    if mag == True:
-        magnitudes = {}
-        for key, prefix in [
-            ('divergence', 'MIE_diver'),
-            ('compression', 'MIE_compres'),
-            ('stretching', 'MIE_stretch'),
-            ('advection', 'MIE_advec'),
-            ('drag', 'MIE_drag'),
-            ('total', 'MIE_total')
-        ]:
-            if components.get(key, False):
-                magnitudes[f'{prefix}_mag'] = utils.magnitude(results[f'{prefix}_x'], results[f'{prefix}_y'], results[f'{prefix}_z'], clus_kp)
-            else:
-                magnitudes[f'{prefix}_mag'] = zero
-    else:
-        magnitudes = None
+        if components.get('stretching', False):
+            ### The stretching component.
+            results[f'MIE_stretch_x{sfx}'] = [(inv_a * vectorial_quantities[f'B_nabla_v_x{sfx}'][p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_stretch_y{sfx}'] = [(inv_a * vectorial_quantities[f'B_nabla_v_y{sfx}'][p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_stretch_z{sfx}'] = [(inv_a * vectorial_quantities[f'B_nabla_v_z{sfx}'][p] if clus_kp[p] else 0) for p in range(n)]
+        else:
+            results[f'MIE_stretch_x{sfx}'] = results[f'MIE_stretch_y{sfx}'] = results[f'MIE_stretch_z{sfx}'] = zero
 
-    end_time_induction_terms = time.time()
+        if components.get('advection', False):
+            ### The advection component.
+            results[f'MIE_advec_x{sfx}'] = [(-inv_a * vectorial_quantities[f'v_nabla_B_x{sfx}'][p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_advec_y{sfx}'] = [(-inv_a * vectorial_quantities[f'v_nabla_B_y{sfx}'][p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_advec_z{sfx}'] = [(-inv_a * vectorial_quantities[f'v_nabla_B_z{sfx}'][p] if clus_kp[p] else 0) for p in range(n)]
+        else:
+            results[f'MIE_advec_x{sfx}'] = results[f'MIE_advec_y{sfx}'] = results[f'MIE_advec_z{sfx}'] = zero
 
-    total_time_induction_terms = end_time_induction_terms - start_time_induction_terms
+        if components.get('total', False):
+            ### The total magnetic induction energy in the compact way.
+            curl_v_B_x = vectorial_quantities[f'curl_v_X_B_x{sfx}']
+            curl_v_B_y = vectorial_quantities[f'curl_v_X_B_y{sfx}']
+            curl_v_B_z = vectorial_quantities[f'curl_v_X_B_z{sfx}']
+            
+            drag_x, drag_y, drag_z = results['MIE_drag_x'], results['MIE_drag_y'], results['MIE_drag_z']
+            
+            results[f'MIE_total_x{sfx}'] = [(inv_a * curl_v_B_x[p] + drag_x[p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_total_y{sfx}'] = [(inv_a * curl_v_B_y[p] + drag_y[p] if clus_kp[p] else 0) for p in range(n)]
+            results[f'MIE_total_z{sfx}'] = [(inv_a * curl_v_B_z[p] + drag_z[p] if clus_kp[p] else 0) for p in range(n)]
+        else:
+            results[f'MIE_total_x{sfx}'] = results[f'MIE_total_y{sfx}'] = results[f'MIE_total_z{sfx}'] = zero
+
+        # Magnitudes específicas por tipo de velocidad
+        if mag:
+            prefixes = [('divergence', 'MIE_diver'), ('compression', 'MIE_compres'), 
+                        ('stretching', 'MIE_stretch'), ('advection', 'MIE_advec'), ('total', 'MIE_total')]
+            for comp_key, pref in prefixes:
+                if components.get(comp_key, False):
+                    magnitudes[f'{pref}_mag{sfx}'] = utils.magnitude(
+                        results[f'{pref}_x{sfx}'], results[f'{pref}_y{sfx}'], results[f'{pref}_z{sfx}'], clus_kp
+                    )
+                else:
+                    magnitudes[f'{pref}_mag{sfx}'] = zero
     
-    if verbose == True:
-        log_message('Time for calculating the induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_terms))), tag="induction", level=1)
+    if verbose:
+        total_time = time.time() - start_time_induction_terms
+        log_message(f"Time for calculating induction terms in snap {grid_irr}: {strftime('%H:%M:%S', gmtime(total_time))}", tag="induction", level=1)
 
     return results, magnitudes
 
 
-def induction_equation_energy(components, induction_equation,
+def induction_equation_energy(components, velocity_field, induction_equation,
                             clus_Bx, clus_By, clus_Bz,
                             clus_rho_rho_b, clus_v2,
                             clus_kp, grid_npatch, grid_irr,
@@ -1077,6 +1137,7 @@ def induction_equation_energy(components, induction_equation,
     
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - velocity_field: string indicating the type of velocity fields to be used (e.g. "total", "solenoidal", "compressive")
         - induction_equation: dictionary containing the components of the magnetic induction equation computed in the previous step
             - MIE_diver_x, MIE_diver_y, MIE_diver_z: null divergence of the magnetic field
             - MIE_compres_x, MIE_compres_y, MIE_compres_z: compressive component of the magnetic field induction
@@ -1093,7 +1154,7 @@ def induction_equation_energy(components, induction_equation,
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
-        - results: dictionary containing the computed components of the magnetic induction equation in terms of the magnetic energy:
+        - results: dictionary containing the computed components of the magnetic induction equation in terms of the magnetic energy (sufix indicates the velocity field type, e.g. _solenoidal, _compressive, no sufix for total velocity field):
             - MIE_diver_B2: null divergence of the magnetic field energy
             - MIE_compres_B2: compressive component of the magnetic field induction energy
             - MIE_stretch_B2: stretching component of the magnetic field induction energy
@@ -1123,38 +1184,64 @@ def induction_equation_energy(components, induction_equation,
     
     results = {}
     
-    for key, prefix in [
+    ## The cosmic drag term is independent of the velocity field, so we can compute it directly.    
+    if components.get('drag', False):
+        results['MIE_drag_B2'] = [
+            (clus_Bx[p] * induction_equation['MIE_drag_x'][p] +
+             clus_By[p] * induction_equation['MIE_drag_y'][p] +
+             clus_Bz[p] * induction_equation['MIE_drag_z'][p] if clus_kp[p] else 0)
+            for p in range(n)
+        ]
+    else:
+        results['MIE_drag_B2'] = zero
+        
+    velocity_terms = [
         ('divergence', 'MIE_diver'),
         ('compression', 'MIE_compres'),
         ('stretching', 'MIE_stretch'),
         ('advection', 'MIE_advec'),
-        ('drag', 'MIE_drag'),
         ('total', 'MIE_total')
-    ]:
-        if components.get(key, False):
-            results[f'{prefix}_B2'] = [(clus_Bx[p] * induction_equation[f'{prefix}_x'][p] + clus_By[p] * induction_equation[f'{prefix}_y'][p]
-                                        + clus_Bz[p] * induction_equation[f'{prefix}_z'][p]) if bool(clus_kp[p]) else 0 for p in range(n)]
-        else:
-            results[f'{prefix}_B2'] = zero
+    ]
+    
+    velocity_mappings = [
+        ("total", ""),
+        ("solenoidal", "_solenoidal"),
+        ("compressive", "_compressive")
+    ]
+    
+    for key, sfx in velocity_mappings:
+        # Evaluamos el trigger booleano del archivo de configuración
+        if velocity_field.get(key, False):
+            for comp_key, pref in velocity_terms:
+                if components.get(comp_key, False):
+                    # Producto escalar seguro basado estrictamente en el trigger activo
+                    results[f'{pref}_B2{sfx}'] = [
+                        (clus_Bx[p] * induction_equation[f'{pref}_x{sfx}'][p] +
+                         clus_By[p] * induction_equation[f'{pref}_y{sfx}'][p] +
+                         clus_Bz[p] * induction_equation[f'{pref}_z{sfx}'][p] if clus_kp[p] else 0)
+                        for p in range(n)
+                    ]
+                else:
+                    results[f'{pref}_B2{sfx}'] = zero
 
     ## The kinetic energy.
 
-    if components.get('kinetic_energy', True) and clus_rho_rho_b:
-        results['kinetic_energy_density'] = [((1/2) * clus_rho_rho_b[p] * clus_v2[p]) if bool(clus_kp[p]) else 0 for p in range(n)]
+    if components.get('kinetic_energy', True) and clus_rho_rho_b is not None:
+        results['kinetic_energy_density'] = [
+            (0.5 * clus_rho_rho_b[p] * clus_v2[p] if clus_kp[p] else 0)
+            for p in range(n)
+        ]
     else:
         results['kinetic_energy_density'] = zero
     
-    end_time_induction_energy_terms = time.time()
-
-    total_time_induction_energy_terms = end_time_induction_energy_terms - start_time_induction_energy_terms
-    
-    if verbose == True:
-        log_message('Time for calculating the energy induction eq. terms in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction_energy_terms))), tag="induction_energy", level=1)
+    if verbose:
+        total_time = time.time() - start_time_induction_energy_terms
+        log_message(f"Time for calculating energy induction terms in snap {grid_irr}: {strftime('%H:%M:%S', gmtime(total_time))}", tag="induction_energy", level=1)
         
     return results
 
 
-def production_dissipation_fields(components, induction_energy,
+def production_dissipation_fields(components, velocity_field, induction_energy,
                                 clus_kp, grid_npatch, grid_irr,
                                 verbose=False):
     '''
@@ -1167,6 +1254,7 @@ def production_dissipation_fields(components, induction_energy,
 
     Args:
         - components: dictionary of enabled induction components
+        - velocity_field: dictionary of enabled velocity fields
         - induction_energy: dictionary produced by induction_equation_energy
         - clus_kp: mask for valid patches
         - grid_npatch: number of patches in the grid
@@ -1188,45 +1276,54 @@ def production_dissipation_fields(components, induction_energy,
         clus_kp = np.ones(n, dtype=bool)
 
     results = {}
-
-    term_specs = [
+    
+    velocity_terms = [
         ('divergence', 'MIE_diver_B2'),
         ('compression', 'MIE_compres_B2'),
         ('stretching', 'MIE_stretch_B2'),
         ('advection', 'MIE_advec_B2'),
-        ('drag', 'MIE_drag_B2'),
         ('total', 'MIE_total_B2')
     ]
 
-    for key, prefix in term_specs:
-        if not components.get(key, False):
-            results[f'{prefix}_prod'] = zero
-            results[f'{prefix}_diss'] = zero
-            continue
-        results[f'{prefix}_prod'] = [
-            np.maximum(induction_energy[prefix][pidx], 0.0) if bool(clus_kp[pidx]) else 0
-            for pidx in range(n)
-        ]
-        results[f'{prefix}_diss'] = [
-            np.maximum(-induction_energy[prefix][pidx], 0.0) if bool(clus_kp[pidx]) else 0
-            for pidx in range(n)
-        ]
+    velocity_mappings = [
+        ("total", ""),
+        ("solenoidal", "_solenoidal"),
+        ("compressive", "_compressive")
+    ]
+    
+    ## Handle cosmic drag separately since it doesn't depend on the velocity field
+    if components.get('drag', False):
+        results['MIE_drag_B2_prod'] = [np.maximum(induction_energy['MIE_drag_B2'][p], 0.0) if clus_kp[p] else 0 for p in range(n)]
+        results['MIE_drag_B2_diss'] = [np.maximum(-induction_energy['MIE_drag_B2'][p], 0.0) if clus_kp[p] else 0 for p in range(n)]
+    else:
+        results['MIE_drag_B2_prod'] = results['MIE_drag_B2_diss'] = zero
 
-    end_time_pd_terms = time.time()
-    total_time_pd_terms = end_time_pd_terms - start_time_pd_terms
+    for key, sfx in velocity_mappings:
+        if velocity_field.get(key, False):
+            for comp_key, pref in velocity_terms:
+                full_prefix = f"{pref}{sfx}"
+                
+                if components.get(comp_key, False):
+                    # Separación Celda a Celda (Cell-wise split)
+                    results[f'{full_prefix}_prod'] = [
+                        np.maximum(induction_energy[full_prefix][p], 0.0) if clus_kp[p] else 0
+                        for p in range(n)
+                    ]
+                    results[f'{full_prefix}_diss'] = [
+                        np.maximum(-induction_energy[full_prefix][p], 0.0) if clus_kp[p] else 0
+                        for p in range(n)
+                    ]
+                else:
+                    results[f'{full_prefix}_prod'] = results[f'{full_prefix}_diss'] = zero
 
     if verbose:
-        log_message(
-            'Time for production/dissipation split in snap ' + str(grid_irr) + ': ' +
-            str(strftime("%H:%M:%S", gmtime(total_time_pd_terms))),
-            tag="prod_diss",
-            level=1
-        )
+        total_time = time.time() - start_time_pd_terms
+        log_message(f"Time for production/dissipation split in snap {grid_irr}: {strftime('%H:%M:%S', gmtime(total_time))}", tag="prod_diss", level=1)
 
     return results
     
 
-def induction_vol_integral(components, induction_energy, clus_b2,
+def induction_vol_integral(components, velocity_field, induction_energy, clus_b2,
                             clus_cr0amr, clus_solapst, clus_kp,
                             grid_irr, grid_zeta, grid_npatch, up_to_level,
                             grid_patchrx, grid_patchry, grid_patchrz,
@@ -1237,6 +1334,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                             volume_coordinates='physical', normalize_by_volume=False,
                             compute_induction_integrals=True,
                             compute_fractional_integrals=False,
+                            integration_label='induction',
                             verbose=False):
     '''
     Computes the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
@@ -1246,6 +1344,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
     
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - velocity_field: string indicating the type of velocity fields to be used (e.g. "total", "solenoidal", "compressive")
         - induction_energy: dictionary containing the components of the magnetic induction equation in terms of the magnetic energy computed in the previous step
             - MIE_diver_B2: null divergence of the magnetic field energy
             - MIE_compres_B2: compressive component of the magnetic field induction energy
@@ -1280,7 +1379,7 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
-        - results: dictionary containing the computed volume integrals:
+        - results: dictionary containing the computed volume integrals (sufix indicates the velocity field type, e.g. _solenoidal, _compressive, no sufix for total velocity field):
             - int_MIE_diver_B2: volume integral of the null divergence of the magnetic field energy
             - int_MIE_compres_B2: volume integral of the compressive component
             - int_MIE_stretch_B2: volume integral of the stretching component
@@ -1307,13 +1406,20 @@ def induction_vol_integral(components, induction_energy, clus_b2,
     start_time_induction = time.time() # Record the start time
 
     results = {}
+    log_prefix = f'[{integration_label}] '
 
-    component_specs = [
+    velocity_field = velocity_field or {"total": True}
+    velocity_mappings = [
+        ("total", ""),
+        ("solenoidal", "_solenoidal"),
+        ("compressive", "_compressive")
+    ]
+
+    velocity_terms = [
         ('divergence', 'MIE_diver_B2'),
         ('compression', 'MIE_compres_B2'),
         ('stretching', 'MIE_stretch_B2'),
         ('advection', 'MIE_advec_B2'),
-        ('drag', 'MIE_drag_B2'),
         ('total', 'MIE_total_B2')
     ]
 
@@ -1327,18 +1433,26 @@ def induction_vol_integral(components, induction_energy, clus_b2,
             normalize_by_volume=normalize_by_volume
         )
     
-    if compute_induction_integrals:
-        for key, prefix in component_specs:
-            if components.get(key, False):
-                results[f'int_{prefix}'] = _integrate_field(induction_energy[prefix])
-
-                if verbose == True:
-                    log_message(f'Snap {it} in {sims}: {key} energy density volume integral done', tag="integral", level=1)
-            else:
-                results[f'int_{prefix}'] = 0.0
+    ### We go first with the cosmic drag term, which is independent of the velocity field.
+    if compute_induction_integrals and components.get('drag', False):
+        results['int_MIE_drag_B2'] = _integrate_field(induction_energy['MIE_drag_B2'])
     else:
-        for _, prefix in component_specs:
-            results[f'int_{prefix}'] = 0.0
+        results['int_MIE_drag_B2'] = 0.0
+    
+    for vel_key, sfx in velocity_mappings:
+        if velocity_field.get(vel_key, False):
+            for comp_key, pref in velocity_terms:
+                full_key = f"{pref}{sfx}"
+                if compute_induction_integrals and components.get(comp_key, False):
+                    results[f'int_{full_key}'] = _integrate_field(induction_energy[full_key])
+                    if verbose == True:
+                        log_message(
+                            f'{log_prefix}Snap {it} in {sims}: {comp_key} ({vel_key}) energy density volume integral done',
+                            tag="integral",
+                            level=1
+                        )
+                else:
+                    results[f'int_{full_key}'] = 0.0
 
     pd_enabled = False
     if isinstance(production_dissipation, dict):
@@ -1347,9 +1461,8 @@ def induction_vol_integral(components, induction_energy, clus_b2,
         pd_enabled = bool(production_dissipation)
 
     if pd_enabled:
-        rho_factor = 1.0
-        if isinstance(production_dissipation, dict):
-            if not production_dissipation.get('normalized', True):
+            rho_factor = 1.0
+            if isinstance(production_dissipation, dict) and not production_dissipation.get('normalized', True):
                 try:
                     rho_factor = float(rho_b)
                 except (TypeError, ValueError):
@@ -1357,115 +1470,138 @@ def induction_vol_integral(components, induction_energy, clus_b2,
                     if verbose:
                         log_message(
                             f"Snap {it} in {sims}: invalid rho_b for physical P/D scaling; falling back to normalized scaling.",
-                            tag="integral",
-                            level=1
+                            tag="integral", level=1
                         )
 
-        pd_specs = [
-            ('divergence', 'MIE_diver_B2', 'itemized'),
-            ('compression', 'MIE_compres_B2', 'itemized'),
-            ('stretching', 'MIE_stretch_B2', 'itemized'),
-            ('advection', 'MIE_advec_B2', 'itemized'),
-            ('drag', 'MIE_drag_B2', 'itemized'),
-            ('total', 'MIE_total_B2', 'compact')
-        ]
-
-        total_prod = 0.0
-        total_diss = 0.0
-
-        for key, prefix, pd_mode in pd_specs:
-            if components.get(key, False):
-                if pd_mode == 'itemized':
-                    p_i = rho_factor * _integrate_field(induction_energy[f'{prefix}_prod'])
-                    d_i = rho_factor * _integrate_field(induction_energy[f'{prefix}_diss'])
-                    results[f'int_{prefix}_prod'] = p_i
-                    results[f'int_{prefix}_diss'] = d_i
-                    total_prod += float(p_i)
-                    total_diss += float(d_i)
-                else:
-                    # Compact split from MIE_total_B2 is stored under dedicated keys.
-                    results[f'int_{prefix}_prod_compact'] = rho_factor * _integrate_field(induction_energy[f'{prefix}_prod'])
-                    results[f'int_{prefix}_diss_compact'] = rho_factor * _integrate_field(induction_energy[f'{prefix}_diss'])
+            if components.get('drag', False):
+                p_drag = rho_factor * _integrate_field(induction_energy['MIE_drag_B2_prod'])
+                d_drag = rho_factor * _integrate_field(induction_energy['MIE_drag_B2_diss'])
+                results['int_MIE_drag_B2_prod'] = p_drag
+                results['int_MIE_drag_B2_diss'] = d_drag
             else:
-                if pd_mode == 'itemized':
-                    results[f'int_{prefix}_prod'] = 0.0
-                    results[f'int_{prefix}_diss'] = 0.0
-                else:
-                    results[f'int_{prefix}_prod_compact'] = 0.0
-                    results[f'int_{prefix}_diss_compact'] = 0.0
-                    
-            if verbose == True:
-                if pd_mode == 'compact':
-                    log_message(f'Snap {it} in {sims}: compact total P/D split volume integral done', tag="integral", level=1)
-                else:
-                    log_message(f'Snap {it} in {sims}: {key} P/D volume integral done', tag="integral", level=1)
+                results['int_MIE_drag_B2_prod'] = results['int_MIE_drag_B2_diss'] = 0.0
 
-        # Itemized totals are defined as sum of component integrals by construction.
-        results['int_MIE_total_B2_prod_itemized'] = total_prod
-        results['int_MIE_total_B2_diss_itemized'] = total_diss
+            if verbose:
+                log_message(f'{log_prefix}Snap {it} in {sims}: drag P/D volume integral done', tag="integral", level=1)
 
-        if compute_fractional_integrals:
-            results['int_PD_iota'] = 0.0 if total_prod <= 0.0 else (total_prod - total_diss) / total_prod
-        
-        if compute_fractional_integrals:
-            for key, prefix, pd_mode in pd_specs:
-                if pd_mode != 'itemized':
-                    continue
-                p_i = float(results[f'int_{prefix}_prod'])
-                d_i = float(results[f'int_{prefix}_diss'])
-                results[f'int_PD_frac_{prefix}_prod'] = 0.0 if total_prod <= 0.0 else p_i / total_prod
-                results[f'int_PD_frac_{prefix}_diss'] = 0.0 if total_diss <= 0.0 else d_i / total_diss
+            itemized_enabled = bool(components.get('itemized', False))
+            velocity_terms = [
+                ('divergence', 'MIE_diver_B2', 'itemized'),
+                ('compression', 'MIE_compres_B2', 'itemized'),
+                ('stretching', 'MIE_stretch_B2', 'itemized'),
+                ('advection', 'MIE_advec_B2', 'itemized'),
+                ('total', 'MIE_total_B2', 'compact')
+            ]
 
-                if verbose == True:
-                    log_message(f'Snap {it} in {sims}: {key} fractional P/D volume integral computed', tag="integral", level=1)
+            active_families = [(vel_key, sfx) for vel_key, sfx in velocity_mappings if velocity_field.get(vel_key, False)]
+
+            for vel_key, sfx in velocity_mappings:
+                if velocity_field.get(vel_key, False):
+                    family_itemized_prod = 0.0
+                    family_itemized_diss = 0.0
+
+                    # Drag is velocity-independent so it is included in every active family itemized total if present.
+                    if itemized_enabled and components.get('drag', False):
+                        family_itemized_prod += float(results.get('int_MIE_drag_B2_prod', 0.0))
+                        family_itemized_diss += float(results.get('int_MIE_drag_B2_diss', 0.0))
+
+                    for comp_key, pref, pd_mode in velocity_terms:
+                        full_key = f"{pref}{sfx}"
+                        
+                        if components.get(comp_key, False):
+                            p_i = rho_factor * _integrate_field(induction_energy[f'{full_key}_prod'])
+                            d_i = rho_factor * _integrate_field(induction_energy[f'{full_key}_diss'])
+
+                            if pd_mode == 'compact':
+                                results[f'int_{full_key}_prod_compact'] = p_i
+                                results[f'int_{full_key}_diss_compact'] = d_i
+                            else:
+                                # Per-component P/D curves are always stored because the plots depend on them.
+                                results[f'int_{full_key}_prod'] = p_i
+                                results[f'int_{full_key}_diss'] = d_i
+                                family_itemized_prod += float(p_i)
+                                family_itemized_diss += float(d_i)
+                        else:
+                            if pd_mode == 'compact':
+                                results[f'int_{full_key}_prod_compact'] = results[f'int_{full_key}_diss_compact'] = 0.0
+                            else:
+                                results[f'int_{full_key}_prod'] = results[f'int_{full_key}_diss'] = 0.0
+
+                        if verbose:
+                            if pd_mode == 'compact':
+                                log_message(f'{log_prefix}Snap {it} in {sims}: compact {vel_key} total P/D split volume integral done', tag="integral", level=1)
+                            else:
+                                log_message(f'{log_prefix}Snap {it} in {sims}: {comp_key} ({vel_key}) P/D volume integral done', tag="integral", level=1)
+
+                    if itemized_enabled:
+                        # Family-wise itemized totals
+                        results[f'int_MIE_total_B2{sfx}_prod'] = family_itemized_prod
+                        results[f'int_MIE_total_B2{sfx}_diss'] = family_itemized_diss
+
+            if compute_fractional_integrals:
+                p_drag = float(results.get('int_MIE_drag_B2_prod', 0.0))
+                d_drag = float(results.get('int_MIE_drag_B2_diss', 0.0))
+
+                for vel_key, sfx in active_families:
+                    fam_prod = float(results.get(f'int_MIE_total_B2{sfx}_prod', results.get(f'int_MIE_total_B2{sfx}_prod_compact', 0.0)))
+                    fam_diss = float(results.get(f'int_MIE_total_B2{sfx}_diss', results.get(f'int_MIE_total_B2{sfx}_diss_compact', 0.0)))
+
+                    results[f'int_PD_iota{sfx}'] = 0.0 if fam_prod <= 0.0 else (fam_prod - fam_diss) / fam_prod
+
+                    if components.get('drag', False):
+                        results[f'int_PD_frac_MIE_drag_B2{sfx}_prod'] = 0.0 if fam_prod <= 0.0 else p_drag / fam_prod
+                        results[f'int_PD_frac_MIE_drag_B2{sfx}_diss'] = 0.0 if fam_diss <= 0.0 else d_drag / fam_diss
+
+                    for comp_key, pref, pd_mode in velocity_terms:
+                        if pd_mode != 'itemized':
+                            continue
+                        full_key = f"{pref}{sfx}"
+                        p_i = float(results.get(f'int_{full_key}_prod', 0.0))
+                        d_i = float(results.get(f'int_{full_key}_diss', 0.0))
+                        results[f'int_PD_frac_{full_key}_prod'] = 0.0 if fam_prod <= 0.0 else p_i / fam_prod
+                        results[f'int_PD_frac_{full_key}_diss'] = 0.0 if fam_diss <= 0.0 else d_i / fam_diss
+
+                        if verbose:
+                            log_message(f'{log_prefix}Snap {it} in {sims}: {comp_key} ({vel_key}) fractional P/D volume integral computed', tag="integral", level=1)
     
-    if components.get('kinetic_energy', True) and induction_energy['kinetic_energy_density']:
+    if components.get('kinetic_energy', True) and induction_energy.get('kinetic_energy_density'):
         results['int_kinetic_energy'] = _integrate_field(induction_energy['kinetic_energy_density'])
-        if verbose == True:
-            log_message(f'Snap {it} in {sims}: Kinetic energy density volume integral done', tag="integral", level=1)
+        if verbose:
+            log_message(f'{log_prefix}Snap {it} in {sims}: Kinetic energy density volume integral done', tag="integral", level=1)
     else:
         results['int_kinetic_energy'] = 0.0
 
     if components.get('magnetic_energy', True) and clus_b2:
         results['int_b2'] = _integrate_field(clus_b2)
-        if verbose == True:
-            log_message(f'Snap {it} in {sims}: Magnetic energy density volume integral done', tag="integral", level=1)
+        if verbose:
+            log_message(f'{log_prefix}Snap {it} in {sims}: Magnetic energy density volume integral done', tag="integral", level=1)
         
-        # If production_dissipation with normalized=True, also compute normalized B2 integral
+        results['int_B2'] = results['int_b2']
+        
         if pd_enabled and isinstance(production_dissipation, dict):
             if production_dissipation.get('normalized', True):
-                # Compute normalized version (divided by rho_b)
                 try:
                     rho_b_val = float(rho_b)
                     if rho_b_val > 0:
                         results['int_B2'] = results['int_b2'] / rho_b_val
-                    else:
-                        results['int_B2'] = results['int_b2']
                 except (TypeError, ValueError):
-                    results['int_B2'] = results['int_b2']
+                    pass  # Mantiene el valor base de results['int_b2'] si falla
     else:
         results['int_b2'] = 0.0
         results['int_B2'] = 0.0
 
-    # Use a stable reference field for volume integration (content is ignored when vol=True).
-    if components.get('total', False):
-        volume_ref = induction_energy['MIE_total_B2']
-    else:
-        first_active = next((pfx for key, pfx in component_specs if components.get(key, False)), None)
-        volume_ref = induction_energy[first_active] if first_active is not None else clus_b2
+    results['volume'] = _integrate_field(clus_b2, vol=True)
 
-    results['volume'] = _integrate_field(volume_ref, vol=True)
-
-    end_time_induction = time.time()
-
-    total_time_induction = end_time_induction - start_time_induction
-
-    if verbose == True and compute_induction_integrals and pd_enabled:
-        log_message('Time for induction and P/D integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))), tag="integral", level=1)
-    elif verbose == True and compute_induction_integrals:
-        log_message('Time for induction integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))), tag="integral", level=1)
-    elif verbose == True and pd_enabled:
-        log_message('Time for P/D integration in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_induction))), tag="integral", level=1)
+    if verbose:
+        total_time_induction = time.time() - start_time_induction
+        time_str = strftime("%H:%M:%S", gmtime(total_time_induction))
+        
+        if compute_induction_integrals and pd_enabled:
+            log_message(f'{log_prefix}Time for induction and P/D integration in snap {grid_irr}: {time_str}', tag="integral", level=1)
+        elif compute_induction_integrals:
+            log_message(f'{log_prefix}Time for induction integration in snap {grid_irr}: {time_str}', tag="integral", level=1)
+        elif pd_enabled:
+            log_message(f'{log_prefix}Time for P/D integration in snap {grid_irr}: {time_str}', tag="integral", level=1)
 
     return results
 
@@ -1505,7 +1641,7 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
         - verbose: boolean to print the data type loaded or not (default is False)
         
     Returns:
-        - results: dictionary containing the evolution of BOTH total and differential magnetic energy density and its components:
+        - results: dictionary containing the evolution of BOTH total and differential magnetic energy density and its components (sufix indicates the velocity field type, e.g. _solenoidal, _compressive, no sufix for total velocity field):
             - evo_MIE_diver_B2: total evolution of the null divergence of the magnetic field energy
             - evo_MIE_diver_B2_diff: differential evolution of the null divergence of the magnetic field energy
             - evo_MIE_compres_B2: total evolution of the compressive component
@@ -1600,31 +1736,45 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
                 level=2
             )
     
-    main_keys = ["divergence", "compression", "stretching", "advection", "drag"]
-    if all(components.get(k, False) for k in main_keys):
-        components["induction"] = True
-        induction_energy_integral['int_ind_b2'] = [(induction_energy_integral['int_MIE_diver_B2'][i] +
-                                                    induction_energy_integral['int_MIE_compres_B2'][i] +
-                                                    induction_energy_integral['int_MIE_stretch_B2'][i] +
-                                                    induction_energy_integral['int_MIE_advec_B2'][i] +
-                                                    induction_energy_integral['int_MIE_drag_B2'][i])
-                                                    for i in range(n+1)]
-    else:
-        components["induction"] = False
+    # Reconstruct induction totals using exact suffixes from induction_vol_integral: '', '_solenoidal', '_compressive'
+    
+    base_mechanisms = ["divergence", "compression", "stretching", "advection", "drag"]
+    for sfx in ['', '_solenoidal', '_compressive']:
+        ind_key = f"induction{sfx}"
+        int_ind_key = f"int_ind_b2{sfx}" if sfx else "int_ind_b2"
 
+        # Check if all constituent terms exist in induction_energy_integral
+        prefix_map = {
+            'divergence': f'MIE_diver_B2{sfx}',
+            'compression': f'MIE_compres_B2{sfx}',
+            'stretching': f'MIE_stretch_B2{sfx}',
+            'advection': f'MIE_advec_B2{sfx}',
+            'drag': 'MIE_drag_B2'
+        }
+        
+        all_present = all(f'int_{prefix_map[k]}' in induction_energy_integral for k in base_mechanisms)
+
+        if all_present and components.get("itemized", False):
+            components[ind_key] = True
+            induction_energy_integral[int_ind_key] = [
+                sum(induction_energy_integral[f'int_{prefix_map[k]}'][i] for k in base_mechanisms)
+                for i in range(n + 1)
+            ]
+        else:
+            components[ind_key] = False
+
+    # Alpha fit logic using the primary total induction component
     alpha_fit_value = None
     if derivative == 'alpha_fit' and components.get("induction", False):
         int_b2_arr = np.asarray(induction_energy_integral.get('int_b2', []), dtype=float)
         int_ind_arr = np.asarray(induction_energy_integral.get('int_ind_b2', []), dtype=float)
         gt = np.asarray(grid_time, dtype=float)
         rb = rho_b_arr
-        gz = np.asarray(grid_zeta, dtype=float)
-        sf = scale_factor  # scale factor
+        sf = scale_factor
 
         if len(int_b2_arr) == n + 1 and len(int_ind_arr) >= n and len(gt) == n + 1 and len(rb) == n + 1:
             dt = gt[1:] - gt[:-1]
             x = rb[1:] * dt * int_ind_arr[:n]
-            # Updated equation: y = E_{n+1} - (rho_{n+1}/rho_n) * scale_factor * E_n
             y = int_b2_arr[1:] - sf * (rb[1:] / rb[:-1]) * int_b2_arr[:-1]
 
             valid = np.isfinite(x) & np.isfinite(y)
@@ -1644,95 +1794,101 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
                             tag="evolution",
                             level=1
                         )
-
-    for key, prefix in [
+                        
+    evolution_mappings = [
         ('divergence', 'MIE_diver_B2'),
         ('compression', 'MIE_compres_B2'),
         ('stretching', 'MIE_stretch_B2'),
         ('advection', 'MIE_advec_B2'),
         ('drag', 'MIE_drag_B2'),
         ('total', 'MIE_total_B2'),
-        ('induction', 'ind_b2')
-    ]:
+        ('induction', 'ind_b2'),
+        
+        # Solenoidal velocity field components
+        ('divergence_solenoidal', 'MIE_diver_B2_solenoidal'),
+        ('compression_solenoidal', 'MIE_compres_B2_solenoidal'),
+        ('stretching_solenoidal', 'MIE_stretch_B2_solenoidal'),
+        ('advection_solenoidal', 'MIE_advec_B2_solenoidal'),
+        ('total_solenoidal', 'MIE_total_B2_solenoidal'),
+        ('induction_solenoidal', 'ind_b2_solenoidal'),
+        
+        # Compressive velocity field components
+        ('divergence_compressive', 'MIE_diver_B2_compressive'),
+        ('compression_compressive', 'MIE_compres_B2_compressive'),
+        ('stretching_compressive', 'MIE_stretch_B2_compressive'),
+        ('advection_compressive', 'MIE_advec_B2_compressive'),
+        ('total_compressive', 'MIE_total_B2_compressive'),
+        ('induction_compressive', 'ind_b2_compressive'),
+    ]
+
+    for key, prefix in evolution_mappings:
+        int_key = f'int_{prefix}'
+        has_series = int_key in induction_energy_integral
+
         # Total Evolution
-        if components.get(key, False):
+        if has_series:
             if derivative == 'RK':
-                results[f'evo_{prefix}'] = diff.integrate_energy(grid_time, induction_energy_integral[f'int_b2'][0],
-                                                            rho_factor, induction_energy_integral[f'int_{prefix}'])
+                results[f'evo_{prefix}'] = diff.integrate_energy(grid_time, induction_energy_integral['int_b2'][0],
+                                                            rho_factor, induction_energy_integral[int_key])
             elif derivative == 'central':
-                results[f'evo_{prefix}'] = [(rho_factor[i+1] * ((1/rho_b[i]) * scale_factor[i] * (induction_energy_integral[f'int_b2'][i]) +
-                2 * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
+                results[f'evo_{prefix}'] = [(rho_factor[i+1] * ((1/rho_b[i]) * scale_factor[i] * (induction_energy_integral['int_b2'][i]) +
+                2 * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (induction_energy_integral[int_key][i]))) for i in range(n)]
             elif derivative == 'implicit_forward':
                 results[f'evo_{prefix}'] = [
                     (
                         (rho_factor[i+1] / rho_b[i]) * scale_factor[i] * induction_energy_integral['int_b2'][i]
                         + 2 * rho_b[i+1] * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (
-                            induction_energy_integral[f'int_{prefix}'][i]
+                            induction_energy_integral[int_key][i]
                             + ((grid_time[i+1] - grid_time[i]) / (grid_time[i+1] - grid_time[i-1]))
-                            * (induction_energy_integral[f'int_{prefix}'][i+1] - induction_energy_integral[f'int_{prefix}'][i-1])
+                            * (induction_energy_integral[int_key][i+1] - induction_energy_integral[int_key][i-1])
                         )
                     )
                     for i in range(1, n)
                 ]
             elif derivative == 'rate':
-                results[f'evo_{prefix}'] = [(rho_factor[i+1] * ((1/rho_b[i]) * scale_factor[i] * (induction_energy_integral[f'int_b2'][i]) +
-                (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (induction_energy_integral[f'int_{prefix}'][i+1] + induction_energy_integral[f'int_{prefix}'][i]))) for i in range(n)]
+                results[f'evo_{prefix}'] = [(rho_factor[i+1] * ((1/rho_b[i]) * scale_factor[i] * (induction_energy_integral['int_b2'][i]) +
+                (grid_time[i+1] - grid_time[i]) * scale_factor[i] * (induction_energy_integral[int_key][i+1] + induction_energy_integral[int_key][i]))) for i in range(n)]
             elif derivative == 'alpha_fit':
                 alpha = alpha_fit_value if alpha_fit_value is not None else 2.0
                 results[f'evo_{prefix}'] = [
                     (
                         rho_factor[i+1] * (
                             scale_factor[i] * (induction_energy_integral['int_b2'][i] / rho_b[i])
-                            + alpha * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * induction_energy_integral[f'int_{prefix}'][i]
+                            + alpha * (grid_time[i+1] - grid_time[i]) * scale_factor[i] * induction_energy_integral[int_key][i]
                         )
                     )
                     for i in range(n)
                 ]
-            if verbose == True:
+            if verbose:
                 log_message(f'Energy evolution: total {key} volume energy integral evolution done', tag="evolution", level=1)
         else:
             results[f'evo_{prefix}'] = zero
         
         # Differential Evolution
-        if components.get(key, False):
+        if has_series:
             if derivative == 'RK' or derivative == 'central':
-                results[f'evo_{prefix}_diff'] = [2 * scale_factor[i] * rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i] for i in range(n)]
+                results[f'evo_{prefix}_diff'] = [2 * scale_factor[i] * rho_factor[i] * induction_energy_integral[int_key][i] for i in range(n)]
             elif derivative == 'implicit_forward':
                 results[f'evo_{prefix}_diff'] = [
                     2 * scale_factor[i] * (
-                        rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i]
+                        rho_factor[i] * induction_energy_integral[int_key][i]
                         + ((grid_time[i+1] - grid_time[i]) / (grid_time[i+1] - grid_time[i-1]))
-                        * (rho_factor[i+1] * induction_energy_integral[f'int_{prefix}'][i+1] - rho_factor[i-1] * induction_energy_integral[f'int_{prefix}'][i-1])
+                        * (rho_factor[i+1] * induction_energy_integral[int_key][i+1] - rho_factor[i-1] * induction_energy_integral[int_key][i-1])
                     )
                     for i in range(1, n)
                 ]
             elif derivative == 'rate':
-                results[f'evo_{prefix}_diff'] = [scale_factor[i] * (rho_factor[i+1] * induction_energy_integral[f'int_{prefix}'][i+1] + rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i]) for i in range(n)]
+                results[f'evo_{prefix}_diff'] = [scale_factor[i] * (rho_factor[i+1] * induction_energy_integral[int_key][i+1] + rho_factor[i] * induction_energy_integral[int_key][i]) for i in range(n)]
             elif derivative == 'alpha_fit':
                 alpha = alpha_fit_value if alpha_fit_value is not None else 2.0
-                results[f'evo_{prefix}_diff'] = [alpha * scale_factor[i] * rho_factor[i] * induction_energy_integral[f'int_{prefix}'][i] for i in range(n)]
-            if verbose == True:
+                results[f'evo_{prefix}_diff'] = [alpha * scale_factor[i] * rho_factor[i] * induction_energy_integral[int_key][i] for i in range(n)]
+            if verbose:
                 log_message(f'Energy evolution: differential {key} energy integral evolution done', tag="evolution", level=1)
         else:
             results[f'evo_{prefix}_diff'] = [0.0 for _ in range(n)]
-    
-    
-    # Calculate magnetic energy and kinetic energy for both total and differential evolution
-    if components.get('magnetic_energy', True):
-        # Total: direct value normalized by rho_denominator
-        results['evo_b2'] = [induction_energy_integral['int_b2'][i] / rho_denominator[i] for i in range(n+1)]
-        # Differential: time derivative
-        results['evo_b2_diff'] = [
-            1/((grid_time[i+1] - grid_time[i])) * (
-                (induction_energy_integral['int_b2'][i+1] / rho_denominator[i+1]) -
-                (induction_energy_integral['int_b2'][i] / rho_denominator[i]))
-            for i in range(n)
-        ]
-    else:
-        results['evo_b2'] = [0.0 for _ in range(n+1)]
-        results['evo_b2_diff'] = [0.0 for _ in range(n)]
-    
-    if components.get('kinetic_energy', True):
+        
+    # Kinetic Energy Evolution
+    if components.get('kinetic_energy', True) and 'int_kinetic_energy' in induction_energy_integral:
         # Total: scaled by rho_factor
         results['evo_kinetic_energy'] = [rho_factor[i] * induction_energy_integral['int_kinetic_energy'][i] for i in range(n+1)]
         # Differential: time derivative with rho_factor scaling
@@ -1746,6 +1902,20 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
         results['evo_kinetic_energy'] = [0.0 for _ in range(n+1)]
         results['evo_kinetic_energy_diff'] = [0.0 for _ in range(n)]
     
+    # Magnetic Energy Evolution
+    if components.get('magnetic_energy', True) and 'int_b2' in induction_energy_integral:
+            # Total: direct value normalized by rho_denominator
+            results['evo_b2'] = [induction_energy_integral['int_b2'][i] / rho_denominator[i] for i in range(n+1)]
+            # Differential: time derivative
+            results['evo_b2_diff'] = [
+            1/((grid_time[i+1] - grid_time[i])) * (
+                (induction_energy_integral['int_b2'][i+1] / rho_denominator[i+1]) -
+                (induction_energy_integral['int_b2'][i] / rho_denominator[i]))
+            for i in range(n)
+        ]
+    else:
+        results['evo_b2'] = [0.0 for _ in range(n+1)]
+        results['evo_b2_diff'] = [0.0 for _ in range(n)]
     
     if verbose == True:
         log_message('Energy evolution: magnetic and kinetic energy integral evolution done', tag="evolution", level=1)
@@ -1761,7 +1931,6 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
         if len(pred) == n and len(meas) == n + 1 and len(src) >= n:
             sample_idx = sorted(set([0, min(1, n - 1), max(n - 1, 0)]))
 
-            # Add points around measured and predicted maxima to inspect local lag.
             if n > 2:
                 idx_meas = int(np.argmax(meas[1:])) + 1
                 idx_pred = int(np.argmax(pred))
@@ -1795,20 +1964,19 @@ def induction_energy_integral_evolution(components, induction_energy_integral,
     results['evo_volume_phi'] = [(induction_energy_integral['volume'][i]) for i in range(n+1)]
     results['evo_volume_co'] = [(induction_energy_integral['volume'][i] / ((1/(1+grid_zeta[i]))**3)) for i in range(n+1)]
     
-    if verbose == True:
+    if verbose:
         log_message('Energy evolution: volume evolution done', tag="evolution", level=1)
     
     end_time_evolution = time.time()
-    
     total_time_evolution = end_time_evolution - start_time_evolution
     
-    if verbose == True:
+    if verbose:
         log_message('Time for evolution of the induction energy integral: '+str(strftime("%H:%M:%S", gmtime(total_time_evolution))), tag="evolution", level=1)
 
     return results
 
     
-def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rho_b, 
+def induction_radial_profiles(components, velocity_field, induction_energy, clus_b2, clus_rho_rho_b, 
                             rho_b, clus_cr0amr, clus_solapst, clus_kp,
                             grid_irr, grid_npatch, up_to_level,
                             grid_patchrx, grid_patchry, grid_patchrz,
@@ -1823,6 +1991,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - velocity_field: list of velocity field components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["velocity_field"])
         - induction_energy: dictionary containing the components of the magnetic induction equation in terms of the magnetic energy computed in the previous step
             - MIE_diver_B2: null divergence of the magnetic field energy
             - MIE_compres_B2: compressive component of the magnetic field induction energy
@@ -1833,7 +2002,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
             - kinetic_energy_density: kinetic energy density of the cluster
         - clus_b2: magnetic energy density in the cluster
         - clus_rho_rho_b: density contrast of the cluster
-        - rho_b: desnity contrast of the simulation
+        - rho_b: density contrast of the simulation
         - clus_cr0amr: AMR grid data
         - clus_solapst: overlap data
         - clus_kp: mask for valid patches
@@ -1856,7 +2025,7 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
         - verbose: boolean to print the progress of the computation (default is False)
     
     Returns:
-        - results: dictionary containing the computed radial profiles:
+        - results: dictionary containing the computed radial profiles (sufix indicates the velocity field type, e.g. _solenoidal, _compressive, no sufix for total velocity field):
             - MIE_diver_B2_profile: radial profile of the null divergence of the magnetic field energy
             - MIE_compres_B2_profile: radial profile of the compressive component
             - MIE_stretch_B2_profile: radial profile of the stretching component
@@ -1881,98 +2050,162 @@ def induction_radial_profiles(components, induction_energy, clus_b2, clus_rho_rh
     ### Preallocate all possible outputs as zeros
     
     n = 1 + np.sum(grid_npatch)
-
-    zero = 0.
-    
     results = {}
     
-    main_keys = ["divergence", "compression", "stretching", "advection", "drag"]
-    if all(components.get(k, False) for k in main_keys):
-        components["induction"] = True
-        induction_energy['ind_b2'] = [induction_energy['MIE_compres_B2'][p] + induction_energy['MIE_diver_B2'][p] + induction_energy['MIE_stretch_B2'][p] + induction_energy['MIE_advec_B2'][p] + induction_energy['MIE_drag_B2'][p] for p in range(n)]
-    else:
-        components["induction"] = False
-    
-    for key, prefix in [
+    velocity_field = velocity_field or {"total": True}
+    velocity_mappings = [
+        ("total", ""),
+        ("solenoidal", "_solenoidal"),
+        ("compressive", "_compressive")
+    ]
+    velocity_terms = [
         ('divergence', 'MIE_diver_B2'),
         ('compression', 'MIE_compres_B2'),
         ('stretching', 'MIE_stretch_B2'),
         ('advection', 'MIE_advec_B2'),
-        ('drag', 'MIE_drag_B2'),
-        ('total', 'MIE_total_B2'),
-        ('induction', 'ind_b2')
-    ]:
-        if components.get(key, False):
-            _, profile = utils.radial_profile_vw(field=induction_energy[prefix], cr0amr=clus_cr0amr,
-                                            solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
-                                            clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                            nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-                                            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
-            results[f'{prefix}_profile'] = rho_b * profile
-            if verbose:
-                log_message(f'Snap {it} in {sims}: {key} profile done', tag="profiles", level=1)
+        ('total', 'MIE_total_B2')
+    ]
+    
+    ### We first compute the drag component profile, as it is the only one that does not depend on the velocity field decomposition.
+    if components.get('drag', False):
+        profile_bin_centers, profile = utils.radial_profile_vw(
+            field=induction_energy['MIE_drag_B2'], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+            npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+            rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
+        results['MIE_drag_B2_profile'] = rho_b * profile
+        if verbose:
+            log_message(f'Snap {it} in {sims}: drag profile done', tag="profiles", level=1)
+    else:
+        results['MIE_drag_B2_profile'] = 0.0
+    
+    ### Now we compute the induction energy profiles, which require all main components to be present.
+    has_all_main_components = all(components.get(k, False) for k in ["divergence", "compression", "stretching", "advection", "drag"])
+    
+    #### Direct Induction (Sum of All Components)
+    if has_all_main_components and velocity_field.get("total", False):
+        induction_energy['ind_b2'] = [
+            induction_energy['MIE_compres_B2'][p] + 
+            induction_energy['MIE_diver_B2'][p] + 
+            induction_energy['MIE_stretch_B2'][p] + 
+            induction_energy['MIE_advec_B2'][p] + 
+            induction_energy['MIE_drag_B2'][p] for p in range(n)
+        ]
+        
+        profile_bin_centers, profile = utils.radial_profile_vw(
+            field=induction_energy['ind_b2'], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+            npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+            rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
+        results['ind_b2_profile'] = rho_b * profile
+        if verbose:
+            log_message(f'Snap {it} in {sims}: direct total induction (ind_b2) profile done', tag="profiles", level=1)
+    else:
+        results['ind_b2_profile'] = 0.0
+
+    #### Reconstructed Induction (Sum of Solenoidal + Compressive)
+    # Only calculated if both velocity components are present to enable coupling
+    if has_all_main_components and velocity_field.get("solenoidal", False) and velocity_field.get("compressive", False):
+        induction_energy['ind_b2_vortex'] = [
+            (induction_energy['MIE_compres_B2_solenoidal'][p] + induction_energy['MIE_compres_B2_compressive'][p]) +
+            (induction_energy['MIE_diver_B2_solenoidal'][p]   + induction_energy['MIE_diver_B2_compressive'][p]) +
+            (induction_energy['MIE_stretch_B2_solenoidal'][p] + induction_energy['MIE_stretch_B2_compressive'][p]) +
+            (induction_energy['MIE_advec_B2_solenoidal'][p]   + induction_energy['MIE_advec_B2_compressive'][p]) +
+            induction_energy['MIE_drag_B2'][p] for p in range(n)
+        ]
+        
+        _, profile_rec = utils.radial_profile_vw(
+            field=induction_energy['ind_b2_vortex'], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+            npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+            rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
+        results['ind_b2_vortex_profile'] = rho_b * profile_rec
+        if verbose:
+            log_message(f'Snap {it} in {sims}: reconstructed vortex induction (solenoidal + compressive) profile done', tag="profiles", level=1)
+    else:
+        results['ind_b2_vortex_profile'] = 0.0
+    
+    ### Now we compute the profiles for each component of the induction energy equation, considering the velocity field decomposition if applicable.
+    for vel_key, sfx in velocity_mappings:
+        if velocity_field.get(vel_key, False):
+            for comp_key, pref in velocity_terms:
+                full_key = f"{pref}{sfx}"
+                
+                if components.get(comp_key, False):
+                    profile_bin_centers, profile = utils.radial_profile_vw(
+                        field=induction_energy[full_key], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+                        npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+                        rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                        size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+                    )
+                    results[f'{full_key}_profile'] = rho_b * profile
+                    if verbose:
+                        log_message(f'Snap {it} in {sims}: {comp_key} ({vel_key}) profile done', tag="profiles", level=1)
+                else:
+                    results[f'{full_key}_profile'] = 0.0
         else:
-            results[f'{prefix}_profile'] = zero
+            for comp_key, pref in velocity_terms:
+                results[f'{pref}{sfx}_profile'] = 0.0
     
-    # if components.get('induction', False):
-    #     results['post_ind_b2_profile'] = results['MIE_diver_B2_profile'] + results['MIE_compres_B2_profile'] + results['MIE_stretch_B2_profile'] + results['MIE_advec_B2_profile'] + results['MIE_drag_B2_profile']
-    # else:
-    #     results['post_ind_b2_profile'] = zero
-    
-    if components.get('kinetic_energy', True) and induction_energy['kinetic_energy_density']:
-        _, profile = utils.radial_profile_vw(field=induction_energy['kinetic_energy_density'], cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
-                                                clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-                                                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+    if components.get('kinetic_energy', True) and induction_energy.get('kinetic_energy_density'):
+        profile_bin_centers, profile = utils.radial_profile_vw(
+            field=induction_energy['kinetic_energy_density'], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+            npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+            rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
         results['kinetic_energy_profile'] = rho_b * profile
         if verbose:
             log_message(f'Snap {it} in {sims}: Kinetic profile done', tag="profiles", level=1)
     else:
-        results['kinetic_energy_profile'] = zero
+        results['kinetic_energy_profile'] = 0.0
         
     if components.get('magnetic_energy', True) and clus_b2:
-        _, profile = utils.radial_profile_vw(field=clus_b2, cr0amr=clus_cr0amr,
-                                        solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
-                                        clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                        nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-                                        size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+        profile_bin_centers, profile = utils.radial_profile_vw(
+            field=clus_b2, cr0amr=clus_cr0amr, solapst=clus_solapst, 
+            npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+            rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
         results['clus_b2_profile'] = rho_b * profile
         if verbose:
             log_message(f'Snap {it} in {sims}: b2 profile done', tag="profiles", level=1)
     else:
-        results['clus_b2_profile'] = zero
+        results['clus_b2_profile'] = 0.0
     
     if clus_rho_rho_b:
-        profile_bin_centers, profile = utils.radial_profile_vw(field=clus_rho_rho_b, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
-                                                clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-                                                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+        profile_bin_centers, profile = utils.radial_profile_vw(
+            field=clus_rho_rho_b, cr0amr=clus_cr0amr, solapst=clus_solapst, 
+            npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+            rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        )
         results['clus_rho_rho_b_profile'] = rho_b * profile
         if verbose:
             log_message(f'Snap {it} in {sims}: Density profile done', tag="profiles", level=1)
     else:
-        results['clus_rho_rho_b_profile'] = zero
-        profile_bin_centers, _ = utils.radial_profile_vw(field=clus_rho_rho_b, cr0amr=clus_cr0amr,
-                                                solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
-                                                clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-                                                nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-                                                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug)
+        results['clus_rho_rho_b_profile'] = 0.0
+        # Extracción exclusiva de centros de bins geométricos si el campo de densidad no está disponible
+        profile_bin_centers, _ = utils.radial_profile_vw(
+            field=clus_b2, cr0amr=clus_cr0amr, solapst=clus_solapst, 
+            npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+            rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=False
+        )
     
     results['profile_bin_centers'] = profile_bin_centers
     
-    end_time_profile = time.time()
-
-    total_time_profile = end_time_profile - start_time_profile
-    
-    if verbose == True:
-        log_message('Time for profile calculation in snap '+ str(grid_irr) + ': '+str(strftime("%H:%M:%S", gmtime(total_time_profile))), tag="profiles", level=1)
+    if verbose:
+        total_time_profile = time.time() - start_time_profile
+        log_message(f'Time for profile calculation in snap {grid_irr}: {strftime("%H:%M:%S", gmtime(total_time_profile))}', tag="profiles", level=1)
         
     return results
 
 
-def production_dissipation_radial_profiles(components, induction_energy,
+def production_dissipation_radial_profiles(components, velocity_field, induction_energy,
                                         rho_b, clus_cr0amr, clus_solapst, clus_kp,
                                         grid_irr, grid_npatch, up_to_level,
                                         grid_patchrx, grid_patchry, grid_patchrz,
@@ -1986,6 +2219,64 @@ def production_dissipation_radial_profiles(components, induction_energy,
 
     Returns profiles for production, dissipation and net (production - dissipation)
     for each enabled component and total terms.
+    
+    Args:
+        - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - velocity_field: list of velocity field components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["velocity_field"])
+        - induction_energy: dictionary containing the components of the magnetic induction equation in terms of the magnetic energy computed in the previous step
+            - MIE_diver_B2_prod: production term for the null divergence of the magnetic field energy
+            - MIE_diver_B2_diss: dissipation term for the null divergence of the magnetic field energy
+            - MIE_compres_B2_prod: production term for the compressive component of the magnetic field induction energy
+            - MIE_compres_B2_diss: dissipation term for the compressive component of the magnetic field induction energy
+            - MIE_stretch_B2_prod: production term for the stretching component of the magnetic field induction energy
+            - MIE_stretch_B2_diss: dissipation term for the stretching component of the magnetic field induction energy
+            - MIE_advec_B2_prod: production term for the advection component of the magnetic field induction energy
+            - MIE_advec_B2_diss: dissipation term for the advection component of the magnetic field induction energy
+            - MIE_drag_B2_prod: production term for the cosmic drag component of the magnetic field induction energy
+            - MIE_drag_B2_diss: dissipation term for the cosmic drag component of the magnetic field induction energy
+            - MIE_total_B2_prod: total production term for the magnetic induction energy
+            - MIE_total_B2_diss: total dissipation term for the magnetic induction energy
+        - rho_b: density contrast of the simulation
+        - clus_cr0amr: AMR grid data
+        - clus_solapst: overlap data
+        - clus_kp: mask for valid patches
+        - grid_irr: index of the snapshot
+        - grid_npatch: number of patches in the grid
+        - up_tolevel: maximum refinement level to be considered
+        - grid_patchrx, grid_patchry, grid_patchrz: patch sizes in the x, y, and z directions
+        - grid_patchnx, grid_patchny, grid_patchnz: number of patches in the x, y, and z directions
+        - it: index of the snapshot
+        - sims: name of the simulation
+        - nmax: maximum number of patches
+        - size: size of the grid
+        - coords: coordinates of the region
+        - rmin: minimum radius for the radial profile
+        - rad: radius of the region
+        - nbins: number of bins for the radial profile (default is 50)
+        - logbins: boolean to use logarithmic bins (default is False)
+        - units: factor to convert the units multiplied by the final result (default is 1)
+        - compute_fractional_profiles: boolean to compute fractional profiles (default is False)
+        - debug: boolean to print the inner progress of the profile computation (default is False)
+        - verbose: boolean to print the progress of the computation (default is False)
+    
+    Returns:
+        - results: dictionary containing the computed radial profiles for production, dissipation, and net terms, toguether with fractional profiles for the enabled velocity fields subdivisions (sufix indicates the velocity field type, e.g. _solenoidal, _compressive, no sufix for total velocity field):
+            - MIE_diver_B2_prod_profile: radial profile of the production term for the null divergence of the magnetic field energy
+            - MIE_diver_B2_diss_profile: radial profile of the dissipation term for the null divergence of the magnetic field energy
+            - MIE_diver_B2_net_profile: radial profile of the net term (production - dissipation) for the null divergence of the magnetic field energy
+            - MIE_compres_B2_prod_profile: radial profile of the production term for the compressive component of the magnetic field induction energy
+            - MIE_compres_B2_diss_profile: radial profile of the dissipation term for the compressive component of the magnetic field induction energy
+            - MIE_compres_B2_net_profile: radial profile of the net term (production - dissipation) for the compressive component of the magnetic field induction energy
+            - MIE_stretch_B2_prod_profile: radial profile of the production term for the stretching component of the magnetic field induction energy
+            - MIE_stretch_B2_diss_profile: radial profile of the dissipation term for the stretching component of the magnetic field induction energy
+            - MIE_advec_B2_prod_profile: radial profile of the production term for the advection component of the magnetic field induction energy
+            - MIE_advec_B2_diss_profile: radial profile of the dissipation term for the advection component of the magnetic field induction energy
+            - MIE_drag_B2_prod_profile: radial profile of the production term for the cosmic drag component of the magnetic induction energy
+            - MIE_drag_B2_diss_profile: radial profile of the dissipation term for the cosmic drag component of the magnetic induction energy
+            - MIE_total_B2_prod_profile: radial profile of the total production term for the magnetic induction energy
+            - MIE_total_B2_diss_profile: radial profile of the total dissipation term for the magnetic induction energy
+            
+    Author: Marco Molina
     '''
 
     start_time_profile = time.time()
@@ -2000,105 +2291,181 @@ def production_dissipation_radial_profiles(components, induction_energy,
     zero = 0.0
     results = {}
 
-    component_specs = [
-        ('divergence', 'MIE_diver_B2', 'div'),
-        ('compression', 'MIE_compres_B2', 'comp'),
-        ('stretching', 'MIE_stretch_B2', 'str'),
-        ('advection', 'MIE_advec_B2', 'adv'),
-        ('drag', 'MIE_drag_B2', 'drag'),
-        ('total', 'MIE_total_B2', 'tot'),
+    velocity_field = velocity_field or {"total": True}
+    velocity_mappings = [
+        ("total", ""),
+        ("solenoidal", "_solenoidal"),
+        ("compressive", "_compressive")
+    ]
+    velocity_terms = [
+        ('divergence', 'MIE_diver_B2'),
+        ('compression', 'MIE_compres_B2'),
+        ('stretching', 'MIE_stretch_B2'),
+        ('advection', 'MIE_advec_B2'),
+        ('total', 'MIE_total_B2')
     ]
 
-    # Keep running totals for itemized curves (exclude compact total by construction).
-    itemized_prod_acc = None
-    itemized_diss_acc = None
+    ### Keep running totals for itemized curves (exclude compact total by construction).
+    itemized_prod_acc = np.zeros(nbins, dtype=float)
+    itemized_diss_acc = np.zeros(nbins, dtype=float)
+    itemized_rec_prod_acc = np.zeros(nbins, dtype=float)
+    itemized_rec_diss_acc = np.zeros(nbins, dtype=float)
+    
+    ### We start by computing the drag component, as it is the only one that does not depend on the velocity field decomposition.
+    if components.get('drag', False):
+        p_key, d_key = 'MIE_drag_B2_prod', 'MIE_drag_B2_diss'
+        if p_key in induction_energy and d_key in induction_energy:
+            _, prod_profile = utils.radial_profile_vw(
+                field=induction_energy[p_key], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+                npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+                rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+            )
+            _, diss_profile = utils.radial_profile_vw(
+                field=induction_energy[d_key], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+                npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+                rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+            )
+            prod_p = rho_b * np.asarray(prod_profile)
+            diss_p = rho_b * np.asarray(diss_profile)
+            
+            results['MIE_drag_B2_prod_profile'] = prod_p
+            results['MIE_drag_B2_diss_profile'] = diss_p
+            results['MIE_drag_B2_net_profile']  = prod_p - diss_p
+            
+            # Sumamos al acumulador itemizado del sistema
+            itemized_prod_acc += prod_p
+            itemized_diss_acc += diss_p
+            itemized_rec_prod_acc += prod_p
+            itemized_rec_diss_acc += diss_p
 
-    for key, prefix, _ in component_specs:
-        enabled = bool(components.get(key, False))
-        prod_key = f'{prefix}_prod'
-        diss_key = f'{prefix}_diss'
+            if verbose:
+                log_message(f'Snap {it} in {sims}: drag production/dissipation profiles done', tag="profiles", level=1)
+        else:
+            results['MIE_drag_B2_prod_profile'] = results['MIE_drag_B2_diss_profile'] = results['MIE_drag_B2_net_profile'] = zero
+    else:
+        results['MIE_drag_B2_prod_profile'] = results['MIE_drag_B2_diss_profile'] = results['MIE_drag_B2_net_profile'] = zero
 
-        if (not enabled) or (prod_key not in induction_energy) or (diss_key not in induction_energy):
-            results[f'{prefix}_prod_profile'] = zero
-            results[f'{prefix}_diss_profile'] = zero
-            results[f'{prefix}_net_profile'] = zero
-            continue
+    for vel_key, sfx in velocity_mappings:
+        if velocity_field.get(vel_key, False):
+            for comp_key, prefix in velocity_terms:
+                enabled = bool(components.get(comp_key, False))
+                full_prefix = f"{prefix}{sfx}"
+                prod_key = f"{full_prefix}_prod"
+                diss_key = f"{full_prefix}_diss"
 
-        _, prod_profile = utils.radial_profile_vw(
-            field=induction_energy[prod_key], cr0amr=clus_cr0amr,
-            solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
-            clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-            nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
-        )
-        _, diss_profile = utils.radial_profile_vw(
-            field=induction_energy[diss_key], cr0amr=clus_cr0amr,
-            solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
-            clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
-            nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-            size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
-        )
+                if (not enabled) or (prod_key not in induction_energy) or (diss_key not in induction_energy):
+                    results[f'{full_prefix}_prod_profile'] = zero
+                    results[f'{full_prefix}_diss_profile'] = zero
+                    results[f'{full_prefix}_net_profile'] = zero
+                    continue
 
-        prod_profile = rho_b * np.asarray(prod_profile)
-        diss_profile = rho_b * np.asarray(diss_profile)
-        net_profile = prod_profile - diss_profile
+                _, prod_profile = utils.radial_profile_vw(
+                    field=induction_energy[prod_key], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+                    npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+                    rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                    size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+                )
+                _, diss_profile = utils.radial_profile_vw(
+                    field=induction_energy[diss_key], cr0amr=clus_cr0amr, solapst=clus_solapst, 
+                    npatch=grid_npatch, up_to_level=up_to_level, clusrx=coords[0], clusry=coords[1], clusrz=coords[2], 
+                    rmin=rmin, rmax=rad, nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
+                    size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+                )
 
-        results[f'{prefix}_prod_profile'] = prod_profile
-        results[f'{prefix}_diss_profile'] = diss_profile
-        results[f'{prefix}_net_profile'] = net_profile
+                prod_p = rho_b * np.asarray(prod_profile)
+                diss_p = rho_b * np.asarray(diss_profile)
 
-        if key != 'total':
-            if itemized_prod_acc is None:
-                itemized_prod_acc = np.zeros_like(prod_profile, dtype=float)
-                itemized_diss_acc = np.zeros_like(diss_profile, dtype=float)
-            itemized_prod_acc = itemized_prod_acc + prod_profile
-            itemized_diss_acc = itemized_diss_acc + diss_profile
+                results[f'{full_prefix}_prod_profile'] = prod_p
+                results[f'{full_prefix}_diss_profile'] = diss_p
+                results[f'{full_prefix}_net_profile']  = prod_p - diss_p
 
-        if verbose:
-            log_message(f'Snap {it} in {sims}: {key} production/dissipation profiles done', tag="profiles", level=1)
+                # We only accumulate itemized terms if they belong to the total velocity or if the total velocity is not used, to the linear sum of solenoidal + compressive.
+                if comp_key != 'total':
+                    if vel_key == "total":
+                        itemized_prod_acc += prod_p
+                        itemized_diss_acc += diss_p
+                    elif vel_key in ["solenoidal", "compressive"]:
+                        itemized_rec_prod_acc += prod_p
+                        itemized_rec_diss_acc += diss_p
 
-    if itemized_prod_acc is None:
-        itemized_prod_acc = np.zeros(nbins, dtype=float)
-        itemized_diss_acc = np.zeros(nbins, dtype=float)
+                if verbose:
+                    log_message(f'Snap {it} in {sims}: {comp_key} ({vel_key}) production/dissipation profiles done', tag="profiles", level=1)
+        else:
+            for comp_key, prefix in velocity_terms:
+                full_prefix = f"{prefix}{sfx}"
+                results[f'{full_prefix}_prod_profile'] = results[f'{full_prefix}_diss_profile'] = results[f'{full_prefix}_net_profile'] = zero
 
-    results['MIE_total_B2_prod_itemized_profile'] = itemized_prod_acc
-    results['MIE_total_B2_diss_itemized_profile'] = itemized_diss_acc
-    results['MIE_total_B2_net_itemized_profile'] = itemized_prod_acc - itemized_diss_acc
+    ### Now we handle the itemized total velocity record (MIE_total_B2 direct or reconstructed)
+    if velocity_field.get("total", False):
+        results['MIE_total_B2_prod_itemized_profile'] = itemized_prod_acc
+        results['MIE_total_B2_diss_itemized_profile'] = itemized_diss_acc
+        results['MIE_total_B2_net_itemized_profile']  = itemized_prod_acc - itemized_diss_acc
+    else:
+        results['MIE_total_B2_prod_itemized_profile'] = results['MIE_total_B2_diss_itemized_profile'] = results['MIE_total_B2_net_itemized_profile'] = zero
 
-    if isinstance(results.get('MIE_total_B2_prod_profile', 0.0), np.ndarray) and isinstance(results.get('MIE_total_B2_diss_profile', 0.0), np.ndarray):
+    ### If both solenoidal and compressive components are present, we can reconstruct the total profile by summing them.
+    if velocity_field.get("solenoidal", False) and velocity_field.get("compressive", False):
+        results['MIE_total_B2_prod_itemized_reconstructed_profile'] = itemized_rec_prod_acc
+        results['MIE_total_B2_diss_itemized_reconstructed_profile'] = itemized_rec_diss_acc
+        results['MIE_total_B2_net_itemized_reconstructed_profile']  = itemized_rec_prod_acc - itemized_rec_diss_acc
+    else:
+        results['MIE_total_B2_prod_itemized_reconstructed_profile'] = results['MIE_total_B2_diss_itemized_reconstructed_profile'] = results['MIE_total_B2_net_itemized_reconstructed_profile'] = zero
+    
+    ### Now we handle the compact total velocity record (MIE_total_B2 direct or reconstructed)
+    if velocity_field.get("total", False) and isinstance(results.get('MIE_total_B2_prod_profile', 0.0), np.ndarray):
         results['MIE_total_B2_prod_compact_profile'] = results['MIE_total_B2_prod_profile']
         results['MIE_total_B2_diss_compact_profile'] = results['MIE_total_B2_diss_profile']
-        results['MIE_total_B2_net_compact_profile'] = results['MIE_total_B2_net_profile']
+        results['MIE_total_B2_net_compact_profile']  = results['MIE_total_B2_net_profile']
     else:
-        results['MIE_total_B2_prod_compact_profile'] = np.zeros(nbins, dtype=float)
-        results['MIE_total_B2_diss_compact_profile'] = np.zeros(nbins, dtype=float)
-        results['MIE_total_B2_net_compact_profile'] = np.zeros(nbins, dtype=float)
+        results['MIE_total_B2_prod_compact_profile'] = results['MIE_total_B2_diss_compact_profile'] = results['MIE_total_B2_net_compact_profile'] = zero
+
+    ### If both solenoidal and compressive components are present, we can reconstruct the total profile by summing them.
+    if velocity_field.get("solenoidal", False) and velocity_field.get("compressive", False):
+        p_rec = results['MIE_total_B2_solenoidal_prod_profile'] + results['MIE_total_B2_compressive_prod_profile']
+        d_rec = results['MIE_total_B2_solenoidal_diss_profile'] + results['MIE_total_B2_compressive_diss_profile']
+        results['MIE_total_B2_prod_compact_reconstructed_profile'] = p_rec
+        results['MIE_total_B2_diss_compact_reconstructed_profile'] = d_rec
+        results['MIE_total_B2_net_compact_reconstructed_profile']  = p_rec - d_rec
+    else:
+        results['MIE_total_B2_prod_compact_reconstructed_profile'] = results['MIE_total_B2_diss_compact_reconstructed_profile'] = results['MIE_total_B2_net_compact_reconstructed_profile'] = zero
 
     if compute_fractional_profiles:
-        total_prod = np.maximum(itemized_prod_acc, 0.0)
-        total_diss = np.maximum(itemized_diss_acc, 0.0)
-        for _, prefix, _ in component_specs:
-            p_key = f'{prefix}_prod_profile'
-            d_key = f'{prefix}_diss_profile'
-            if isinstance(results.get(p_key, 0.0), np.ndarray):
-                p_i = np.asarray(results[p_key], dtype=float)
-                d_i = np.asarray(results[d_key], dtype=float)
-                results[f'PD_frac_{prefix}_prod_profile'] = np.divide(
-                    p_i, total_prod, out=np.zeros_like(p_i), where=total_prod > 0
-                )
-                results[f'PD_frac_{prefix}_diss_profile'] = np.divide(
-                    d_i, total_diss, out=np.zeros_like(d_i), where=total_diss > 0
-                )
-            else:
-                results[f'PD_frac_{prefix}_prod_profile'] = np.zeros(nbins, dtype=float)
-                results[f'PD_frac_{prefix}_diss_profile'] = np.zeros(nbins, dtype=float)
+        use_rec = not velocity_field.get("total", False)
+        total_prod = np.maximum(itemized_rec_prod_acc if use_rec else itemized_prod_acc, 0.0)
+        total_diss = np.maximum(itemized_rec_diss_acc if use_rec else itemized_diss_acc, 0.0)
+        
+        if isinstance(results.get('MIE_drag_B2_prod_profile', 0.0), np.ndarray):
+            results['PD_frac_MIE_drag_B2_prod_profile'] = np.divide(results['MIE_drag_B2_prod_profile'], total_prod, out=np.zeros(nbins), where=total_prod > 0)
+            results['PD_frac_MIE_drag_B2_diss_profile'] = np.divide(results['MIE_drag_B2_diss_profile'], total_diss, out=np.zeros(nbins), where=total_diss > 0)
+        else:
+            results['PD_frac_MIE_drag_B2_prod_profile'] = results['PD_frac_MIE_drag_B2_diss_profile'] = np.zeros(nbins, dtype=float)
 
+        for vel_key, sfx in velocity_mappings:
+            if velocity_field.get(vel_key, False):
+                for comp_key, prefix in velocity_terms:
+                    p_key = f'{prefix}{sfx}_prod_profile'
+                    d_key = f'{prefix}{sfx}_diss_profile'
+                    
+                    if isinstance(results.get(p_key, 0.0), np.ndarray):
+                        p_i = results[p_key]
+                        d_i = results[d_key]
+                        results[f'PD_frac_{prefix}{sfx}_prod_profile'] = np.divide(p_i, total_prod, out=np.zeros_like(p_i), where=total_prod > 0)
+                        results[f'PD_frac_{prefix}{sfx}_diss_profile'] = np.divide(d_i, total_diss, out=np.zeros_like(d_i), where=total_diss > 0)
+                    else:
+                        results[f'PD_frac_{prefix}{sfx}_prod_profile'] = np.zeros(nbins, dtype=float)
+                        results[f'PD_frac_{prefix}{sfx}_diss_profile'] = np.zeros(nbins, dtype=float)
+            else:
+                for comp_key, prefix in velocity_terms:
+                    results[f'PD_frac_{prefix}{sfx}_prod_profile'] = results[f'PD_frac_{prefix}{sfx}_diss_profile'] = np.zeros(nbins, dtype=float)
+
+    ref_field = induction_energy.get('MIE_total_B2', [0 for _ in range(n)])
     profile_bin_centers, _ = utils.radial_profile_vw(
-        field=induction_energy.get('MIE_total_B2', [0 for _ in range(n)]), cr0amr=clus_cr0amr,
-        solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
+        field=ref_field, cr0amr=clus_cr0amr, solapst=clus_solapst, npatch=grid_npatch, up_to_level=up_to_level,
         clusrx=coords[0], clusry=coords[1], clusrz=coords[2], rmin=rmin, rmax=rad,
         nbins=nbins, logbins=logbins, cellsrx=X, cellsry=Y, cellsrz=Z,
-        size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=debug
+        size=size, nmax=nmax, units=units, kept_patches=clus_kp, verbose=False
     )
     results['profile_bin_centers'] = profile_bin_centers
 
@@ -2106,8 +2473,7 @@ def production_dissipation_radial_profiles(components, induction_energy,
     if verbose:
         total_time_profile = end_time_profile - start_time_profile
         log_message(
-            'Time for production/dissipation profile calculation in snap ' + str(grid_irr) + ': ' +
-            str(strftime("%H:%M:%S", gmtime(total_time_profile))),
+            f'Time for production/dissipation profile calculation in snap {grid_irr}: {strftime("%H:%M:%S", gmtime(total_time_profile))}',
             tag="profiles", level=1
         )
 
@@ -2424,7 +2790,7 @@ def uniform_induction(components, induction_equation,
     return results
 
         
-def process_iteration(components, dir_grids, dir_gas, dir_params,
+def process_iteration(components, velocity_field, dir_grids, dir_gas, dir_params, dir_vortex,
                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
                     stencil=3, buffer=True, use_siblings=True, interpol='TSC', nghost=1, blend=False,
@@ -2442,9 +2808,11 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     
     Args:
         - components: list of components to be computed (set in the config file, accessed as a dictionary in IND_PARAMS["components"])
+        - velocity_field: dictionary containing the velocity field components to be processed (total, solenoidal, compressive)
         - dir_grids: directory containing the grids
         - dir_gas: directory containing the gas data
         - dir_params: directory containing the parameters
+        - dir_vortex: directory containing the vortex data
         - sims: name of the simulation
         - it: index of the snapshot in the simulation
         - coords: coordinates of the center of the integration grid
@@ -2535,7 +2903,8 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     ## This are the parameters we will need for each cell together with the magnetic field and the velocity
     ## We read the information for each snap and divide it in the different fields
     
-    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, level, test=test, 
+    data = load_data(sims, it, a0, H0, dir_grids, dir_gas, dir_params, dir_vortex,
+                    velocity_field, level, test=test, 
                     bitformat=bitformat, region=region_coords, sim_characteristics=sim_characteristics,
                     verbose=verbose, debug=debug_params.get("divergence", {}) and debug_params.get("patch_analysis", {}))
     levels = utils.create_vector_levels(data['grid_npatch'])
@@ -2546,7 +2915,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     debug_fields = None
     pipeline_debug_results = None
     scan_pack = None
-    if debug_params.get("buffer", {}).get("enabled", False):
+    if debug_params.get("buffer", {}).get("enabled", False) and velocity_field.get("total", False):
         if verbose:
             log_message(f"\n{'*'*80}", tag="debug", level=1)
             log_message("BUFFER DEBUG MODE ENABLED - Running buffer pipeline validation tests...", tag="debug", level=1)
@@ -2555,6 +2924,15 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                                                 interpol=interpol, use_siblings=use_siblings, 
                                                 bitformat=bitformat, 
                                                 verbose=debug_params.get("buffer", {}).get("verbose", True))
+    elif debug_params.get("buffer", {}).get("enabled", False) and velocity_field.get("total", True):
+        if verbose:
+            log_message(f"\n{'*'*80}", tag="debug", level=1)
+            log_message("BUFFER DEBUG MODE DISABLED - No total velocity field detected. Skipping buffer debug tests.", tag="debug", level=1)
+            log_message(f"{'*'*80}", tag="debug", level=1)
+            
+    # Buffering settings
+    
+    ## Buffer cells are added to the grid to ensure that the derivatives can be computed correctly at the boundaries of the patches. The number of ghost cells is determined by the stencil size and the buffer settings.
     
     if parent_interpol is None:
         parent_interpol = interpol
@@ -2567,6 +2945,15 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     if parent_mode and not blend_active:
         buffer_nghost = 0
     
+    velocity_mappings = [
+        ("total", "v"),          # Generates 'vx', 'vy', 'vz' keys
+        ("solenoidal", "vsol"),  # Generates 'vsolx', 'vsoly', 'vsolz' keys
+        ("compressive", "vcomp") # Generates 'vcompx', 'vcompy', 'vcompz' keys
+    ]
+    
+    active_velocities = {}
+    original_fields = None
+    
     # Adjust buffer_nghost if blend is active and nghost was not specified
     if blend_active:
         if buffer_nghost == 0:
@@ -2577,69 +2964,123 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 tag="buffer",
                 level=1
             )
-
-    original_fields = None
-    if blend_active:
         original_fields = {
-            'Bx': data['clus_Bx'],
-            'By': data['clus_By'],
-            'Bz': data['clus_Bz'],
-            'vx': data['clus_vx'],
-            'vy': data['clus_vy'],
-            'vz': data['clus_vz']
-        }
-
+                    f'{b}': data[f'clus_{b}'] for b in ['Bx', 'By', 'Bz']
+                }
+        original_fields['velocities'] = {}
+        
+    for key, suffix in velocity_mappings:
+        if velocity_field.get(key, False):
+            active_velocities[key] = {
+                'x': data[f'clus_{suffix}x'],
+                'y': data[f'clus_{suffix}y'],
+                'z': data[f'clus_{suffix}z']
+            }
+            if blend_active:
+                original_fields['velocities'][key] = {
+                    'x': data[f'clus_{suffix}x'],
+                    'y': data[f'clus_{suffix}y'],
+                    'z': data[f'clus_{suffix}z']
+                }
+            
     # Add ghost buffer cells before derivatives
-    if buffer == True and buffer_nghost > 0:
+    run_buffer = buffer and buffer_nghost > 0
+    if run_buffer:
+        fields_to_buffer = [data['clus_Bx'], data['clus_By'], data['clus_Bz']]
+        field_names = ['Bx', 'By', 'Bz']
+        
+    for key, suffix in velocity_mappings:
+        if velocity_field.get(key, False):
+            active_velocities[key] = {
+                'x': data[f'clus_{suffix}x'],
+                'y': data[f'clus_{suffix}y'],
+                'z': data[f'clus_{suffix}z']
+            }
+            if run_buffer:
+                fields_to_buffer.extend([data[f"clus_{suffix}x"], data[f"clus_{suffix}y"], data[f"clus_{suffix}z"]])
+                field_names.extend([f"{suffix}x", f"{suffix}y", f"{suffix}z"])
+                
+    if run_buffer:
         buffered_field = buff.add_ghost_buffer(
-            [data['clus_Bx'], data['clus_By'], data['clus_Bz'], data['clus_vx'], data['clus_vy'], data['clus_vz']],
+            fields_to_buffer,
             data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
             data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
             data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
             size=size, nmax=nmax, nghost=buffer_nghost, interpol=interpol, use_siblings=use_siblings,
             kept_patches=data['clus_kp']
         )
-        for i, key in enumerate(['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']):
-            data[f'clus_{key}'] = buffered_field[i]
-        if verbose == True:
+        
+        for name, array in zip(field_names, buffered_field):
+            data[f'clus_{name}'] = array
+            
+        for key, suffix in velocity_mappings:
+            if key in active_velocities:
+                active_velocities[key] = {
+                    'x': data[f'clus_{suffix}x'],
+                    'y': data[f'clus_{suffix}y'],
+                    'z': data[f'clus_{suffix}z']
+                }
+            
+        if verbose:
             log_message('Ghost buffer added to magnetic and velocity fields', tag="buffer", level=1)
 
     # Vectorial calculus
     ## Here we calculate the different vectorial calculus quantities of our interest using the diff module.
-    vectorial = vectorial_quantities(components, data['clus_Bx'], data['clus_By'], data['clus_Bz'],
-                                data['clus_vx'], data['clus_vy'], data['clus_vz'],
-                                data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                                dx, stencil=stencil, verbose=verbose)
+    vectorial = vectorial_quantities(
+        components, 
+        data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+        active_velocities,
+        data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+        dx, stencil=stencil, verbose=verbose
+    )
             
     # Remove ghost buffer cells after derivatives (skip if parent mode uses frontier fill)
-    if buffer == True and buffer_nghost > 0:
-        if verbose == True:
+    if buffer and buffer_nghost > 0:
+        if verbose:
             log_message('Removing ghost buffer from computed vectorial fields', tag="buffer", level=1)
         for key in vectorial.keys():
             vectorial[key] = buff.ghost_buffer_buster(
                 vectorial[key], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                 buffer_nghost, kept_patches=data['clus_kp']
             )
-        if verbose == True:
+            
+        if verbose:
             log_message('Removing ghost buffer from magnetic and velocity fields', tag="buffer", level=1)
-        for key in ['Bx', 'By', 'Bz', 'vx', 'vy', 'vz']:
+        
+        fields_to_clean = ['Bx', 'By', 'Bz']
+        suffix_map = {"total": "v", "solenoidal": "vsol", "compressive": "vcomp"}
+        for vel_type in active_velocities.keys():
+            suffix = suffix_map[vel_type]
+            fields_to_clean.extend([f"{suffix}x", f"{suffix}y", f"{suffix}z"])
+                
+        for key in fields_to_clean:
             data[f'clus_{key}'] = buff.ghost_buffer_buster(
                 data[f'clus_{key}'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
                 buffer_nghost, kept_patches=data['clus_kp']
             )
-    elif buffer == True and parent_mode and not blend_active:
-        parent_use_siblings = False
+
+        for vel_type, suffix in suffix_map.items():
+            if vel_type in active_velocities:
+                active_velocities[vel_type] = {
+                    'x': data[f'clus_{suffix}x'],
+                    'y': data[f'clus_{suffix}y'],
+                    'z': data[f'clus_{suffix}z']
+                }
+
+    elif buffer and parent_mode and not blend_active:
         buffered_field = buff.add_ghost_buffer(
             [vectorial[key] for key in vectorial.keys()],
             data['grid_npatch'], data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
             data['grid_patchx'], data['grid_patchy'], data['grid_patchz'],
             data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'], data['grid_pare'],
-            size=size, nmax=nmax, nghost=0, interpol=parent_interpol, use_siblings=parent_use_siblings,
+            size=size, nmax=nmax, nghost=0, interpol=parent_interpol, use_siblings=False,
             kept_patches=data['clus_kp']
         )
+        
         for i, key in enumerate(vectorial.keys()):
             vectorial[key] = buffered_field[i]
-        if verbose == True:
+            
+        if verbose:
             log_message(
                 f'Parent frontier filling applied to vectorial fields (parent_interpol={parent_interpol})',
                 tag="buffer",
@@ -2650,7 +3091,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         vectorial_no_buffer = vectorial_quantities(
             components,
             original_fields['Bx'], original_fields['By'], original_fields['Bz'],
-            original_fields['vx'], original_fields['vy'], original_fields['vz'],
+            original_fields['velocities'],
             data['clus_kp'], data['grid_npatch'], data['grid_irr'],
             dx, stencil=stencil, verbose=False
         )
@@ -2672,7 +3113,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 boundary_width=boundary_width, kept_patches=data['clus_kp']
             )
 
-        if verbose == True:
+        if verbose:
             log_message(
                 f'Blend applied: boundary cells are averaged between buffer and parent fill '
                 f'(parent_interpol={parent_interpol})',
@@ -2681,10 +3122,10 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             )
 
     diver_B_raw = vectorial.get('diver_B')
-    if divergence_filter is None:
-        divergence_filter = {}
+    div_filter_config = divergence_filter or {}
+    filter_enabled = div_filter_config.get("enabled", False)
 
-    if divergence_filter.get("enabled", False) and not _debug_enabled(debug_params):
+    if filter_enabled and not _debug_enabled(debug_params):
         method = divergence_filter.get("method", "mask")
         percentile = divergence_filter.get("percentile", 99)
         use_abs = divergence_filter.get("use_abs", True)
@@ -2696,7 +3137,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 level=1
             )
         vectorial['diver_B'], _ = filter_divergence_outliers(
-            vectorial.get('diver_B'),
+            diver_B_raw,
             kept_patches=data['clus_kp'],
             method=method,
             percentile=percentile,
@@ -2704,9 +3145,9 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             exclude_zeros=exclude_zeros,
             verbose=verbose
         )
-    elif verbose and divergence_filter.get("enabled", False) and _debug_enabled(debug_params):
+    elif filter_enabled and _debug_enabled(debug_params) and verbose:
         log_message(
-            f"Divergence filter: SKIPPED (debug mode active)",
+            "Divergence filter: SKIPPED (debug mode active)",
             tag="divergence_filter",
             level=1
         )
@@ -2747,14 +3188,15 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     )
     
     if compute_induction:
-        induction, magnitudes = induction_equation(components, vectorial,
-                            data['clus_Bx'], data['clus_By'], data['clus_Bz'],
-                            data['clus_vx'], data['clus_vy'], data['clus_vz'],
-                            data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                            data['H'], data['a'], mag=mag, verbose=verbose)
+        induction, magnitudes = induction_equation(
+            components, vectorial,
+            data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+            active_velocities,
+            data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+            data['H'], data['a'], mag=mag, verbose=verbose
+        )
     else:
-        induction = None
-        magnitudes = None
+        induction, magnitudes = None, None
         if verbose:
             log_message('Induction equation skipped (not required by any enabled output).', tag="pipeline", level=1)
     
@@ -2767,21 +3209,29 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
     compute_induction_energy = return_induction_energy or energy_evolution or induction_profiles or pd_profiles or pd_enabled
     
     if compute_induction_energy and induction is not None:
-        induction_energy = induction_equation_energy(components, induction,
-                                data['clus_Bx'], data['clus_By'], data['clus_Bz'],
-                                data['clus_rho_rho_b'], data['clus_v2'],
-                                data['clus_kp'], data['grid_npatch'], data['grid_irr'],
-                                verbose=verbose)
+        induction_energy = induction_equation_energy(
+            components, velocity_field, induction,
+            data['clus_Bx'], data['clus_By'], data['clus_Bz'],
+            data['clus_rho_rho_b'], data['clus_v2'],
+            data['clus_kp'], data['grid_npatch'], data['grid_irr'],
+            verbose=verbose
+        )
     else:
         induction_energy = None
-        if verbose and compute_induction_energy and induction is None:
-            log_message('Induction energy skipped (induction not available).', tag="pipeline", level=1)
-        elif verbose and not compute_induction_energy:
-            log_message('Induction energy skipped (not required by any enabled output).', tag="pipeline", level=1)
+        if verbose:
+            if compute_induction_energy and induction is None:
+                log_message('Induction energy skipped (induction not available).', tag="pipeline", level=1)
+            elif not compute_induction_energy:
+                log_message('Induction energy skipped (not required by any enabled output).', tag="pipeline", level=1)
     
+    # Compute production/dissipation fields
+    
+    ## Here we compute the production and dissipation fields based on the induction energy and other relevant quantities.
     if pd_enabled and induction_energy is not None:
+        
         pd_fields = production_dissipation_fields(
             components,
+            velocity_field,
             induction_energy,
             data['clus_kp'],
             data['grid_npatch'],
@@ -2790,24 +3240,23 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         )
         induction_energy.update(pd_fields)
     else:
-        if verbose == True:
+        if verbose:
             if not pd_enabled:
                 log_message('Production/disipation set to False, skipping production/dissipation fields calculation.', tag="pipeline", level=1)
             elif induction_energy is None:
                 log_message('Production/disipation fields skipped (induction energy not available).', tag="pipeline", level=1)
 
+    # Volume Integral of the Magnetic Induction Equation
+
+    ## Here we compute the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
+    ## This is done according to the derived equation and compared to the actual magnetic energy integrated along the studied volume. The kinetic energy density is also computed.
     if (energy_evolution or pd_integrals_enabled) and induction_energy is not None:
-        # Volume Integral of the Magnetic Induction Equation
-    
-        ## Here we compute the volume integral of the magnetic energy density and its components, as well as the induced magnetic energy.
-        ## This is done according to the derived equation and compared to the actual magnetic energy integrated along the studied volume. The kinetic energy
-        ## density is also computed.
         
         induction_energy_integral = {}
 
         if energy_evolution:
             evo_integral = induction_vol_integral(
-                components, induction_energy, data['clus_b2'],
+                components, velocity_field, induction_energy, data['clus_b2'],
                 data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
                 data['grid_irr'], data['grid_zeta'], data['grid_npatch'], up_to_level,
                 data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
@@ -2817,6 +3266,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 rho_b=data.get('rho_b', None),
                 volume_coordinates=energy_evolution_config.get('volume_coordinates', 'physical'),
                 normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False),
+                integration_label='evolution',
                 verbose=verbose
             )
             induction_energy_integral.update(evo_integral)
@@ -2824,7 +3274,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         if pd_enabled:
             pd_cfg = production_dissipation if isinstance(production_dissipation, dict) else {}
             pd_integral = induction_vol_integral(
-                components, induction_energy, data['clus_b2'],
+                components, velocity_field, induction_energy, data['clus_b2'],
                 data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
                 data['grid_irr'], data['grid_zeta'], data['grid_npatch'], up_to_level,
                 data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
@@ -2836,13 +3286,13 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                 normalize_by_volume=pd_cfg.get('normalize_by_volume', False),
                 compute_induction_integrals=energy_evolution,
                 compute_fractional_integrals=pd_fractional_any_enabled,
+                integration_label='pd',
                 verbose=verbose
             )
 
             if energy_evolution:
                 pd_only = {
-                    key: value
-                    for key, value in pd_integral.items()
+                    key: value for key, value in pd_integral.items()
                     if key in ('int_b2', 'int_B2') or key.startswith('int_PD_') or ('_prod' in key) or ('_diss' in key)
                 }
                 induction_energy_integral.update(pd_only)
@@ -2863,6 +3313,7 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
                         rho_b=data.get('rho_b', None),
                         volume_coordinates=energy_evolution_config.get('volume_coordinates', 'physical'),
                         normalize_by_volume=energy_evolution_config.get('normalize_by_volume', False),
+                        integration_label='test',
                         verbose=verbose)
         else:
             induction_test_energy_integral = None
@@ -2877,30 +3328,34 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             elif induction_energy is None:
                 log_message('Energy evolution skipped (induction_energy not available).', tag="pipeline", level=1)
             
+    # Radial Profiles of the Magnetic Induction Equation
+
+    ## We can calculate the radial profiles of the magnetic energy density in the volume we have considered (usually the virial volume)
     if induction_profiles and induction_energy is not None:
-        # Radial Profiles of the Magnetic Induction Equation
-    
-        ## We can calculate the radial profiles of the magnetic energy density in the volume we have considered (usually the virial volume)
-        
-        induction_energy_profiles = induction_radial_profiles(components, induction_energy, data['clus_b2'],
-                                    data['clus_rho_rho_b'], data['rho_b'],
-                                    data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
-                                    data['grid_irr'], data['grid_npatch'], up_to_level,
-                                    data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
-                                    data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
-                                    it, sims, nmax, size, coords, rmin, rad,
-                                    nbins=nbins, logbins=logbins, units=1, verbose=verbose)
+        induction_energy_profiles = induction_radial_profiles(
+            components, velocity_field, induction_energy, data['clus_b2'],
+            data['clus_rho_rho_b'], data['rho_b'],
+            data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
+            data['grid_irr'], data['grid_npatch'], up_to_level,
+            data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
+            data['grid_patchnx'], data['grid_patchny'], data['grid_patchnz'],
+            it, sims, nmax, size, coords, rmin, rad,
+            nbins=nbins, logbins=logbins, units=1, verbose=verbose
+        )
     else:
         induction_energy_profiles = None
-        if verbose == True:
+        if verbose:
             if not induction_profiles:
                 log_message('Induction profiles are set to False, skipping radial profiles of the magnetic induction equation.', tag="pipeline", level=1)
             elif induction_energy is None:
                 log_message('Induction radial profiles skipped (induction_energy not available).', tag="pipeline", level=1)
 
+    # Radial Profiles of the Production/Dissipation Terms
+    
+    ## Here we can calculate the radial profiles of the production and dissipation terms in the volume we have considered (usually the virial volume)
     if pd_profiles and pd_enabled and induction_energy is not None:
         production_dissipation_profiles = production_dissipation_radial_profiles(
-            components, induction_energy,
+            components, velocity_field, induction_energy,
             data['rho_b'], data['clus_cr0amr'], data['clus_solapst'], data['clus_kp'],
             data['grid_irr'], data['grid_npatch'], up_to_level,
             data['grid_patchrx'], data['grid_patchry'], data['grid_patchrz'],
@@ -2912,18 +3367,18 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
         )
     else:
         production_dissipation_profiles = None
-        if verbose == True:
+        if verbose:
             if not pd_profiles:
                 log_message('P/D radial profiles are set to False, skipping P/D profiles.', tag="pipeline", level=1)
             elif not pd_enabled:
                 log_message('P/D radial profiles skipped (production_dissipation disabled).', tag="pipeline", level=1)
             elif induction_energy is None:
                 log_message('P/D radial profiles skipped (induction_energy not available).', tag="pipeline", level=1)
-            
-    if projection and induction is not None:
-        # Uniform Projection of the Magnetic Induction Equation
     
-        ## We clean and compute the uniform section of the magnetic induction energy and its components for the given AMR grid for its further projection.
+    # Uniform Projection of the Magnetic Induction Equation
+
+    ## We clean and compute the uniform section of the magnetic induction energy and its components for the given AMR grid for its further projection.
+    if projection and induction is not None:
         
         induction_uniform = uniform_induction(components, induction,
                             data['clus_cr0amr'], data['clus_solapst'], data['grid_npatch'],
@@ -2940,13 +3395,13 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             elif induction is None:
                 log_message('Uniform projection skipped (induction not available).', tag="pipeline", level=1)
             
+    # Percentile Thresholds of the Magnetic Field Divergence
+    
+    # Scale divergence by resolution to make it comparable to field magnitude
+    # Divergence has units [field/length], multiplying by dx gives [field]
+    
+    # Extract percentile calculation options from debug_params if available
     if percentiles:
-        # Percentile Thresholds of the Magnetic Field Divergence
-        
-        # Scale divergence by resolution to make it comparable to field magnitude
-        # Divergence has units [field/length], multiplying by dx gives [field]
-        
-        # Extract percentile calculation options from debug_params if available
         percentile_params = debug_params.get("percentile_params", {}) if debug_params else {}
         exclude_boundaries = percentile_params.get("exclude_boundaries", False)
         boundary_width = percentile_params.get("boundary_width", 1)
@@ -3026,6 +3481,14 @@ def process_iteration(components, dir_grids, dir_gas, dir_params,
             vectorial=vectorial,
             induction=induction,
             induction_energy=induction_energy,
+            induction_energy_integral=induction_energy_integral,
+            induction_test_energy_integral=induction_test_energy_integral,
+            induction_energy_profiles=induction_energy_profiles,
+            production_dissipation_profiles=production_dissipation_profiles,
+            diver_B_percentiles=diver_B_percentiles,
+            induction_uniform=induction_uniform,
+            debug_fields=debug_fields,
+            rad=rad,
             export_cfg=return_options,
             sim_name=sims,
             iteration=it,

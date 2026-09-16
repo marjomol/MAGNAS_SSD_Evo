@@ -16,9 +16,9 @@ from scripts.units import *
 from scripts.readers import write_parameters
 from scripts.test import test_limits
 
-# ============================
+# ====================================================================================
 # Only edit the section below
-# ============================
+# ====================================================================================
 
 # Induction Parameters #
 
@@ -41,15 +41,15 @@ IND_PARAMS = {
     # "up_to_level": [0,1,2,3,4,5,6,7], # AMR level up to which calculate
     # "level": [0,1,5], # Max. level of the AMR grid to be read
     # "up_to_level": [0,1,5], # AMR level up to which calculate
-    "level": [4], # Max. level of the AMR grid to be read
-    "up_to_level": [4], # AMR level up to which calculate
-    # "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
-    "units": 1.0, # Factor to convert the units of the resulting volume integrals
+    "level": [5], # Max. level of the AMR grid to be read
+    "up_to_level": [5], # AMR level up to which calculate
+    "units": energy_to_erg, # Factor to convert the units of the resulting volume integrals
+    # "units": 1.0, # Factor to convert the units of the resulting volume integrals
     "logbins": True, # Use logarithmic bins
     "F": 2, # Factor to multiply the viral radius to define the box size
     "vir_kind": 2, # 1: Reference virial radius at the last snap, 2: Reference virial radius at each epoch
     "rad_kind": 1, # 1: Comoving, 2: Physical
-    "region": 'BOX', # Region of interest shape to calculate the induction components (BOX, SPH, or None)
+    "region": 'SPH', # Region of interest shape to calculate the induction components (BOX, SPH, or None)
     "a0": a0_masclet,
     # "a0": a0_isu,
     "H0": H0_masclet,
@@ -64,30 +64,51 @@ IND_PARAMS = {
         "parent_interpol": 'NEAREST', # Interpolation method for parent fill ('TSC', 'SPH', 'LINEAR', 'TRILINEAR', 'NEAREST')
         "blend": True # Blend boundary values from buffer differentiation with parent-filled boundaries (only if parent is True)
     },
+    "velocity_field": {
+        "total": True, # Whether to process the total velocity field in the induction calculations
+        "solenoidal": True, # Whether to process the solenoidal component of the velocity field in the induction calculations coming from the Helmholtz-Hodge decomposition from vortex analysis
+        "compressive": True # Whether to process the compressive component of the velocity field in the induction calculations coming from the Helmholtz-Hodge decomposition from vortex analysis
+    },
     "components": {
-        "divergence": True, # Process the divergence induction component
+        "divergence": False, # Process the divergence induction component
         "compression": True, # Process the compression induction component
         "stretching": True, # Process the stretching induction component
-        "advection": True, # Process the advection induction component
-        "drag": True, # Process the drag induction component
+        "advection": False, # Process the advection induction component
+        "drag": False, # Process the drag induction component
         "total": True, # Process the total induction component
+        "itemized": False, # Process the itemized total induction with the activated components
         "kinetic_energy": False, # Calculate/plot kinetic energy measured in the simulation
         "magnetic_energy": True # Calculate/plot magnetic energy measured in the simulation
     },
     "return": {
-        "enabled": False, # Master switch to export volumetric fields per snapshot
-        "format": 'vtk_binary', # Export format: 'npy', 'npz', 'vtk' (ASCII), 'vtk_binary' (pyevtk) or 'vtk_ascii'
+        "enabled": False, # Master switch to export volumetric fields and analysis results per snapshot
+        "format": 'npy', # Export format: 'npy', 'npz', 'vtk' (ASCII), 'vtk_binary' (pyevtk) or 'vtk_ascii'
+        "analysis_format": None, # Format for analysis arrays: None follows format; VTK uses an NPZ sidecar
         "grid": "uniform", # Export grid representation: 'amr' (patch lists) or 'uniform'
+        "disk_space_check": {
+            "enabled": True, # Check free disk space before writing exported files
+            "interactive": False, # Ask y/n in serial mode; parallel workers never prompt
+            "safety_factor": 1.10, # Required free space is estimated size times this factor
+            "min_free_gb": 1.0, # Keep at least this much free space after writing
+            "on_insufficient": "skip", # 'skip' or 'raise' in non-interactive mode
+        },
         "fields": {
-            "density": True, # Physical density field rho
+            "density": False, # Physical density field rho
             "density_contrast": False, # Density contrast field (rho/rho_b)
-            "velocity": True, # Velocity vector (vx, vy, vz)
+            "velocity": False, # Velocity vector (vx, vy, vz)
             "magnetic_normalized": False, # Normalized magnetic field (Bx, By, Bz)
-            "magnetic_physical": True, # Physical magnetic field (bx, by, bz)
+            "magnetic_physical": False, # Physical magnetic field (bx, by, bz)
             "magnitudes_components": False, # Magnitudes of induction components
             "vectorial": False, # Save vectorial calculus outputs when available
             "induction": False, # Save induction-equation outputs when available
-            "induction_energy": True # Save induction-energy outputs when available
+            "induction_energy": False, # Save induction-energy outputs when available
+            "induction_energy_integrals": True, # Save integrated energy/P-D series per snapshot
+            "induction_test_energy_integrals": False, # Save analytic-test integrated energy series
+            "induction_energy_profiles": False, # Save induction-energy radial profiles
+            "production_dissipation_profiles": False, # Save production/dissipation radial profiles
+            "percentiles": False, # Save divergence percentile results
+            "projection": False, # Save uniform projection outputs
+            "debug": False # Save debug-only outputs
         },
     },
     "divergence_filter": {
@@ -105,18 +126,18 @@ IND_PARAMS = {
         "normalize_by_volume": False, # If True, divide integrated quantities by total integration volume
         "plot_total": True, # Calculate and plot total (integrated) energy evolution
         "plot_differential": True, # Calculate and plot differential (rate of change) energy evolution
-        "plot_profiles": True # Calculate and plot radial profiles for induction-energy terms
+        "plot_profiles": False # Calculate and plot radial profiles for induction-energy terms
     },
     "production_dissipation": {
-        "enabled": True, # Master switch for calculating production/dissipation decomposition from induction-energy terms
+        "enabled": False, # Master switch for calculating production/dissipation decomposition from induction-energy terms
         "normalized": True, # True: keeps B/sqrt(rho_b); False: multiplies final P/D integrals by rho_b
         "volume_coordinates": 'physical', # Integration volume differential for P/D: 'physical' (a^3 dV) or 'comoving' (dV)
         "normalize_by_volume": False, # If True, divide P/D integrated quantities by total integration volume
         "plot_absolute": True, # Calculate and plot absolute production and dissipation rates evolution
         "plot_fractional": True, # Calculate and plot fractional production/dissipation contributions and net efficiency evolution
-        "plot_net": True, # Calculate and plot net contributions (production - dissipation) evolution
-        "plot_profiles": True, # Calculate and plot radial profiles for production/dissipation terms
-        "plot_fractional_profiles": True # Calculate and plot fractional contribution profiles for production/dissipation terms
+        "plot_net": False, # Calculate and plot net contributions (production - dissipation) evolution
+        "plot_profiles": False, # Calculate and plot radial profiles for production/dissipation terms
+        "plot_fractional_profiles": False # Calculate and plot fractional contribution profiles for production/dissipation terms
     },
     "percentiles": {
         "enabled": False, # Master switch for calculating percentile thresholds of the magnetic field divergence
@@ -136,6 +157,7 @@ IND_PARAMS = {
 OUTPUT_PARAMS = {
     # General execution and output controls shared by all simulations.
     "save": True,
+    "only_plot": True, # If True, skip data processing and only generate plots from existing outputs
     "verbose": True,
     "save_terminal": True,  # Save terminal output to file
     "bitformat": np.float32,
@@ -163,8 +185,8 @@ OUTPUT_PARAMS = {
         "terminaldir": "terminal_output/",
         "ID1": "dynamo/",
         # "ID2": "ParaView",
-        "ID2": "clean_induction_analysis",
-        "run": f'MAGNAS_SSD_Evo_scientific_3', # Apendix for the results names to distinguish different runs with different aims
+        "ID2": "VORTEX",
+        "run": f'MAGNAS_SSD_Evo_vortex_65', # Apendix for the results names to distinguish different runs with different aims
         # "ID2": "new_sim_induction_analysis",
         # "ID2": "RAM_test",
         # "run": f'MAGNAS_SSD_Evo_profile_test_plots',
@@ -179,7 +201,7 @@ OUTPUT_PARAMS = {
             # "it": [1200],
             # "it": [2119],
             # "it": list(range(1900, 2101, 50)) + [2119],
-            "it": list(range(350, 2101, 50)) + [2119],
+            "it": list(range(500, 2101, 50)) + [2119],
             "paths": {
                 "dir_DM": "/home/marcomol/trabajo/data/in/scratch/quilis/",
                 "dir_gas": "/home/marcomol/trabajo/data/in/scratch/quilis/",
@@ -307,12 +329,13 @@ EVO_PLOT_PARAMS = {
     'label_mode': PLOT_TEXT_PARAMS["label_mode"],
     'units': IND_PARAMS["units"],
     'derivative': IND_PARAMS["energy_evolution"]["derivative"],
+    'velocity_families': [family for family in ("total", "solenoidal", "compressive") if IND_PARAMS["velocity_field"].get(family, False)],
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log', # Only for total evolution; 'lin' or 'log'
     # 'xlim': [10, 0], # None for auto
-    # 'xlim': [2.5, 0], # None for auto
-    'xlim': None, # None for auto
+    'xlim': [2.5, 0], # None for auto
+    # 'xlim': None, # None for auto
     'ylim': None, # None for auto
     # 'ylim': [1e57, 1e60], # For the test
     # 'ylim': [1e58, 1e63], # None for auto
@@ -329,11 +352,12 @@ EVO_PLOT_PARAMS = {
     'title': 'Magnetic Field Evolution Analysis',
     'dpi': 300,
     'run': OUTPUT_PARAMS["paths"]["run"],
+    'plot_split': True, # If True, split the evolution plots into separate figures for each velocity family; if False, overlay all components in a single figure
     'plot_total': IND_PARAMS["energy_evolution"]["plot_total"],
     'plot_differential': IND_PARAMS["energy_evolution"]["plot_differential"],
-    'volume_evolution': True, # bool to plot volume evolution as additional figure
-    "plot_integrals": True, # Plot the cumulative integral of the differential (rate of change) energy evolution curves
-    'plot_cumulative_magnetic_energy': True, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on differential evolution plot using a right y-axis
+    'volume_evolution': False, # bool to plot volume evolution as additional figure
+    "plot_integrals": False, # Plot the cumulative integral of the differential (rate of change) energy evolution curves
+    'plot_cumulative_magnetic_energy': False, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on differential evolution plot using a right y-axis
     'plot_cumulative_magnetic_energy_headroom': 0.05 # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
 }
 
@@ -341,6 +365,7 @@ PROD_DISS_PLOT_PARAMS = {
     'palette_name': PLOT_PALETTES["active"],
     'palettes': PLOT_PALETTES["available"],
     'label_mode': PLOT_TEXT_PARAMS["label_mode"],
+    'velocity_families': [family for family in ("total", "solenoidal", "compressive") if IND_PARAMS["velocity_field"].get(family, False)],
     'x_axis': 'zeta', # 'zeta' or 'years'
     'x_scale': 'lin', # 'lin' or 'log'
     'y_scale': 'log', # 'lin' or 'log'
@@ -354,19 +379,22 @@ PROD_DISS_PLOT_PARAMS = {
     'dpi': 300,
     'run': OUTPUT_PARAMS["paths"]["run"],
     'units': IND_PARAMS["units"],
+    'plot_split': True, # If True, generate one figure per active velocity family; if False, overlay all active families in each figure
     'plot_total_prod_diss': False, # If False, hide total production/dissipation curves (green/red). Net curves are still plotted when available.
     'plot_absolute': IND_PARAMS["production_dissipation"]["plot_absolute"],
     'plot_fractional': IND_PARAMS["production_dissipation"]["plot_fractional"],
     'plot_net': IND_PARAMS["production_dissipation"]["plot_net"],
     "plot_integrals": True, # Plot the cumulative integral of the net (rate of change) production evolution curves
-    'plot_cumulative_magnetic_energy': True, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on P/D evolution plots using a right y-axis
+    'plot_cumulative_magnetic_energy': False, # If True, overlay cumulative magnetic energy (snap-by-snap B^2 sum) on P/D evolution plots using a right y-axis
     'plot_cumulative_magnetic_energy_headroom': 0.05 # Extra headroom applied to the right-axis maximum when aligning the cumulative overlay
 }
 
 INDUCTION_PROFILE_PLOT_PARAMS = {
     'palette_name': PLOT_PALETTES["active"],
     'palettes': PLOT_PALETTES["available"],
+    'label_mode': PLOT_TEXT_PARAMS["label_mode"],
     'units': IND_PARAMS["units"],
+    'velocity_families': [family for family in ("total", "solenoidal", "compressive") if IND_PARAMS["velocity_field"].get(family, False)],
     'it_indx': [-1],
     # "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
     # 'it_indx': [0,-1], # Index of the iteration to plot (default: first and last)
@@ -392,14 +420,17 @@ INDUCTION_PROFILE_PLOT_PARAMS = {
     'title': 'Induction Radial Profile',
     'dpi': 300,
     'run': OUTPUT_PARAMS["paths"]["run"],
-    'plot_density': False, # Whether to plot the density profile as a reference
-    'plot_magnetic_energy': False, # Whether to plot the magnetic energy profile as a reference
+    'plot_split': True,
+    'plot_density': True, # Whether to plot the density profile as a reference
+    'plot_magnetic_energy': True, # Whether to plot the magnetic energy profile as a reference
 }
 
 PROD_DISS_PROFILE_PLOT_PARAMS = {
     'palette_name': PLOT_PALETTES["active"],
     'palettes': PLOT_PALETTES["available"],
+    'label_mode': PLOT_TEXT_PARAMS["label_mode"],
     'units': IND_PARAMS["units"],
+    'velocity_families': [family for family in ("total", "solenoidal", "compressive") if IND_PARAMS["velocity_field"].get(family, False)],
     'it_indx': [-1],
     # "it_indx": list(range(0, 900, 50)), # For different redshift snap iterations analysis
     'x_scale': 'log', # 'lin' or 'log'
@@ -416,11 +447,14 @@ PROD_DISS_PROFILE_PLOT_PARAMS = {
     'interpolation_kind': 'cubic', # 'linear', 'cubic', or 'nearest'
     'component_alpha': 0.65, # Opacity for individual P/D component curves (totals remain fully opaque)
     'area_alpha': 0.18, # Opacity for shaded area between production and dissipation component curves
-    'fixed_legend': True, # If True, place legend at a fixed position inside axes (best for animations)
+    'fixed_legend': False, # If True, place legend at a fixed position inside axes (best for animations)
+    'plot_split': False, # If True, generate one figure per active velocity family
     'plot_density': False, # Whether to plot the density profile as a reference
     'plot_magnetic_energy': False, # Whether to plot the magnetic energy profile as a reference
     'plot_net': False, # If True, also plots the net production/dissipation profiles for the different induction components
-    'plot_absolute': False, # Plot production/dissipation component profiles
+    'plot_reconstructed_net': False, # Plot reconstructed total net profiles when available
+    'plot_absolute': False, # Plot total production/dissipation profiles; radial component profiles use IND_PARAMS.production_dissipation.plot_profiles
+    'plot_composed': True, # Plot the fractional profiles under the P/D profiles when both available
     'title': 'Production and Dissipation Radial Profile',
     'dpi': 300,
     'run': OUTPUT_PARAMS["paths"]["run"]
@@ -558,9 +592,9 @@ DEBUG_PARAMS = {
     }
 }
 
-# ============================
+# ====================================================================================
 # Only edit the section above
-# ============================
+# ====================================================================================
 
 def _expand_per_sim_param(value, sims_count, param_name):
     if isinstance(value, (list, tuple, np.ndarray)):
@@ -709,6 +743,33 @@ if not isinstance(proj_cfg.get("enabled"), bool):
     raise ValueError("IND_PARAMS['projection']['enabled'] must be a boolean (True or False).")
 IND_PARAMS["projection"] = proj_cfg
 
+vel_cfg = IND_PARAMS.get("velocity_field", {})
+if not isinstance(vel_cfg, dict):
+    raise ValueError("IND_PARAMS['velocity_field'] must be a dictionary.")
+vel_cfg.setdefault("total", True)
+vel_cfg.setdefault("solenoidal", True)
+vel_cfg.setdefault("compressive", True)
+if not isinstance(vel_cfg.get("total"), bool):
+    raise ValueError("IND_PARAMS['velocity_field']['total'] must be a boolean (True or False).")
+if not isinstance(vel_cfg.get("solenoidal"), bool):
+    raise ValueError("IND_PARAMS['velocity_field']['solenoidal'] must be a boolean (True or False).")
+if not isinstance(vel_cfg.get("compressive"), bool):
+    raise ValueError("IND_PARAMS['velocity_field']['compressive'] must be a boolean (True or False).")
+vel_cfg["_truly_enabled"] = bool(
+    vel_cfg.get("total", False) or vel_cfg.get("solenoidal", False) or vel_cfg.get("compressive", False)
+)
+if not vel_cfg["_truly_enabled"]:
+    raise ValueError(
+        "Warning: IND_PARAMS['velocity_field'] has no active trigger; the induction analysis nor the VORTEX-p velocity decomposition can be performed."
+    )
+if IND_PARAMS['test_params'].get('enable_test', False):
+    if not vel_cfg.get("solenoidal", True) or not vel_cfg.get("compressive", True):
+        raise ValueError(
+            "Warning: IND_PARAMS['velocity_field']['solenoidal'] and IND_PARAMS['velocity_field']['compressive'] must be False when IND_PARAMS['test_params']['enable_test'] is True."
+        )
+    
+IND_PARAMS["velocity_field"] = vel_cfg
+
 ret_cfg.setdefault("enabled", False)
 ret_cfg.setdefault("format", "npy")
 ret_cfg.setdefault("grid", "amr")
@@ -724,6 +785,13 @@ default_return_fields = {
     "vectorial": False,
     "induction": False,
     "induction_energy": False,
+    "induction_energy_integrals": False,
+    "induction_test_energy_integrals": False,
+    "induction_energy_profiles": False,
+    "production_dissipation_profiles": False,
+    "percentiles": False,
+    "projection": False,
+    "debug": False,
 }
 for _key, _default in default_return_fields.items():
     ret_cfg["fields"].setdefault(_key, _default)
@@ -1031,6 +1099,10 @@ total_snapshots = OUTPUT_PARAMS.get("total_iterations", sum(len(it_list) for it_
 
 induction_component_keys = ["divergence", "compression", "stretching", "advection", "drag", "total"]
 enabled_components = sum(bool(IND_PARAMS["components"].get(k, False)) for k in induction_component_keys)
+velocity_field_cfg = IND_PARAMS.get("velocity_field", {})
+velocity_field_components = sum(
+    bool(velocity_field_cfg.get(k, False)) for k in ("total", "solenoidal", "compressive")
+)
 
 # Worker memory model: arrays live concurrently during process_iteration in each subprocess.
 worker_arrays = 10  # Core loaded fields + masks + geometry helpers
@@ -1041,6 +1113,8 @@ if diff_cfg.get("parent", False):
 if diff_cfg.get("blend", False):
     worker_arrays += 4
 worker_arrays += max(4, 2 * enabled_components)
+if velocity_field_components:
+    worker_arrays += 4 * velocity_field_components
 
 if IND_PARAMS.get("energy_evolution", {}).get("enabled", False):
     worker_arrays += 6
@@ -1072,6 +1146,8 @@ if ret_cfg.get("return_induction", False):
     retained_amr_arrays_per_snapshot += max(6, enabled_components)
 if ret_cfg.get("return_induction_energy", False):
     retained_amr_arrays_per_snapshot += max(7, enabled_components + 1)
+if velocity_field_components:
+    retained_amr_arrays_per_snapshot += 2 * velocity_field_components
 if ret_cfg.get("projection", False):
     retained_amr_arrays_per_snapshot += 3
 if ret_cfg.get("mag", False):

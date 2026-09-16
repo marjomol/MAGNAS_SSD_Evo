@@ -33,6 +33,7 @@ import warnings
 import tempfile
 import shutil
 import gc
+import multiprocessing
 
 _TEMP_EXPORT_DIRS = set()
 
@@ -692,6 +693,14 @@ def export_snapshot_fields(
     output_root=None,
     bitformat=np.float32,
     verbose=False,
+    induction_energy_integral=None,
+    induction_test_energy_integral=None,
+    induction_energy_profiles=None,
+    production_dissipation_profiles=None,
+    diver_B_percentiles=None,
+    induction_uniform=None,
+    debug_fields=None,
+    rad=None,
 ):
     """
     Export configured volumetric fields for one snapshot in AMR or uniform representation.
@@ -733,11 +742,117 @@ def export_snapshot_fields(
     if export_format in {'vtk', 'vtk_ascii', 'vtk_binary'} and export_grid != 'uniform':
         raise ValueError("VTK export requires export grid to be 'uniform'")
 
+    disk_cfg = export_cfg.get('disk_space_check', {})
+    if not isinstance(disk_cfg, dict):
+        disk_cfg = {}
+    disk_check_enabled = bool(disk_cfg.get('enabled', True))
+    disk_interactive = bool(disk_cfg.get('interactive', False))
+    disk_safety_factor = max(1.0, float(disk_cfg.get('safety_factor', 1.10)))
+    min_free_bytes = max(0.0, float(disk_cfg.get('min_free_gb', 1.0))) * (1024 ** 3)
+    insufficient_action = disk_cfg.get('on_insufficient', 'skip')
+    if insufficient_action not in {'skip', 'raise'}:
+        raise ValueError("disk_space_check['on_insufficient'] must be 'skip' or 'raise'.")
+
+    def _confirm_disk_write(path, estimated_bytes, label):
+        if not disk_check_enabled:
+            return True
+        estimated_bytes = max(0, int(estimated_bytes))
+        usage = shutil.disk_usage(os.path.dirname(path) or '.')
+        existing_bytes = os.path.getsize(path) if os.path.isfile(path) else 0
+        required_free = max(min_free_bytes, estimated_bytes * disk_safety_factor) - existing_bytes
+        free_gb = usage.free / (1024 ** 3)
+        required_gb = max(0.0, required_free) / (1024 ** 3)
+        message = (
+            f"Export '{label}': estimated write={estimated_bytes / (1024 ** 3):.3f} GiB, "
+            f"free={free_gb:.3f} GiB, required margin={required_gb:.3f} GiB, path={path}"
+        )
+        if usage.free >= required_free:
+            if verbose:
+                log_message(message, tag='export', level=1)
+            if disk_interactive and multiprocessing.current_process().name == 'MainProcess':
+                answer = input(f"{message}\nWrite this file? (y/n) [y]: ").strip().lower()
+                return answer in {'', 'y', 'yes'}
+            return True
+
+        warning = f"Insufficient disk space. {message}"
+        if disk_interactive and multiprocessing.current_process().name == 'MainProcess':
+            answer = input(f"WARNING: {warning}\nAttempt write anyway? (y/n) [n]: ").strip().lower()
+            return answer in {'y', 'yes'}
+        if insufficient_action == 'raise':
+            raise OSError(warning)
+        log_message(warning + '; skipping file.', tag='export', level=1)
+        return False
+
     clus_kp = data['clus_kp']
     rho_b = float(data['rho_b'])
 
     scalar_amr = {}
     vector_amr = {}
+
+    analysis_groups = {
+        'induction_energy_integrals': induction_energy_integral,
+        'induction_test_energy_integrals': induction_test_energy_integral,
+        'induction_energy_profiles': induction_energy_profiles,
+        'production_dissipation_profiles': production_dissipation_profiles,
+        'percentiles': diver_B_percentiles,
+        'projection': induction_uniform,
+        'debug': debug_fields,
+    }
+
+    analysis_format = str(export_cfg.get('analysis_format') or export_format).lower()
+    if analysis_format in {'vtk', 'vtk_ascii', 'vtk_binary'}:
+        analysis_format = 'npz'
+    if analysis_format not in {'npy', 'npz'}:
+        raise ValueError("analysis_format must be 'npy' or 'npz' (VTK uses an NPZ sidecar).")
+
+    analysis_root = os.path.join(
+        export_cfg.get('analysis_root', out_params.get('data_folder', '.')),
+        _safe_export_name(sim_name),
+        'analysis_exports',
+        f'L{int(level)}_U{int(up_to_level)}',
+        f'it{int(iteration):05d}',
+    )
+    for group_name, group_data in analysis_groups.items():
+        if not fields_cfg.get(group_name, False) or not isinstance(group_data, dict):
+            continue
+        group_dir = os.path.join(analysis_root, group_name)
+        os.makedirs(group_dir, exist_ok=True)
+        if analysis_format == 'npy':
+            for key, value in group_data.items():
+                if value is None:
+                    continue
+                array = np.asarray(value) if not isinstance(value, (list, tuple)) else np.asarray(value, dtype=object)
+                path = os.path.join(group_dir, f'{_safe_export_name(key)}.npy')
+                if _confirm_disk_write(path, array.nbytes, key):
+                    np.save(path, array, allow_pickle=True)
+        else:
+            payload = {
+                _safe_export_name(key): np.asarray(value, dtype=object)
+                if isinstance(value, (list, tuple)) else np.asarray(value)
+                for key, value in group_data.items() if value is not None
+            }
+            path = os.path.join(analysis_root, f'{group_name}.npz')
+            estimated_bytes = sum(array.nbytes for array in payload.values())
+            if _confirm_disk_write(path, estimated_bytes, group_name):
+                np.savez_compressed(path, **payload)
+
+    metadata = {
+        'grid_time': data.get('grid_time'),
+        'grid_zeta': data.get('grid_zeta'),
+        'rho_b': data.get('rho_b'),
+        'iteration': iteration,
+        'level': level,
+        'up_to_level': up_to_level,
+        'rad': rad,
+    }
+    metadata_dir = os.path.join(analysis_root, 'metadata')
+    if any(fields_cfg.get(name, False) and isinstance(value, dict) for name, value in analysis_groups.items()):
+        os.makedirs(metadata_dir, exist_ok=True)
+        for key, value in metadata.items():
+            path = os.path.join(metadata_dir, f'{key}.npy')
+            array = np.asarray(value)
+            if _confirm_disk_write(path, array.nbytes, key):
+                np.save(path, array, allow_pickle=True)
 
     if fields_cfg.get('density', False):
         scalar_amr['density'] = [
@@ -846,7 +961,12 @@ def export_snapshot_fields(
                 verbose=False,
             )
             tmp_path = os.path.join(tmp_dir, f"{_safe_export_name(name)}.npy")
-            np.save(tmp_path, np.asarray(arr))
+            array = np.asarray(arr)
+            if not _confirm_disk_write(tmp_path, array.nbytes, name):
+                del arr
+                gc.collect()
+                continue
+            np.save(tmp_path, array)
             scalar_out[name] = tmp_path
             # free memory
             try:
@@ -858,6 +978,7 @@ def export_snapshot_fields(
         # Vector fields: uniformize each component separately and save
         for name, (fx, fy, fz) in vector_amr.items():
             paths = []
+            field_allowed = True
             for comp, field_comp in zip(('x', 'y', 'z'), (fx, fy, fz)):
                 arrc = uniform_field(
                     field=field_comp,
@@ -879,14 +1000,27 @@ def export_snapshot_fields(
                     verbose=False,
                 )
                 tmp_path = os.path.join(tmp_dir, f"{_safe_export_name(name)}_{comp}.npy")
-                np.save(tmp_path, np.asarray(arrc))
+                array = np.asarray(arrc)
+                if not _confirm_disk_write(tmp_path, array.nbytes, f'{name}_{comp}'):
+                    field_allowed = False
+                    del arrc
+                    gc.collect()
+                    break
+                np.save(tmp_path, array)
                 paths.append(tmp_path)
                 try:
                     del arrc
                 except Exception:
                     pass
                 gc.collect()
-            vector_out[name] = tuple(paths)
+            if field_allowed:
+                vector_out[name] = tuple(paths)
+            else:
+                for path in paths:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
     else:
         # AMR export: no uniformization, keep the AMR patch lists
         scalar_out = scalar_amr
@@ -901,7 +1035,11 @@ def export_snapshot_fields(
             export_dir,
             f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat_label}.vtk"
         )
-        _write_legacy_vtk_structured_points(vtk_path, scalar_out, vector_out, origin=origin, spacing=spacing)
+        estimated_bytes = sum(np.asarray(value).nbytes for value in scalar_out.values())
+        if _confirm_disk_write(vtk_path, estimated_bytes, os.path.basename(vtk_path)):
+            _write_legacy_vtk_structured_points(vtk_path, scalar_out, vector_out, origin=origin, spacing=spacing)
+        else:
+            return None
         written_paths.append(vtk_path)
         if verbose:
             log_message(f'Volumetric snapshot export written: {vtk_path}', tag='export', level=1)
@@ -920,6 +1058,9 @@ def export_snapshot_fields(
             export_dir,
             f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat_label}"
         )
+        estimated_bytes = sum(np.asarray(value).nbytes for value in scalar_out.values())
+        if not _confirm_disk_write(vtk_base + '.vtr', estimated_bytes, os.path.basename(vtk_base)):
+            return None
         vtk_path = _write_binary_vtk_rectilinear(vtk_base, scalar_out, vector_out, origin=origin, spacing=spacing)
         if vtk_path:
             written_paths.append(vtk_path)
@@ -961,6 +1102,9 @@ def export_snapshot_fields(
             export_dir,
             f"{_safe_export_name(sim_name)}_it{int(iteration):05d}_L{int(level)}_U{int(up_to_level)}_{bitformat_label}.npz"
         )
+        estimated_bytes = sum(np.asarray(value).nbytes for value in payload.values())
+        if not _confirm_disk_write(out_path, estimated_bytes, os.path.basename(out_path)):
+            return None
         np.savez_compressed(out_path, **payload)
         written_paths.append(out_path)
         if verbose:
@@ -999,9 +1143,11 @@ def export_snapshot_fields(
                     pass
         else:
             if export_grid == 'uniform':
-                np.save(out_path, np.asarray(value))
+                array = np.asarray(value)
             else:
-                np.save(out_path, np.array(value, dtype=object))
+                array = np.array(value, dtype=object)
+            if _confirm_disk_write(out_path, array.nbytes, name):
+                np.save(out_path, array, allow_pickle=True)
         written_paths.append(out_path)
     for name, (vx, vy, vz) in vector_out.items():
         out_path = os.path.join(export_dir, f'{_safe_export_name(name)}.npy')
@@ -1028,7 +1174,9 @@ def export_snapshot_fields(
                 except Exception:
                     pass
                 gc.collect()
-            np.save(out_path, np.stack([ax, ay, az], axis=-1))
+            array = np.stack([ax, ay, az], axis=-1)
+            if _confirm_disk_write(out_path, array.nbytes, name):
+                np.save(out_path, array)
             try:
                 os.remove(vx)
             except Exception:
@@ -1043,9 +1191,11 @@ def export_snapshot_fields(
                 pass
         else:
             if export_grid == 'uniform':
-                np.save(out_path, np.stack([np.asarray(vx), np.asarray(vy), np.asarray(vz)], axis=-1))
+                array = np.stack([np.asarray(vx), np.asarray(vy), np.asarray(vz)], axis=-1)
             else:
-                np.save(out_path, np.array([vx, vy, vz], dtype=object))
+                array = np.array([vx, vy, vz], dtype=object)
+            if _confirm_disk_write(out_path, array.nbytes, name):
+                np.save(out_path, array, allow_pickle=True)
         written_paths.append(out_path)
 
     _log_export_disk_summary()

@@ -111,14 +111,13 @@ def _axis_label_evolution_y(evolution_type, y_scale='lin', label_mode='verbal'):
         return 'Magnetic Energy log[erg]' if evolution_type == 'total' else 'Magnetic Energy Induction log[erg/s]'
     return 'Magnetic Energy (erg)' if evolution_type == 'total' else 'Magnetic Energy Induction (erg/s)'
 
-
 def _axis_label_pd_y(kind, y_scale='lin', label_mode='verbal'):
     """Build production/dissipation y-axis labels in verbal or math mode."""
     if label_mode == 'math':
         if kind == 'absolute':
             return r'$\log_{10}|P,\,D,\,N|$' if y_scale == 'log' else r'$P,\,D,\,N$'
         if kind == 'fractional':
-            return r'$p_i,\,-d_i,\,\iota$'
+            return r'$d_i,\,-p_i,\,\iota$'
         if kind == 'net':
             return r'$N\equiv P-D$'
         if kind == 'net_integral':
@@ -129,7 +128,7 @@ def _axis_label_pd_y(kind, y_scale='lin', label_mode='verbal'):
     if kind == 'absolute':
         return 'Integrated Production / Dissipation log' if y_scale == 'log' else 'Integrated Production / Dissipation'
     if kind == 'fractional':
-        return 'Fractional Contribution (+prod / -diss)'
+        return 'Fractional Contribution (-diss / +prod)'
     if kind == 'net':
         return 'Integrated Net Contribution'
     if kind == 'net_integral':
@@ -322,6 +321,249 @@ def safe_filename(filepath, max_length=255, verbose=False):
         log_message(f"Shortened: {new_filename}", tag="plot", level=2)
     
     return new_filepath
+
+
+def load_saved_analysis(data_folder, sim_name, iterations, level, verbose=True):
+    """Load NPY analysis products for one simulation and AMR level."""
+    root = os.path.join(data_folder, sim_name, 'analysis_exports', f'L{int(level)}_U{int(level)}')
+    groups = {
+        'induction_energy_integrals': {},
+        'induction_energy_profiles': {},
+        'production_dissipation_profiles': {},
+        'percentiles': {},
+    }
+    group_indices = {group_name: [] for group_name in groups}
+    grid_time, grid_zeta, rho_b, radii = [], [], [], []
+    integral_snapshot_values = []
+
+    for iteration in iterations:
+        snapshot_root = os.path.join(root, f'it{int(iteration):05d}')
+        metadata_root = os.path.join(snapshot_root, 'metadata')
+        time_path = os.path.join(metadata_root, 'grid_time.npy')
+        zeta_path = os.path.join(metadata_root, 'grid_zeta.npy')
+        if not (os.path.isfile(time_path) and os.path.isfile(zeta_path)):
+            continue
+
+        grid_time.append(np.load(time_path, allow_pickle=True).item())
+        grid_zeta.append(np.load(zeta_path, allow_pickle=True).item())
+        for name, target, default in (
+            ('rho_b', rho_b, 1.0),
+            ('rad', radii, 0.0),
+        ):
+            path = os.path.join(metadata_root, f'{name}.npy')
+            target.append(np.load(path, allow_pickle=True).item() if os.path.isfile(path) else default)
+
+        snapshot_integrals = {}
+        for group_name, target in groups.items():
+            group_root = os.path.join(snapshot_root, group_name)
+            if not os.path.isdir(group_root):
+                continue
+            group_indices[group_name].append(len(grid_time) - 1)
+            for filename in os.listdir(group_root):
+                if filename.endswith('.npy'):
+                    value = np.load(os.path.join(group_root, filename), allow_pickle=True)
+                    parsed_value = value.item() if value.ndim == 0 else value
+                    if group_name == 'induction_energy_integrals':
+                        snapshot_integrals[filename[:-4]] = parsed_value
+                    else:
+                        target.setdefault(filename[:-4], []).append(parsed_value)
+        integral_snapshot_values.append(snapshot_integrals)
+
+    if not grid_time:
+        return None
+
+    integral_keys = set().union(*(snapshot.keys() for snapshot in integral_snapshot_values))
+    integral_data = groups['induction_energy_integrals']
+    for key in sorted(integral_keys):
+        missing_count = sum(key not in snapshot for snapshot in integral_snapshot_values)
+        integral_data[key] = [snapshot.get(key, 0.0) for snapshot in integral_snapshot_values]
+        if missing_count and verbose:
+            print(
+                f'[only_plot] WARNING: integral key {key} is missing in '
+                f'{missing_count}/{len(integral_snapshot_values)} valid snapshots; '
+                'missing values were kept as zero.'
+            )
+
+    signed_terms = ('diver', 'compres', 'stretch', 'advec', 'drag')
+    family_suffixes = ('', '_solenoidal', '_compressive')
+    for suffix in family_suffixes:
+        for term in signed_terms:
+            signed_key = f'int_MIE_{term}_B2{suffix}'
+            prod_key = f'{signed_key}_prod'
+            diss_key = f'{signed_key}_diss'
+            if signed_key not in integral_data or prod_key not in integral_data or diss_key not in integral_data:
+                continue
+            signed_values = np.asarray(integral_data[signed_key], dtype=float)
+            prod_values = np.asarray(integral_data[prod_key], dtype=float)
+            diss_values = np.asarray(integral_data[diss_key], dtype=float)
+            if np.allclose(signed_values, 0.0) and np.any(np.abs(prod_values - diss_values) > 0.0) and verbose:
+                print(
+                    f'[only_plot] WARNING: cached {signed_key} is entirely zero while '
+                    f'{prod_key}/{diss_key} contain non-zero values; no fallback reconstruction was applied.'
+                )
+
+        signed_key = f'int_MIE_total_B2{suffix}'
+        prod_key = f'{signed_key}_prod_compact'
+        diss_key = f'{signed_key}_diss_compact'
+        if signed_key in integral_data and prod_key in integral_data and diss_key in integral_data:
+            signed_values = np.asarray(integral_data[signed_key], dtype=float)
+            prod_values = np.asarray(integral_data[prod_key], dtype=float)
+            diss_values = np.asarray(integral_data[diss_key], dtype=float)
+            if np.allclose(signed_values, 0.0) and np.any(np.abs(prod_values - diss_values) > 0.0) and verbose:
+                print(
+                    f'[only_plot] WARNING: cached {signed_key} is entirely zero while '
+                    f'{prod_key}/{diss_key} contain non-zero values; no fallback reconstruction was applied.'
+                )
+
+    # P/D radial products do not export the optional measured references. Reuse
+    # them from induction profiles, aligning by the global snapshot index.
+    reference_keys = ('clus_b2_profile', 'clus_rho_rho_b_profile')
+    induction_index_map = {
+        global_index: local_index
+        for local_index, global_index in enumerate(group_indices['induction_energy_profiles'])
+    }
+    pd_indices = group_indices['production_dissipation_profiles']
+    induction_profiles = groups['induction_energy_profiles']
+    pd_profiles = groups['production_dissipation_profiles']
+    for key in reference_keys:
+        if key in pd_profiles or key not in induction_profiles:
+            continue
+        aligned_values = []
+        source_values = induction_profiles[key]
+        for global_index in pd_indices:
+            source_index = induction_index_map.get(global_index)
+            aligned_values.append(source_values[source_index] if source_index is not None else None)
+        pd_profiles[key] = aligned_values
+
+    if verbose:
+        print(f'[only_plot] Loaded {len(grid_time)} snapshots for {sim_name}, level {level}')
+        for group_name, group_data in groups.items():
+            if group_data:
+                print(f'[only_plot]   {group_name}: {len(group_data)} series')
+            else:
+                print(f'[only_plot]   {group_name}: NOT FOUND')
+    return {
+        'integral': groups['induction_energy_integrals'],
+        'profiles': groups['induction_energy_profiles'],
+        'pd_profiles': groups['production_dissipation_profiles'],
+        'percentiles': groups['percentiles'],
+        'profile_indices': group_indices['induction_energy_profiles'],
+        'pd_profile_indices': group_indices['production_dissipation_profiles'],
+        'percentile_indices': group_indices['percentiles'],
+        'grid_time': grid_time,
+        'grid_zeta': grid_zeta,
+        'rho_b': rho_b,
+        'rad': radii[-1] if radii else 0.0,
+    }
+
+
+def run_only_plot(active_sims, active_it, levels, data_folder, image_folder,
+                  ind_params, evo_plot_params, prod_diss_plot_params,
+                  ind_prof_plot_params, pd_prof_plot_params, percentile_plot_params,
+                  save=True,
+                  verbose=True):
+    """Render configured plots exclusively from saved NPY analysis products."""
+    from scripts.induction_evo import induction_energy_integral_evolution
+
+    energy_cfg = ind_params.get('energy_evolution', {})
+    pd_cfg = ind_params.get('production_dissipation', {})
+    energy_enabled = bool(energy_cfg.get('enabled', False) and (
+        energy_cfg.get('plot_total', False) or energy_cfg.get('plot_differential', False)))
+    pd_enabled = bool(pd_cfg.get('enabled', False) and (
+        pd_cfg.get('plot_absolute', False) or pd_cfg.get('plot_fractional', False) or pd_cfg.get('plot_net', False)))
+    induction_profiles_enabled = bool(energy_cfg.get('_truly_enabled', False) and energy_cfg.get('plot_profiles', False))
+    pd_profiles_enabled = bool(pd_cfg.get('_truly_enabled', False) and (
+        pd_cfg.get('plot_profiles', False) or pd_cfg.get('plot_fractional_profiles', False)))
+    if verbose:
+        print(
+            '[only_plot] profile gates: '
+            f'induction={induction_profiles_enabled}, '
+            f'production_dissipation={pd_profiles_enabled}'
+        )
+    rendered = False
+
+    for sim_name, iterations in zip(active_sims, active_it):
+        for level in levels:
+            saved_data = load_saved_analysis(data_folder, sim_name, iterations, level, verbose=verbose)
+            if saved_data is None:
+                print(f'[only_plot] No saved NPY analysis for {sim_name}, level {level}; skipping.')
+                continue
+
+            plot_ind_params = ind_params.copy()
+            plot_ind_params['up_to_level'] = level
+            grid_time = saved_data['grid_time']
+            grid_zeta = saved_data['grid_zeta']
+            radius = saved_data['rad']
+
+            has_evolution_snapshots = len(grid_time) >= 2
+            if energy_enabled and saved_data['integral'] and has_evolution_snapshots:
+                print(f'[only_plot] Plotting magnetic-energy evolution: {sim_name}, level {level}')
+                evolution = induction_energy_integral_evolution(
+                    ind_params['components'], saved_data['integral'],
+                    energy_cfg['derivative'], saved_data['rho_b'], grid_time, grid_zeta,
+                    normalized=energy_cfg.get('normalized', False), verbose=verbose)
+                plot_integral_evolution(
+                    evolution, evo_plot_params, plot_ind_params, grid_time, grid_zeta,
+                    radius, verbose=verbose, save=save, folder=image_folder)
+                rendered = True
+            elif energy_enabled and saved_data['integral'] and verbose:
+                print(
+                    f'[only_plot] Skipping magnetic-energy evolution for {sim_name}, level {level}: '
+                    'at least two saved snapshots are required.'
+                )
+
+            if pd_enabled and saved_data['integral'] and has_evolution_snapshots:
+                print(f'[only_plot] Plotting production/dissipation evolution: {sim_name}, level {level}')
+                figures = plot_production_dissipation_evolution(
+                    saved_data['integral'], prod_diss_plot_params, plot_ind_params,
+                    grid_time, grid_zeta, radius, verbose=verbose, save=save, folder=image_folder)
+                rendered = rendered or bool(figures)
+            elif pd_enabled and saved_data['integral'] and verbose:
+                print(
+                    f'[only_plot] Skipping production/dissipation evolution for {sim_name}, level {level}: '
+                    'at least two saved snapshots are required.'
+                )
+
+            if induction_profiles_enabled and saved_data['profiles']:
+                print(f'[only_plot] Plotting induction profiles: {sim_name}, level {level}')
+                profile_params = ind_prof_plot_params.copy()
+                profile_params['it_indx'] = saved_data['profile_indices']
+                plot_induction_radial_profiles(
+                    saved_data['profiles'], profile_params, plot_ind_params,
+                    grid_time, grid_zeta, radius, verbose=verbose, save=save, folder=image_folder)
+                rendered = True
+            elif induction_profiles_enabled:
+                print(
+                    f'[only_plot] Induction profiles requested but no saved '
+                    f'induction_energy_profiles were found for {sim_name}, level {level}.'
+                )
+
+            if pd_profiles_enabled and saved_data['pd_profiles']:
+                print(f'[only_plot] Plotting production/dissipation profiles: {sim_name}, level {level}')
+                profile_params = pd_prof_plot_params.copy()
+                profile_params['it_indx'] = saved_data['pd_profile_indices']
+                plot_production_dissipation_radial_profiles(
+                    saved_data['pd_profiles'], profile_params, plot_ind_params,
+                    grid_time, grid_zeta, radius, verbose=verbose, save=save, folder=image_folder)
+                rendered = True
+            elif pd_profiles_enabled:
+                print(
+                    f'[only_plot] Production/dissipation profiles requested but no saved '
+                    f'production_dissipation_profiles were found for {sim_name}, level {level}.'
+                )
+
+            if ind_params.get('percentiles', {}).get('enabled', False) and saved_data.get('percentiles'):
+                print(f'[only_plot] Plotting divergence percentiles: {sim_name}, level {level}')
+                plot_percentile_evolution(
+                    saved_data['percentiles'], percentile_plot_params, plot_ind_params,
+                    grid_time, grid_zeta, verbose=verbose, save=save, folder=image_folder)
+                rendered = True
+
+    if not rendered:
+        print('[only_plot] No compatible saved analysis products were available for plotting.')
+    else:
+        print('[only_plot] Plotting completed without recalculating simulation data.')
+
         
 def zoom_animation_3D(arr, size, arrow_scale = 1, units = 'Mpc', title = 'Magnetic Field Seed Zoom', verbose = True, Save = False, DPI = 300, run = '_', folder = None):
     '''
@@ -687,7 +929,6 @@ def setup_axis(ax, x_scale, y_scale, xlim, ylim, cancel_limits, x_axis, evolutio
         if x_scale == 'log':
             ax.set_xscale('log')
             ax.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
-                
         if y_scale == 'log':
             ax.set_yscale('log')
             ax.set_ylabel(_axis_label_evolution_y(evolution_type, y_scale='log', label_mode=label_mode), fontproperties=font)
@@ -1029,8 +1270,10 @@ def plot_percentile_evolution(percentile_data, plot_params, induction_params,
             parent_flag = diff_cfg.get('parent', False)
             parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol',''))
             buffer_info = f'Buffered_{diff_cfg.get("interpol","")}_siblings_{diff_cfg.get("use_siblings", False)}'
+            ax.plot(x, pct_sorted[:, i], color=colors[i], linewidth=lw_pct, label=lbl)
             if parent_flag:
                 buffer_info += f'_parent_{parent_interpol}'
+            ax.plot(x, pct_sorted[:, i], color=colors[i], linewidth=lw_pct)
         else:
             buffer_info = 'NoBuffer'
         
@@ -1066,6 +1309,8 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             - plot_total: True to plot total (integrated) energy evolution
             - plot_differential: True to plot differential (rate of change) energy evolution
             - derivative: 'RK', 'central', 'implicit_forward', 'alpha_fit' or 'rate'
+            - velocity_families: optional family selector for velocity-decomposed curves
+                (total, solenoidal, compressive).
             - x_axis: 'zeta' or 'years'
             - x_scale: 'lin' or 'log'
             - y_scale: 'lin' or 'log'
@@ -1128,6 +1373,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             mode_params['plot_differential'] = mode == 'differential'
             mode_params['y_scale'] = 'log' if mode == 'total' else 'lin'
             mode_params['volume_evolution'] = plot_volume_once and mode_index == 0
+            mode_params['velocity_families'] = plot_params.get('velocity_families', None)
             mode_params['_internal_mode'] = True
             figures.extend(
                 plot_integral_evolution(
@@ -1140,6 +1386,8 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     
     # Extract parameters from plot_params
     derivative = plot_params['derivative']
+    requested_velocity_families = plot_params.get('velocity_families', None)
+    plot_split = bool(plot_params.get('plot_split', False))
     x_axis = plot_params['x_axis']
     if x_axis == 'zeta':
         assert len(grid_zeta) > 0, "grid_zeta must not be empty when x_axis is 'zeta'"
@@ -1186,7 +1434,16 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     color_measured = palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
     color_itemized = palette.get('induction_itemized', DEFAULT_PLOT_PALETTE['induction_itemized'])
     color_compact = palette.get('induction_compact', DEFAULT_PLOT_PALETTE['induction_compact'])
+    color_compact_family = plot_params.get('compact_family_color', '#a84a63')
     color_kinetic = palette.get('kinetic_energy', DEFAULT_PLOT_PALETTE['kinetic_energy'])
+
+    def _component_enabled(component_key):
+        return bool(components_cfg.get(component_key, False))
+
+    def _should_show_mechanism_legend_item(component_key, y_values):
+        if not _component_enabled(component_key):
+            return False
+        return y_values is not None and should_plot_component(y_values, threshold=component_threshold)
     
     # Set up matplotlib parameters
     plt.rcParams.update({
@@ -1214,10 +1471,71 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     font_legend.set_style('normal')
     font_legend.set_weight('normal')
     font_legend.set_size(12)
+
+    velocity_family_order = ('total', 'solenoidal', 'compressive')
+    velocity_family_suffix = {
+        'total': '',
+        'solenoidal': '_solenoidal',
+        'compressive': '_compressive',
+    }
+    velocity_family_styles = plot_params.get(
+        'velocity_family_styles',
+        {
+            'total': '-',
+            'solenoidal': '--',
+            'compressive': ':',
+        }
+    )
+
+    def _normalize_velocity_families(raw_families):
+        if raw_families is None:
+            active_fams = []
+            vel_cfg = induction_params.get('velocity_field', {})
+            for fam in velocity_family_order:
+                if vel_cfg.get(fam, False) or any(f'_{fam}' in k for k in evolution_data.keys()):
+                    active_fams.append(fam)
+            return active_fams or ['total']
+        if isinstance(raw_families, str):
+            raw_families = [raw_families]
+        normalized_families = []
+        for family in raw_families:
+            if family in velocity_family_order and family not in normalized_families:
+                normalized_families.append(family)
+        return normalized_families or ['total']
+
+    def _series_key(base_key, family):
+        return f'{base_key}{velocity_family_suffix[family]}{data_suffix}'
+
+    def _load_family_series(base_key, family):
+        effective_family = plot_family_context or family
+        key = _series_key(base_key, effective_family)
+        values = evolution_data.get(key)
+        if values is None:
+            return None, key
+        return units * np.asarray(values, dtype=float), key
+
+    def _format_family_label(base_label, family):
+        return base_label if family == 'total' else f'{base_label} ({family})'
+
+    def _format_component_label(component_label, sym, family):
+        return rf'{component_label} $\Gamma_{{\mathrm{{{sym}}}}}$' if family == 'total' else rf'{component_label} $\Gamma_{{\mathrm{{{sym}}}}}$ ({family})'
+
+    def _family_axis_suffix(family):
+        if not family or family == 'total':
+            return ''
+        if label_mode == 'math':
+            if family == 'solenoidal':
+                return r' - $\mathrm{Solenoidal\ Velocity\ Field}$'
+            if family == 'compressive':
+                return r' - $\mathrm{Compressive\ Velocity\ Field}$'
+        if family == 'solenoidal':
+            return ' - Solenoidal Velocity Field'
+        if family == 'compressive':
+            return ' - Compressive Velocity Field'
+        return f' - {family.title()} Velocity Field'
     
     y_title = 1.02
     line1, line2 = line_widths
-    component_alpha = float(np.clip(plot_params.get('component_alpha', 0.75), 0.05, 1.0))
     component_alpha = float(np.clip(plot_params.get('component_alpha', 0.75), 0.05, 1.0))
     component_threshold = plot_params.get(
         'component_threshold',
@@ -1249,23 +1567,10 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         index_O, index_F = 1, len(grid_t)
         kind = 'differential'
         
-    if derivative == 'RK':
-        index_o, index_f = 0, len(grid_t)
-        plotid = f'RK_{kind}'
-    elif derivative == 'central':
-        # Central total predictor yields E_{i+1}; compare against measured support [1:]
-        index_o, index_f = 1, len(grid_t)
-        plotid = f'central_{kind}'
-    elif derivative == 'alpha_fit':
-        # Calibrated explicit predictor yields E_{i+1}; compare against measured support [1:]
-        index_o, index_f = 1, len(grid_t)
-        plotid = f'alpha_fit_{kind}'
-    elif derivative == 'rate':
-        # Rate predictor also targets the next snapshot E_{i+1}.
-        index_o, index_f = 1, len(grid_t)
-        plotid = f'rate_{kind}'
+    if derivative in ['RK', 'central', 'alpha_fit', 'rate']:
+        index_o, index_f = (0 if derivative == 'RK' else 1), len(grid_t)
+        plotid = f'{derivative}_{kind}'
     elif derivative == 'implicit_forward':
-        # Forward-implicit branch starts at k=1 and predicts E_{k+1} -> support [2:]
         index_o, index_f = 2, len(grid_t)
         plotid = f'implicit_forward_{kind}'
     else:
@@ -1283,8 +1588,57 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     kinetic_work = [units * evolution_data[f'evo_kinetic_energy{data_suffix}'][i] for i in range(len(evolution_data[f'evo_kinetic_energy{data_suffix}']))]
     
     # Volume data
-    volume_phi = evolution_data['evo_volume_phi']
-    volume_co = evolution_data['evo_volume_co']
+    yb2_cumulative = evolution_data.get('evo_b2_cumulative')
+    xb2 = z if x_axis == 'zeta' else t
+    volume_phi = evolution_data.get('evo_volume_phi', [])
+    volume_co = evolution_data.get('evo_volume_co', [])
+
+    base_axis_data = z if x_axis == 'zeta' else t
+    selected_velocity_families = _normalize_velocity_families(requested_velocity_families)
+    figures = []
+    if plot_split and len(selected_velocity_families) > 1:
+        plot_volume_once = bool(plot_params.get('volume_evolution', False))
+        for family_index, family in enumerate(selected_velocity_families):
+            split_params = plot_params.copy()
+            split_params['velocity_families'] = [family]
+            split_params['plot_split'] = False
+            split_params['plot_family_context'] = family
+            split_params['_internal_mode'] = True
+            split_params['volume_evolution'] = plot_volume_once and family_index == 0
+            figures.extend(
+                plot_integral_evolution(
+                    evolution_data, split_params, induction_params,
+                    grid_t, grid_zeta, rad,
+                    verbose=verbose, save=save, folder=folder
+                )
+            )
+        return figures
+    plot_family_context = plot_params.get('plot_family_context', None)
+    split_family_mode = plot_family_context is not None
+    family_series_defs = {
+        'n1': 'evo_b2',
+        'n0': 'evo_ind_b2',
+        'diver_work': 'evo_MIE_diver_B2',
+        'compres_work': 'evo_MIE_compres_B2',
+        'stretch_work': 'evo_MIE_stretch_B2',
+        'advec_work': 'evo_MIE_advec_B2',
+        'drag_work': 'evo_MIE_drag_B2',
+        'total_work': 'evo_MIE_total_B2',
+    }
+
+    family_series_raw_map = {
+        family: {
+            series_name: _load_family_series(base_key, family)[0]
+            for series_name, base_key in family_series_defs.items()
+        }
+        for family in selected_velocity_families
+    }
+
+    if plot_family_context:
+        velocity_family_tag = f'_family_{plot_family_context}'
+    else:
+        velocity_family_tag = '' if selected_velocity_families == ['total'] else '_vf_' + '-'.join(selected_velocity_families)
+    plotid = f'{plotid}{velocity_family_tag}'
     
     # Prepare data based on plot type
     if plot_type == 'smoothed':
@@ -1366,6 +1720,66 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         index_o_plot = index_o
         index_f_plot = index_f
 
+    def _prepare_family_series_map(raw_series_map):
+        if plot_type == 'smoothed':
+            return {
+                family: {
+                    series_name: (
+                        gaussian_filter1d(series_data, sigma=smoothing_sigma)
+                        if series_data is not None else None
+                    )
+                    for series_name, series_data in series_dict.items()
+                }
+                for family, series_dict in raw_series_map.items()
+            }
+
+        if plot_type == 'interpolated':
+            family_interpolated_map = {}
+            for family, series_dict in raw_series_map.items():
+                interpolated_series = {}
+                for series_name, series_data in series_dict.items():
+                    if series_data is None:
+                        interpolated_series[series_name] = None
+                        continue
+                    family_interp = interp1d(
+                        base_axis_data[common_i0:common_i1],
+                        np.asarray(series_data, dtype=float)[common_i0:common_i1],
+                        kind=interpolation_kind,
+                    )
+                    interpolated_series[series_name] = family_interp(x_new)
+                family_interpolated_map[family] = interpolated_series
+            return family_interpolated_map
+
+        return raw_series_map
+
+    family_series_map = _prepare_family_series_map(family_series_raw_map)
+    family_summary_legend = len(selected_velocity_families) > 1
+
+    def _family_prefix_label(label, family):
+        if split_family_mode:
+            return label
+        return f'{family} {label}' if len(selected_velocity_families) == 1 else label
+
+    def _family_prefix_component_label(component_label, sym, family):
+        base_label = rf'{component_label} $\Gamma_{{\mathrm{{{sym}}}}}$'
+        return base_label if split_family_mode else _family_prefix_label(base_label, family)
+
+    def _family_component_label(component_label, sym):
+        return rf'{component_label} $\Gamma_{{\mathrm{{{sym}}}}}$'
+
+    def _family_compact_label(family):
+        if split_family_mode and family in ('solenoidal', 'compressive'):
+            return f'...from Compact {family.title()} Induction'
+        return '...from Compact Induction'
+
+    active_mechanism_legend_items = [
+        ('compression', 'Integrated Compression', compres_work_data, component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression'])),
+        ('stretching', 'Integrated Stretching', stretch_work_data, component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching'])),
+        ('advection', 'Integrated Advection', advec_work_data, component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection'])),
+        ('divergence', 'Integrated Divergence', diver_work_data, component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence'])),
+        ('drag', 'Integrated Cosmic Drag', drag_work_data, component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag'])),
+    ]
+
     if verbose:
         axis_values = np.asarray(x_data)
         axis_label = 'z' if x_axis == 'zeta' else 't_yr'
@@ -1398,6 +1812,8 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         # Log hierarchical debug using utils.log_message for consistent formatting
         log_message(f'Plotting debug: x_axis={x_axis}, plot_type={plot_type}, derivative={derivative}', tag='plots', level=1)
         log_message(f'  Base axis len={len(axis_values)}, range {axis_label}:[{axis_values[0]:.6g}, {axis_values[-1]:.6g}]', tag='plots', level=1)
+        if selected_velocity_families != ['total']:
+            log_message(f'  Velocity families: {", ".join(selected_velocity_families)}', tag='plots', level=1)
         if plot_magnetic_energy:
             log_message(f'    Magnetic Energy (n1): {_range_from_indices(n1_data, index_O_plot, index_F_plot)}', tag='plots', level=2)
         if plot_kinetic_energy:
@@ -1410,29 +1826,30 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         log_message(f'    Divergence: {_range_from_offset(diver_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
         log_message(f'    Cosmic Drag: {_range_from_offset(drag_work_data, index_o_plot, index_f_plot)}', tag='plots', level=2)
     
-    # Create figures list
-    figures = []
-    
     # Main evolution plot
     fig1, ax1 = plt.subplots(figsize=figure_size, dpi=dpi)
+    if family_summary_legend:
+        ax1.plot([], [], color='0.25', linestyle=velocity_family_styles.get('total', '-'), linewidth=line1, label='Velocity family: total')
+        ax1.plot([], [], color='0.25', linestyle=velocity_family_styles.get('solenoidal', '--'), linewidth=line1, label='Velocity family: solenoidal')
+        ax1.plot([], [], color='0.25', linestyle=velocity_family_styles.get('compressive', ':'), linewidth=line1, label='Velocity family: compressive')
+        for component_key, compact_label, y_values, color in active_mechanism_legend_items:
+            if _should_show_mechanism_legend_item(component_key, y_values):
+                ax1.plot([], [], color=color, linestyle='-', linewidth=line2, label=compact_label)
+    components_plotted = []
+    family_components_plotted = []
 
     def _slice_xy(xvals, yvals, i0, i1):
-        """Return aligned x/y slices, clipped to valid bounds of both arrays."""
         nxy = min(len(xvals), len(yvals))
         i0c = max(0, min(i0, nxy))
         i1c = max(i0c, min(i1, nxy))
         return xvals[i0c:i1c], yvals[i0c:i1c]
 
     def _slice_xy_with_offset(xvals, yvals, i0, i1):
-        """Map y[0] to x[i0] and clip by i1 and array bounds."""
         i0c = max(0, min(i0, len(xvals)))
         i1c = min(i1, len(xvals), i0 + len(yvals))
         i1c = max(i0c, i1c)
         count = i1c - i0c
         return xvals[i0c:i1c], yvals[:count]
-    
-    # Track which components were plotted
-    components_plotted = []
     
     # Kinetic energy
     xk, yk = _slice_xy(x_data, kinetic_work_data, index_O_plot, index_F_plot)
@@ -1442,46 +1859,160 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         components_plotted.append('kinetic')
     
     # Main energy line (always plot)
-    if evolution_type == 'total':
-        label = 'Magnetic Energy'
-    else:
-        label = 'Magnetic Energy Induction'
-
-    x1, y1 = _slice_xy(x_data, n1_data, index_O_plot, index_F_plot)
-    if plot_magnetic_energy and should_plot_component(y1, threshold=component_threshold):
-        ax1.plot(x1, y1, 
-            linewidth=line1, label=label, color=color_measured)
-        components_plotted.append('magnetic_energy')
+    xm, ym = _slice_xy(x_data, n1_data, index_O_plot, index_F_plot)
+    if plot_magnetic_energy and should_plot_component(ym, threshold=component_threshold):
+        lbl = 'Magnetic Energy' if evolution_type == 'total' else 'Magnetic Energy Induction'
+        ax1.plot(xm, ym, linewidth=line1, label=lbl, color=color_measured)
+        components_plotted.append(lbl)
         
     # Total work (compacted)
     xt, yt = _slice_xy_with_offset(x_data, total_work_data, index_o_plot, index_f_plot)
-    if should_plot_component(yt, threshold=component_threshold):
+    split_non_total_family = split_family_mode and plot_family_context != 'total'
+    if not split_non_total_family and should_plot_component(yt, threshold=component_threshold):
         ax1.plot(xt, yt, '-', 
             linewidth=line1, label='...from Compact Induction', color=color_compact)
         components_plotted.append('total')
 
     # Induction prediction (plot if has data)
     x0, y0 = _slice_xy_with_offset(x_data, n0_data, index_o_plot, index_f_plot)
-    if should_plot_component(y0, threshold=component_threshold):
+    if not split_non_total_family and should_plot_component(y0, threshold=component_threshold):
         ax1.plot(x0, y0, '--',
             linewidth=line1, label='...from Itemize Induction', color=color_itemized)
 
     # Individual components with their colors
-    component_configs = [
-        (compres_work_data, 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
-        (stretch_work_data, 'Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str'),
-        (advec_work_data, 'Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv'),
-        (diver_work_data, 'Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div'),
-        (drag_work_data, 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag')
-    ]
-    
-    for data, label, color, sym in component_configs:
-        xc, yc = _slice_xy_with_offset(x_data, data, index_o_plot, index_f_plot)
-        if should_plot_component(yc, threshold=component_threshold):
-            latex_label = rf'{label} $\Gamma_{{\mathrm{{{sym}}}}}$'
-            ax1.plot(xc, yc, '--', 
-                    linewidth=line2, label=latex_label, color=color)
-            components_plotted.append(label.lower())
+    xp_item, yp_item = _slice_xy_with_offset(x_data, n0_data, index_o_plot, index_f_plot)
+    xp_comp, yp_comp = _slice_xy_with_offset(x_data, total_work_data, index_o_plot, index_f_plot)
+
+    if 'total' in selected_velocity_families:
+        total_family_linestyle = velocity_family_styles.get('total', '-')
+        total_itemized_linestyle = '-' if family_summary_legend else '--'
+        total_family_component_linestyle = '--' if split_family_mode else total_family_linestyle
+        family_total_configs = [
+            ('total_work', '...from Compact Induction', color_compact, '-', line1, True),
+            ('n0', '...from Itemize Induction', color_itemized, total_itemized_linestyle, line1, True),
+        ]
+        for series_name, label, color, linestyle, linewidth, use_offset in family_total_configs:
+            family_data = family_series_map.get('total', {}).get(series_name)
+            if family_data is None:
+                continue
+            if use_offset:
+                x_family, y_family = _slice_xy_with_offset(x_data, family_data, index_o_plot, index_f_plot)
+            else:
+                x_family, y_family = _slice_xy(x_data, family_data, index_O_plot, index_F_plot)
+            if not should_plot_component(y_family, threshold=component_threshold):
+                continue
+            ax1.plot(
+                x_family,
+                y_family,
+                linestyle=linestyle,
+                linewidth=linewidth,
+                label=_family_prefix_label(label, 'total') if not family_summary_legend else '_nolegend_',
+                color=color,
+            )
+            components_plotted.append(_family_prefix_label(label, 'total'))
+        component_configs = [
+            ('compression', compres_work_data, 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
+            ('stretching', stretch_work_data, 'Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str'),
+            ('advection', advec_work_data, 'Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv'),
+            ('divergence', diver_work_data, 'Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div'),
+            ('drag', drag_work_data, 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag')
+        ]
+        for component_key, data, label, color, sym in component_configs:
+            if not _component_enabled(component_key):
+                continue
+            xc, yc = _slice_xy_with_offset(x_data, data, index_o_plot, index_f_plot)
+            if should_plot_component(yc, threshold=component_threshold):
+                lbl = rf'{label} $\Gamma_{{\mathrm{{{sym}}}}}$'
+                ax1.plot(
+                    xc,
+                    yc,
+                    linestyle=total_family_component_linestyle,
+                    linewidth=line2,
+                    label=_family_prefix_component_label(label, sym, 'total') if not family_summary_legend else '_nolegend_',
+                    color=color,
+                )
+                components_plotted.append(_family_prefix_component_label(label, sym, 'total'))
+
+    # Decomposed velocity families
+    if any(family != 'total' for family in selected_velocity_families):
+        family_plot_plan = [
+            ('compression', 'compres_work', 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp', line2, True),
+            ('stretching', 'stretch_work', 'Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str', line2, True),
+            ('advection', 'advec_work', 'Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv', line2, True),
+            ('divergence', 'diver_work', 'Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div', line2, True),
+            ('drag', 'drag_work', 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag', line2, True),
+        ]
+
+        for family in selected_velocity_families:
+            if family == 'total':
+                continue
+            family_linestyle = velocity_family_styles.get(family, '--')
+            family_total_linestyle = family_linestyle if family_summary_legend else None
+            family_component_linestyle = '--' if split_family_mode else family_linestyle
+            family_compact_color = color_compact_family if split_family_mode else color_compact
+            family_compact_label = '...from Compact Induction' if split_family_mode else _family_compact_label(family)
+
+            if split_family_mode:
+                x_total_ref, y_total_ref = _slice_xy_with_offset(x_data, total_work_data, index_o_plot, index_f_plot)
+                if should_plot_component(y_total_ref, threshold=component_threshold):
+                    ax1.plot(
+                        x_total_ref,
+                        y_total_ref,
+                        linestyle='-',
+                        linewidth=line1,
+                        label='...from Compact Induction (total)',
+                        color=color_compact,
+                        alpha=component_alpha,
+                    )
+                    family_components_plotted.append('...from Compact Induction (total)')
+
+            family_total_configs = [
+                ('total_work', family_compact_label, family_compact_color, '-', line1, True),
+                ('n0', '...from Itemize Induction', color_itemized, '--' if split_family_mode else '--', line1, True),
+            ]
+            for series_name, label, color, linestyle, linewidth, use_offset in family_total_configs:
+                family_data = family_series_map.get(family, {}).get(series_name)
+                if family_data is None:
+                    continue
+                if use_offset:
+                    x_family, y_family = _slice_xy_with_offset(x_data, family_data, index_o_plot, index_f_plot)
+                else:
+                    x_family, y_family = _slice_xy(x_data, family_data, index_O_plot, index_F_plot)
+                if not should_plot_component(y_family, threshold=component_threshold):
+                    continue
+                ax1.plot(
+                    x_family,
+                    y_family,
+                    linestyle=linestyle if split_family_mode else (family_total_linestyle if family_total_linestyle is not None else linestyle),
+                    linewidth=linewidth,
+                    label=_family_prefix_label(label, family) if not family_summary_legend else '_nolegend_',
+                    color=color,
+                    alpha=component_alpha,
+                )
+                family_components_plotted.append(_family_prefix_label(label, family))
+            for component_key, series_name, base_label, color, sym, linewidth, use_offset in family_plot_plan:
+                if not _component_enabled(component_key):
+                    continue
+                family_data = family_series_map.get(family, {}).get(series_name)
+                if family_data is None:
+                    continue
+                if use_offset:
+                    x_family, y_family = _slice_xy_with_offset(x_data, family_data, index_o_plot, index_f_plot)
+                else:
+                    x_family, y_family = _slice_xy(x_data, family_data, index_O_plot, index_F_plot)
+                if not should_plot_component(y_family, threshold=component_threshold):
+                    continue
+                family_label = _family_prefix_component_label(base_label, sym, family)
+                ax1.plot(
+                    x_family,
+                    y_family,
+                    linestyle=family_component_linestyle,
+                    linewidth=linewidth,
+                    label=family_label if not family_summary_legend else '_nolegend_',
+                    color=color,
+                    alpha=component_alpha,
+                )
+                family_components_plotted.append(family_label)
 
     ax1_aux = None
     xb2 = None
@@ -1578,6 +2109,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             headroom=cumulative_headroom,
         )
     evo_base_label = _axis_label_evolution_y(evolution_type, y_scale='lin', label_mode=label_mode)
+    evo_base_label = f'{evo_base_label}{_family_axis_suffix(plot_family_context)}'
     ax1.set_ylabel(
         _apply_norm_vol_suffix(
             evo_base_label,
@@ -1630,12 +2162,24 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
         fig2.tight_layout()
         figures.append(fig2)
 
+    # Cumulative integrals plot
     fig_integral = None
     if plot_integrals and evolution_type == 'differential':
         fig_integral, ax_integral = plt.subplots(figsize=figure_size, dpi=dpi)
+        if family_summary_legend:
+            ax_integral.plot([], [], color='0.25', linestyle=velocity_family_styles.get('total', '-'), linewidth=line1, label='Velocity family: total')
+            ax_integral.plot([], [], color='0.25', linestyle=velocity_family_styles.get('solenoidal', '--'), linewidth=line1, label='Velocity family: solenoidal')
+            ax_integral.plot([], [], color='0.25', linestyle=velocity_family_styles.get('compressive', ':'), linewidth=line1, label='Velocity family: compressive')
+            for component_key, compact_label, y_values, color in active_mechanism_legend_items:
+                if _should_show_mechanism_legend_item(component_key, y_values):
+                    ax_integral.plot([], [], color=color, linestyle='-', linewidth=line2, label=compact_label)
         integral_components_plotted = []
 
-        def _plot_integral_curve(source_x, source_y, label, color, linestyle='-', linewidth=None, threshold=component_threshold):
+        def _plot_integral_curve(source_x, source_y, label, color, linestyle='-', linewidth=None, threshold=component_threshold, use_offset=False):
+            if use_offset:
+                source_x, source_y = _slice_xy_with_offset(source_x, source_y, index_o_plot, index_f_plot)
+            else:
+                source_x, source_y = _slice_xy(source_x, source_y, index_O_plot, index_F_plot)
             if not should_plot_component(source_y, threshold=threshold):
                 return
             cumulative_y = _cumulative_integral_series(source_x, source_y)
@@ -1649,7 +2193,7 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
                 color=color,
                 label=label,
             )
-            integral_components_plotted.append(label)
+            integral_components_plotted.append(label if len(selected_velocity_families) > 1 else _family_prefix_label(label, selected_velocity_families[0]))
 
         if plot_kinetic_energy:
             _plot_integral_curve(x_data, kinetic_work_data, 'Integrated Kinetic Energy', color_kinetic, linewidth=line1)
@@ -1658,21 +2202,119 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             label = 'Integrated Magnetic Energy' if evolution_type == 'total' else 'Integrated Magnetic Energy Induction'
             _plot_integral_curve(x_data, n1_data, label, color_measured, linewidth=line1)
 
-        _plot_integral_curve(x_data, total_work_data, 'Integrated ...from Compact Induction', color_compact, linewidth=line1)
-        _plot_integral_curve(x_data, n0_data, 'Integrated ...from Itemize Induction', color_itemized, linestyle='--', linewidth=line1)
+        total_itemized_linestyle = '-' if family_summary_legend else '--'
+        if not split_non_total_family:
+            _plot_integral_curve(x_data, total_work_data, _family_prefix_label('...from Compact Induction', 'total'), color_compact, linestyle='-', linewidth=line1, threshold=component_threshold, use_offset=True)
+            _plot_integral_curve(x_data, n0_data, _family_prefix_label('...from Itemize Induction', 'total'), color_itemized, linestyle='--' if split_family_mode else total_itemized_linestyle, linewidth=line1, threshold=component_threshold, use_offset=True)
+        else:
+            _plot_integral_curve(x_data, total_work_data, '...from Compact Induction (total)', color_compact, linestyle='-', linewidth=line1, threshold=component_threshold, use_offset=True)
 
-        component_integral_configs = [
-            (compres_work_data, 'Integrated Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression'])),
-            (stretch_work_data, 'Integrated Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching'])),
-            (advec_work_data, 'Integrated Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection'])),
-            (diver_work_data, 'Integrated Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence'])),
-            (drag_work_data, 'Integrated Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag'])),
-        ]
-        for data, label, color in component_integral_configs:
-            _plot_integral_curve(x_data, data, label, color, linestyle='--', linewidth=line2)
+        if selected_velocity_families == ['total']:
+            component_integral_configs = [
+                (compres_work_data, 'Integrated Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
+                (stretch_work_data, 'Integrated Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str'),
+                (advec_work_data, 'Integrated Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv'),
+                (diver_work_data, 'Integrated Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div'),
+                (drag_work_data, 'Integrated Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag'),
+            ]
+            for data, label, color, sym in component_integral_configs:
+                _plot_integral_curve(x_data, data, _family_component_label(label, sym), color, linestyle='--', linewidth=line2, threshold=component_threshold, use_offset=True)
+
+        if 'total' in selected_velocity_families and family_summary_legend:
+            family_integral_plot_plan_total = [
+                ('compres_work', 'Integrated Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp', line2, True),
+                ('stretch_work', 'Integrated Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str', line2, True),
+                ('advec_work', 'Integrated Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv', line2, True),
+                ('diver_work', 'Integrated Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div', line2, True),
+                ('drag_work', 'Integrated Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag', line2, True),
+            ]
+            family = 'total'
+            family_linestyle = velocity_family_styles.get(family, '-')
+            family_total_linestyle = family_linestyle
+            for series_name, base_label, color, sym, linewidth, use_offset in family_integral_plot_plan_total:
+                family_data = family_series_map.get(family, {}).get(series_name)
+                if family_data is None:
+                    continue
+                if use_offset:
+                    x_family, y_family = _slice_xy_with_offset(x_data, family_data, index_o_plot, index_f_plot)
+                else:
+                    x_family, y_family = _slice_xy(x_data, family_data, index_O_plot, index_F_plot)
+                if not should_plot_component(y_family, threshold=component_threshold):
+                    continue
+                cumulative_family = _cumulative_integral_series(x_family, y_family)
+                if len(cumulative_family) == 0:
+                    continue
+                family_label = _family_component_label(base_label, sym)
+                ax_integral.plot(
+                    x_family[:len(cumulative_family)],
+                    cumulative_family,
+                    linestyle='-' if split_family_mode else family_total_linestyle,
+                    linewidth=linewidth,
+                    color=color,
+                    label='_nolegend_',
+                )
+                integral_components_plotted.append(family_label)
+
+        if any(family != 'total' for family in selected_velocity_families):
+            family_integral_plot_plan = [
+                ('total', 'total_work', '...from Compact Induction', color_compact, None, line1, True),
+                ('total', 'n0', '...from Itemize Induction', color_itemized, None, line1, True),
+                ('compression', 'compres_work', 'Integrated Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp', line2, True),
+                ('stretching', 'stretch_work', 'Integrated Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str', line2, True),
+                ('advection', 'advec_work', 'Integrated Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv', line2, True),
+                ('divergence', 'diver_work', 'Integrated Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div', line2, True),
+                ('drag', 'drag_work', 'Integrated Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag', line2, True),
+            ]
+
+            for family in selected_velocity_families:
+                if family == 'total':
+                    continue
+                family_linestyle = velocity_family_styles.get(family, '--')
+                family_total_linestyle = family_linestyle if family_summary_legend else None
+                if split_family_mode:
+                    x_total_ref, y_total_ref = _slice_xy_with_offset(x_data, total_work_data, index_o_plot, index_f_plot)
+                    cumulative_total_ref = _cumulative_integral_series(x_total_ref, y_total_ref)
+                    if len(cumulative_total_ref) > 0 and should_plot_component(y_total_ref, threshold=component_threshold):
+                        ax_integral.plot(
+                            x_total_ref[:len(cumulative_total_ref)],
+                            cumulative_total_ref,
+                            linestyle='-',
+                            linewidth=line1,
+                            color=color_compact,
+                            label='...from Compact Induction (total)',
+                        )
+                        integral_components_plotted.append('...from Compact Induction (total)')
+                for component_key, series_name, base_label, color, sym, linewidth, use_offset in family_integral_plot_plan:
+                    if component_key not in ('total_work', 'n0') and not _component_enabled(component_key):
+                        continue
+                    family_data = family_series_map.get(family, {}).get(series_name)
+                    if family_data is None:
+                        continue
+                    if use_offset:
+                        x_family, y_family = _slice_xy_with_offset(x_data, family_data, index_o_plot, index_f_plot)
+                    else:
+                        x_family, y_family = _slice_xy(x_data, family_data, index_O_plot, index_F_plot)
+                    if not should_plot_component(y_family, threshold=component_threshold):
+                        continue
+                    cumulative_family = _cumulative_integral_series(x_family, y_family)
+                    if len(cumulative_family) == 0:
+                        continue
+                    family_label = _family_prefix_label(base_label, family) if sym is None else _family_component_label(base_label, sym)
+                    ax_integral.plot(
+                        x_family[:len(cumulative_family)],
+                        cumulative_family,
+                        linestyle='--' if split_family_mode and sym is not None else (
+                            family_total_linestyle if family_total_linestyle is not None else ('-' if 'Compact' in base_label else '--')
+                        ),
+                        linewidth=linewidth,
+                        color=color_compact_family if split_family_mode and series_name == 'total_work' else color,
+                        label=family_label if not family_summary_legend else '_nolegend_',
+                    )
+                    integral_components_plotted.append(family_label)
 
         setup_axis(ax_integral, x_scale, 'lin', xlim, ylim, cancel_limits, x_axis, evolution_type, font, plot_params=plot_params)
         integral_base_label = r'$\int \partial_t E_B\,dt$' if label_mode == 'math' else 'Cumulative Integrated Contribution'
+        integral_base_label = f'{integral_base_label}{_family_axis_suffix(plot_family_context)}'
         ax_integral.set_ylabel(
             _apply_norm_vol_suffix(
                 integral_base_label,
@@ -1729,6 +2371,8 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
     if verbose:
         log_message(f'{plot_type.capitalize()} integrated magnetic energy and induction prediction plot created', tag='evolution', level=1)
         log_message(f'Components plotted: {", ".join(components_plotted)}', tag='evolution', level=1)
+        if family_components_plotted:
+            log_message(f'Family-specific components plotted: {", ".join(family_components_plotted)}', tag='evolution', level=1)
         if fig_integral is not None:
             log_message(f'Cumulative integral plot created with: {", ".join(integral_components_plotted)}', tag='evolution', level=1)
         if volume_evolution:
@@ -1774,8 +2418,6 @@ def plot_integral_evolution(evolution_data, plot_params, induction_params,
             fig2.savefig(filename2, dpi=dpi)
             if verbose:
                 log_message(f'Volume plot saved as: {filename2}', tag='evolution', level=1)
-            
-            if verbose:
                 print(f'Plotting... Volume plot saved as: {filename2}')
 
         if fig_integral is not None:
@@ -1840,15 +2482,6 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     Author: Marco Molina
     '''
 
-    required_keys = [
-        'int_MIE_total_B2_prod_itemized',
-        'int_MIE_total_B2_diss_itemized'
-    ]
-    if not all(k in pd_data for k in required_keys):
-        if verbose:
-            print('Production/dissipation plot skipped: required integrated keys are missing')
-        return []
-
     label_mode = _get_label_mode(plot_params)
     x_axis = plot_params.get('x_axis', 'zeta')
     x_scale = plot_params.get('x_scale', 'lin')
@@ -1878,6 +2511,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
     plot_density = bool(plot_params.get('plot_density', False))
     plot_magnetic_energy = bool(plot_params.get('plot_magnetic_energy', False))
+    label_mode = _get_label_mode(plot_params)
     plot_cumulative_magnetic_energy = bool(plot_params.get('plot_cumulative_magnetic_energy', False))
     cumulative_headroom = plot_params.get('plot_cumulative_magnetic_energy_headroom', 0.05)
     color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
@@ -1942,18 +2576,6 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
         else:
             region_label = f'{np.round(induction_params.get("F", 1.0) * rad, 1)} Mpc'
 
-    # Itemized totals: sum of per-term production/dissipation contributions.
-    itemized_prod = units * np.asarray(pd_data['int_MIE_total_B2_prod_itemized'], dtype=float)
-    itemized_diss = units * np.asarray(pd_data['int_MIE_total_B2_diss_itemized'], dtype=float)
-    itemized_net = itemized_prod - itemized_diss
-
-    compact_prod = None
-    compact_diss = None
-    if 'int_MIE_total_B2_prod_compact' in pd_data and 'int_MIE_total_B2_diss_compact' in pd_data:
-        compact_prod = units * np.asarray(pd_data['int_MIE_total_B2_prod_compact'], dtype=float)
-        compact_diss = units * np.asarray(pd_data['int_MIE_total_B2_diss_compact'], dtype=float)
-    compact_net = None if compact_prod is None or compact_diss is None else (compact_prod - compact_diss)
-
     # Component palette used in plot_induction_radial_profiles
     component_map = [
         ('MIE_compres_B2', 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
@@ -1963,18 +2585,270 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
         ('MIE_drag_B2', 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag')
     ]
 
-    if verbose:
-        try:
-            if compact_prod is not None and compact_diss is not None:
-                # Primary comparison: itemized-sum totals vs compact-total split.
-                rel_prod_comp = np.nanmax(np.abs(itemized_prod - compact_prod) / np.maximum(np.abs(compact_prod), epsilon))
-                rel_diss_comp = np.nanmax(np.abs(itemized_diss - compact_diss) / np.maximum(np.abs(compact_diss), epsilon))
-                print(f'Production/dissipation totals: itemized-sum vs compact-split (max rel diff P={rel_prod_comp:.3e}, D={rel_diss_comp:.3e}). Expected differences as compact totals internalize per-component cancellations.')
-            if compact_net is not None:
-                rel_net = np.nanmax(np.abs(itemized_net - compact_net) / np.maximum(np.abs(compact_net), epsilon))
-                print(f'Production/dissipation net: itemized vs compact (max rel diff N={rel_net:.3e}). Expected convergent net results.')
-        except Exception:
-            pass
+    plot_family_context = plot_params.get('plot_family_context', None)
+    split_family_mode = plot_family_context is not None
+    velocity_family_order = ('total', 'solenoidal', 'compressive')
+    velocity_family_suffix = {
+        'total': '',
+        'solenoidal': '_solenoidal',
+        'compressive': '_compressive',
+    }
+    velocity_family_styles = plot_params.get(
+        'velocity_family_styles',
+        {
+            'total': '-',
+            'solenoidal': '--',
+            'compressive': ':',
+        }
+    )
+
+    def _normalize_velocity_families(raw_families):
+        if raw_families is None:
+            active_fams = []
+            vel_cfg = induction_params.get('velocity_field', {})
+            for fam in velocity_family_order:
+                fam_suffix = velocity_family_suffix[fam]
+                if vel_cfg.get(fam, False) or any(fam_suffix and fam_suffix in key for key in pd_data.keys()):
+                    active_fams.append(fam)
+            return active_fams or ['total']
+        if isinstance(raw_families, str):
+            raw_families = [raw_families]
+        normalized_families = []
+        for family in raw_families:
+            if family in velocity_family_order and family not in normalized_families:
+                normalized_families.append(family)
+        return normalized_families or ['total']
+
+    def _family_axis_suffix(family):
+        if not family or family == 'total':
+            return ''
+        if label_mode == 'math':
+            if family == 'solenoidal':
+                return r' - $\mathrm{Solenoidal\ Velocity\ Field}$'
+            if family == 'compressive':
+                return r' - $\mathrm{Compressive\ Velocity\ Field}$'
+        if family == 'solenoidal':
+            return ' - Solenoidal Velocity Field'
+        if family == 'compressive':
+            return ' - Compressive Velocity Field'
+        return f' - {family.title()} Velocity Field'
+
+    def _family_series_key(base_key, family, metric, compact=False):
+        suffix = velocity_family_suffix.get(family, '')
+        if compact:
+            return f'int_{base_key}{suffix}_{metric}_compact'
+        return f'int_{base_key}{suffix}_{metric}'
+
+    def _family_series(family, base_key, metric, compact=False):
+        key = _family_series_key(base_key, family, metric, compact=compact)
+        values = pd_data.get(key)
+        if values is None:
+            return None, key
+        return units * np.asarray(values, dtype=float), key
+
+    def _diss_color(base_color):
+        if not family_summary_legend:
+            return base_color
+        rgb = np.array(to_rgb(base_color), dtype=float)
+        return tuple(np.clip(0.55 * rgb + 0.45, 0.0, 1.0))
+
+    def _compact_family_color(family):
+        if family == 'total':
+            return color_compact_net
+        rgb = np.array(to_rgb(color_compact_net), dtype=float)
+        return tuple(np.clip(0.55 * rgb + 0.45, 0.0, 1.0))
+
+    def _total_compact_reference_net():
+        total_prod, _ = _family_series('total', 'MIE_total_B2', 'prod', compact=True)
+        total_diss, _ = _family_series('total', 'MIE_total_B2', 'diss', compact=True)
+        if total_prod is None or total_diss is None:
+            return None
+        return np.asarray(total_prod, dtype=float) - np.asarray(total_diss, dtype=float)
+
+    def _format_family_label(base_label, family):
+        if split_family_mode:
+            return base_label
+        return base_label if family == 'total' else f'{base_label} ({family})'
+
+    component_key_map = {
+        'MIE_compres_B2': 'compression',
+        'MIE_stretch_B2': 'stretching',
+        'MIE_advec_B2': 'advection',
+        'MIE_diver_B2': 'divergence',
+    }
+
+    def _has_family_series(family, base_key, metric, compact=False):
+        values, _ = _family_series(family, base_key, metric, compact=compact)
+        if values is None:
+            return False
+        return should_plot_component(values, threshold=epsilon)
+
+    requested_velocity_families = plot_params.get('velocity_families', None)
+    plot_split = bool(plot_params.get('plot_split', False))
+    selected_velocity_families = _normalize_velocity_families(requested_velocity_families)
+    family_summary_legend = plot_family_context is None and len(selected_velocity_families) > 1
+    components_cfg = induction_params.get('components', {})
+    itemized_enabled = bool(components_cfg.get('itemized', False))
+
+    # Accept either itemized totals or compact totals as the plotting source.
+    has_any_family_totals = any(
+        (
+            f'int_MIE_total_B2{velocity_family_suffix.get(family, "")}_prod' in pd_data and
+            f'int_MIE_total_B2{velocity_family_suffix.get(family, "")}_diss' in pd_data
+        ) or (
+            f'int_MIE_total_B2{velocity_family_suffix.get(family, "")}_prod_compact' in pd_data and
+            f'int_MIE_total_B2{velocity_family_suffix.get(family, "")}_diss_compact' in pd_data
+        )
+        for family in selected_velocity_families
+    )
+    if not has_any_family_totals:
+        if verbose:
+            print('Production/dissipation plot skipped: no valid integrated P/D data')
+        return []
+
+    if plot_split and len(selected_velocity_families) > 1 and plot_family_context is None:
+        figures = []
+        plot_volume_once = bool(plot_params.get('volume_evolution', False))
+        for family_index, family in enumerate(selected_velocity_families):
+            split_params = plot_params.copy()
+            split_params['velocity_families'] = [family]
+            split_params['plot_split'] = False
+            split_params['plot_family_context'] = family
+            split_params['_internal_mode'] = True
+            split_params['volume_evolution'] = plot_volume_once and family_index == 0
+            figures.extend(
+                plot_production_dissipation_evolution(
+                    pd_data, split_params, induction_params,
+                    grid_t, grid_zeta, rad,
+                    verbose=verbose, save=save, folder=folder
+                )
+            )
+        return figures
+
+    family_series_map = {}
+    for family in selected_velocity_families:
+        fam_itemized_prod = _family_series(family, 'MIE_total_B2', 'prod', compact=False)[0]
+        fam_itemized_diss = _family_series(family, 'MIE_total_B2', 'diss', compact=False)[0]
+        fam_itemized_net = None if fam_itemized_prod is None or fam_itemized_diss is None else (fam_itemized_prod - fam_itemized_diss)
+        family_series_map[family] = {
+            'total_prod_itemized': fam_itemized_prod if itemized_enabled else None,
+            'total_diss_itemized': fam_itemized_diss if itemized_enabled else None,
+            'total_net_itemized': fam_itemized_net if itemized_enabled else None,
+            'total_prod_compact': _family_series(family, 'MIE_total_B2', 'prod', compact=True)[0],
+            'total_diss_compact': _family_series(family, 'MIE_total_B2', 'diss', compact=True)[0],
+            'drag_prod': _family_series(family, 'MIE_drag_B2', 'prod')[0],
+            'drag_diss': _family_series(family, 'MIE_drag_B2', 'diss')[0],
+            'components': {
+                'compression': {
+                    'prod': _family_series(family, 'MIE_compres_B2', 'prod')[0],
+                    'diss': _family_series(family, 'MIE_compres_B2', 'diss')[0],
+                },
+                'stretching': {
+                    'prod': _family_series(family, 'MIE_stretch_B2', 'prod')[0],
+                    'diss': _family_series(family, 'MIE_stretch_B2', 'diss')[0],
+                },
+                'advection': {
+                    'prod': _family_series(family, 'MIE_advec_B2', 'prod')[0],
+                    'diss': _family_series(family, 'MIE_advec_B2', 'diss')[0],
+                },
+                'divergence': {
+                    'prod': _family_series(family, 'MIE_diver_B2', 'prod')[0],
+                    'diss': _family_series(family, 'MIE_diver_B2', 'diss')[0],
+                },
+            },
+        }
+
+    def _relative_max_diff(reference, candidate):
+        ref = np.asarray(reference, dtype=float)
+        cand = np.asarray(candidate, dtype=float)
+        nxy = min(ref.size, cand.size)
+        if nxy == 0:
+            return None
+        ref = ref[:nxy]
+        cand = cand[:nxy]
+        denom = np.maximum(np.abs(cand), epsilon)
+        diff = np.abs(ref - cand) / denom
+        diff = diff[np.isfinite(diff)]
+        if diff.size == 0:
+            return None
+        return float(np.nanmax(diff))
+
+    if verbose and all(components_cfg.get(key, False) for key in ('compression', 'stretching', 'advection', 'drag')):
+        for family in selected_velocity_families:
+            sfx = velocity_family_suffix.get(family, '')
+            itemized_prod_f, _ = _family_series(family, 'MIE_total_B2', 'prod', compact=False)
+            itemized_diss_f, _ = _family_series(family, 'MIE_total_B2', 'diss', compact=False)
+            compact_prod_f, _ = _family_series(family, 'MIE_total_B2', 'prod', compact=True)
+            compact_diss_f, _ = _family_series(family, 'MIE_total_B2', 'diss', compact=True)
+
+            if itemized_prod_f is None or itemized_diss_f is None or compact_prod_f is None or compact_diss_f is None:
+                continue
+
+            rel_prod_comp = _relative_max_diff(itemized_prod_f, compact_prod_f)
+            rel_diss_comp = _relative_max_diff(itemized_diss_f, compact_diss_f)
+            if rel_prod_comp is None or rel_diss_comp is None:
+                continue
+
+            itemized_net_f = itemized_prod_f - itemized_diss_f
+            compact_net_f = compact_prod_f - compact_diss_f
+            rel_net = _relative_max_diff(itemized_net_f, compact_net_f)
+
+            print(
+                f'[{family}] Production/dissipation totals: itemized vs compact '
+                f'(max rel diff P={rel_prod_comp:.3e}, D={rel_diss_comp:.3e}, N={rel_net:.3e}). '
+                'Expected near-zero differences when the compact and itemized decompositions are numerically consistent.'
+            )
+
+    def _family_plot_style(family):
+        return velocity_family_styles.get(family, '-')
+
+    def _family_efficiency_color(family):
+        if family == 'total':
+            return color_efficiency
+        rgb = np.array(to_rgb(color_efficiency), dtype=float)
+        return tuple(np.clip(0.62 * rgb + 0.38, 0.0, 1.0))
+
+    def _add_compact_legend_proxies(ax, include_totals=False, include_components=False, include_fractional=False, include_net=False, include_integrated_net=False):
+        if not family_summary_legend:
+            return
+        for family in selected_velocity_families:
+            ax.plot(
+                [], [],
+                color='0.25',
+                linestyle=_family_plot_style(family),
+                linewidth=line_main,
+                label=f'Velocity family: {family}',
+            )
+        if include_totals:
+            if plot_total_prod_diss:
+                ax.plot([], [], color=color_prod, linestyle='-', linewidth=line_main, label=r'Total Production $P_{\mathrm{tot}}$')
+                ax.plot([], [], color=_diss_color(color_diss), linestyle='-', linewidth=line_main, label=r'Total Dissipation $D_{\mathrm{tot}}$')
+            if itemized_enabled:
+                ax.plot([], [], color=color_itemized_net, linestyle='-', linewidth=line_main, label=r'Net (itemized) $N_{\mathrm{tot}}$')
+            ax.plot([], [], color=color_compact_net, linestyle='-', linewidth=line_main, label=r'Net (compact) $N_{\mathrm{tot}}$')
+        if include_fractional:
+            ax.plot([], [], color=color_efficiency, linestyle='-', linewidth=line_main, label=r'Net Efficiency $\iota$')
+        if include_net:
+            net_prefix = 'Integrated ' if include_integrated_net else ''
+            if itemized_enabled:
+                ax.plot([], [], color=color_itemized_net, linestyle='-', linewidth=line_main, label=f'{net_prefix}Net total (itemized)')
+            ax.plot([], [], color=color_compact_net, linestyle='-', linewidth=line_main, label=f'{net_prefix}Net total (compact)')
+        if include_components:
+            frac_prefix = include_fractional
+            comp_prefix = 'Integrated ' if include_integrated_net else ''
+            for prefix, label, color, sym in component_map:
+                has_any = any(
+                    _has_family_series(family, prefix, 'prod') or _has_family_series(family, prefix, 'diss')
+                    for family in selected_velocity_families
+                )
+                if has_any:
+                    if include_net:
+                        ax.plot([], [], color=color, linestyle='-', linewidth=line_comp, label=rf'{comp_prefix}{label} $N_{{\mathrm{{{sym}}}}}$')
+                    else:
+                        prod_symbol = 'p' if frac_prefix else 'P'
+                        diss_symbol = 'd' if frac_prefix else 'D'
+                        ax.plot([], [], color=color, linestyle='-', linewidth=line_comp, label=rf'{comp_prefix}{label} ${prod_symbol}_{{\mathrm{{{sym}}}}}$')
+                        ax.plot([], [], color=_diss_color(color), linestyle='-', linewidth=line_comp, label=rf'{comp_prefix}{label} ${diss_symbol}_{{\mathrm{{{sym}}}}}$')
 
     figures = []
 
@@ -2053,29 +2927,94 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     # Absolute production/dissipation rates
     if plot_absolute:
         fig_abs, ax_abs = plt.subplots(figsize=figure_size, dpi=dpi)
-        if plot_total_prod_diss:
-            ax_abs.plot(x, itemized_prod, '-.', linewidth=line_main, color=color_prod, label='Total Production (itemized sum)')
-            ax_abs.plot(x, itemized_diss, '-.', linewidth=line_main, color=color_diss, label='Total Dissipation (itemized sum)')
-        ax_abs.plot(x, itemized_net, '--', linewidth=line_main, color=color_itemized_net, label='Net (itemized) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
 
-        if compact_prod is not None and compact_diss is not None:
+        for family in selected_velocity_families:
+            family_style = _family_plot_style(family) if family_summary_legend else None
+            family_series = family_series_map.get(family, {})
+
+            if split_family_mode and family != 'total':
+                total_net_reference = _total_compact_reference_net()
+                if total_net_reference is not None and should_plot_component(total_net_reference, threshold=epsilon):
+                    ax_abs.plot(
+                        x,
+                        total_net_reference,
+                        '-',
+                        linewidth=line_main,
+                        color=color_compact_net,
+                        label=r'Net total (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$',
+                    )
+
             if plot_total_prod_diss:
-                ax_abs.plot(x, compact_prod, '-', linewidth=line_comp, color=color_prod, label='Total Production (compact)')
-                ax_abs.plot(x, compact_diss, '-', linewidth=line_comp, color=color_diss, label='Total Dissipation (compact)')
-        if compact_net is not None:
-            ax_abs.plot(x, compact_net, '-', linewidth=line_main, color=color_compact_net, label='Net (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$')
+                total_prod_series = family_series.get('total_prod_itemized')
+                total_diss_series = family_series.get('total_diss_itemized')
+                total_prod_label = r'Total Production $P_{\mathrm{tot}}$'
+                total_diss_label = r'Total Dissipation $D_{\mathrm{tot}}$'
+                if total_prod_series is None or total_diss_series is None:
+                    total_prod_series = family_series.get('total_prod_compact')
+                    total_diss_series = family_series.get('total_diss_compact')
+                    total_prod_label = r'Total Production (compact) $P_{\mathrm{tot}}$'
+                    total_diss_label = r'Total Dissipation (compact) $D_{\mathrm{tot}}$'
+                if total_prod_series is not None and should_plot_component(total_prod_series):
+                    ax_abs.plot(
+                        x, total_prod_series,
+                        '-.' if not family_summary_legend else family_style,
+                        linewidth=line_main,
+                        color=color_prod,
+                        label=_format_family_label(total_prod_label, family) if not family_summary_legend else '_nolegend_',
+                    )
+                if total_diss_series is not None and should_plot_component(total_diss_series):
+                    ax_abs.plot(
+                        x, total_diss_series,
+                        '-.' if not family_summary_legend else family_style,
+                        linewidth=line_main,
+                        color=_diss_color(color_diss),
+                        label=_format_family_label(total_diss_label, family) if not family_summary_legend else '_nolegend_',
+                    )
 
-        for prefix, label, color, sym in component_map:
-            prod_key = f'int_{prefix}_prod'
-            diss_key = f'int_{prefix}_diss'
-            if prod_key in pd_data:
-                arr_p = units * np.asarray(pd_data[prod_key], dtype=float)
-                if should_plot_component(arr_p):
-                    ax_abs.plot(x, arr_p, '--', linewidth=line_comp, color=color, label=rf'{label} $P_{{\mathrm{{{sym}}}}}$')
-            if diss_key in pd_data:
-                arr_d = units * np.asarray(pd_data[diss_key], dtype=float)
-                if should_plot_component(arr_d):
-                    ax_abs.plot(x, arr_d, ':', linewidth=line_comp, color=color, label=rf'{label} $D_{{\mathrm{{{sym}}}}}$')
+            total_net_itemized = family_series.get('total_net_itemized')
+            if itemized_enabled and total_net_itemized is not None and should_plot_component(total_net_itemized):
+                ax_abs.plot(
+                    x, total_net_itemized,
+                    '--' if not family_summary_legend else family_style,
+                    linewidth=line_main,
+                    color=color_itemized_net,
+                    label=_format_family_label(r'Net (itemized) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$', family) if not family_summary_legend else '_nolegend_',
+                )
+
+            total_net_compact = None if family_series.get('total_prod_compact') is None or family_series.get('total_diss_compact') is None else (family_series['total_prod_compact'] - family_series['total_diss_compact'])
+            if total_net_compact is not None and should_plot_component(total_net_compact):
+                ax_abs.plot(
+                    x, total_net_compact,
+                    '-' if not family_summary_legend else family_style,
+                    linewidth=line_main,
+                    color=_compact_family_color(family),
+                    label=_format_family_label(r'Net (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$', family) if not family_summary_legend else '_nolegend_',
+                )
+
+            for prefix, label, color, sym in component_map:
+                if prefix == 'MIE_drag_B2' and family != 'total':
+                    continue
+                component_key = component_key_map.get(prefix)
+                prod_series = family_series.get('drag_prod') if prefix == 'MIE_drag_B2' else family_series.get('components', {}).get(component_key, {}).get('prod')
+                diss_series = family_series.get('drag_diss') if prefix == 'MIE_drag_B2' else family_series.get('components', {}).get(component_key, {}).get('diss')
+                if prod_series is not None and should_plot_component(prod_series):
+                    ax_abs.plot(
+                        x, prod_series,
+                        '--' if not family_summary_legend else family_style,
+                        linewidth=line_comp,
+                        color=color,
+                        label=_format_family_label(rf'{label} $P_{{\mathrm{{{sym}}}}}$', family) if not family_summary_legend else '_nolegend_',
+                    )
+                if diss_series is not None and should_plot_component(diss_series):
+                    ax_abs.plot(
+                        x, diss_series,
+                        ':' if not family_summary_legend else family_style,
+                        linewidth=line_comp,
+                        color=_diss_color(color),
+                        label=_format_family_label(rf'{label} $D_{{\mathrm{{{sym}}}}}$', family) if not family_summary_legend else '_nolegend_',
+                    )
+
+        _add_compact_legend_proxies(ax_abs, include_totals=True, include_components=True)
 
         ax_abs.set_xlabel(xlabel, fontproperties=font)
         abs_label = _apply_norm_vol_suffix(
@@ -2084,7 +3023,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             normalize_by_volume=normalize_by_volume,
             label_mode=label_mode,
         )
-        ax_abs.set_ylabel(abs_label, fontproperties=font)
+        ax_abs.set_ylabel(f'{abs_label}{_family_axis_suffix(plot_family_context)}', fontproperties=font)
         if x_scale == 'log':
             ax_abs.set_xscale('log')
             ax_abs.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
@@ -2096,7 +3035,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
                 normalize_by_volume=normalize_by_volume,
                 label_mode=label_mode,
             )
-            ax_abs.set_ylabel(abs_log_label, fontproperties=font)
+            ax_abs.set_ylabel(f'{abs_log_label}{_family_axis_suffix(plot_family_context)}', fontproperties=font)
         if not cancel_limits and xlim:
             ax_abs.set_xlim(xlim[0], xlim[1])
         if not cancel_limits and ylim:
@@ -2105,11 +3044,10 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             ax_abs.invert_xaxis()
 
         ax_abs.grid(alpha=0.3)
-        # Unified title (short) and smart legend
         plot_title_short = title.split('-')[0].strip()
         if _get_label_mode(plot_params) == 'math':
             plot_title_short = r'$E_B$ Evolution'
-        ax_abs.set_title(f'{plot_title_short} - {region_label}', y=y_title, fontproperties=font_title)
+        ax_abs.set_title(f'{plot_title_short} - {region_label}{_family_axis_suffix(plot_family_context) if not split_family_mode else ""}', y=y_title, fontproperties=font_title)
         legend_outside = _smart_legend(ax_abs, fig_abs, plot_params=plot_params, font_legend=font_legend)
         if legend_outside:
             fig_abs.tight_layout(rect=[0, 0.08, 1, 1])
@@ -2121,24 +3059,84 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     if plot_fractional:
         fig_frac, ax_frac = plt.subplots(figsize=figure_size, dpi=dpi)
 
-        for prefix, label, color, sym in component_map:
-            frac_p_key = f'int_PD_frac_{prefix}_prod'
-            frac_d_key = f'int_PD_frac_{prefix}_diss'
-            if frac_p_key in pd_data:
-                arr_fp = np.asarray(pd_data[frac_p_key], dtype=float)
-                if should_plot_component(arr_fp, threshold=epsilon):
-                    ax_frac.plot(x, arr_fp, '--', linewidth=line_comp, color=color, label=rf'{label} $p_{{\mathrm{{{sym}}}}}$')
-            if frac_d_key in pd_data:
-                arr_fd = np.asarray(pd_data[frac_d_key], dtype=float)
-                if should_plot_component(arr_fd, threshold=epsilon):
-                    ax_frac.plot(x, -arr_fd, ':', linewidth=line_comp, color=color, label=rf'{label} $d_{{\mathrm{{{sym}}}}}$')
+        for family in selected_velocity_families:
+            family_style = _family_plot_style(family) if family_summary_legend else None
+            family_suffix = velocity_family_suffix.get(family, '')
+            if split_family_mode and family != 'total' and 'int_PD_iota' in pd_data:
+                total_iota = np.asarray(pd_data['int_PD_iota'], dtype=float)
+                if should_plot_component(total_iota, threshold=epsilon):
+                    ax_frac.plot(
+                        x,
+                        total_iota,
+                        '-',
+                        linewidth=line_main,
+                        color=color_efficiency,
+                        label=r'Net Efficiency $\iota$ (total)',
+                    )
+                fam_iota_key = f'int_PD_iota{family_suffix}'
+                if fam_iota_key in pd_data:
+                    fam_iota = np.asarray(pd_data[fam_iota_key], dtype=float)
+                    if should_plot_component(fam_iota, threshold=epsilon):
+                        ax_frac.plot(
+                            x,
+                            fam_iota,
+                            '-',
+                            linewidth=line_main,
+                            color=_family_efficiency_color(family),
+                            label=r'Net Efficiency $\iota$',
+                        )
+            for prefix, label, color, sym in component_map:
+                if prefix == 'MIE_drag_B2' and family != 'total':
+                    continue
+                if prefix == 'MIE_drag_B2':
+                    prod_series = family_series_map[family].get('drag_prod')
+                    diss_series = family_series_map[family].get('drag_diss')
+                else:
+                    component_key = {
+                        'MIE_compres_B2': 'compression',
+                        'MIE_stretch_B2': 'stretching',
+                        'MIE_advec_B2': 'advection',
+                        'MIE_diver_B2': 'divergence',
+                    }.get(prefix)
+                    prod_series = family_series_map[family].get('components', {}).get(component_key, {}).get('prod')
+                    diss_series = family_series_map[family].get('components', {}).get(component_key, {}).get('diss')
+                if prod_series is not None:
+                    frac_p = np.asarray(pd_data.get(f'int_PD_frac_{prefix}{family_suffix}_prod', []), dtype=float)
+                    if len(frac_p) > 0 and should_plot_component(frac_p, threshold=epsilon):
+                        ax_frac.plot(
+                            x, frac_p,
+                            '--' if not family_summary_legend else family_style,
+                            linewidth=line_comp,
+                            color=color,
+                            label=rf'{label} $p_{{\mathrm{{{sym}}}}}$' if not family_summary_legend else '_nolegend_',
+                        )
+                if diss_series is not None:
+                    frac_d = np.asarray(pd_data.get(f'int_PD_frac_{prefix}{family_suffix}_diss', []), dtype=float)
+                    if len(frac_d) > 0 and should_plot_component(frac_d, threshold=epsilon):
+                        ax_frac.plot(
+                            x, -frac_d,
+                            ':' if not family_summary_legend else family_style,
+                            linewidth=line_comp,
+                            color=_diss_color(color),
+                            label=rf'{label} $d_{{\mathrm{{{sym}}}}}$' if not family_summary_legend else '_nolegend_',
+                        )
 
-        if 'int_PD_iota' in pd_data:
-            iota = np.asarray(pd_data['int_PD_iota'], dtype=float)
-            ax_frac.plot(x, iota, '-', linewidth=line_main, color=color_efficiency, label=r'Net Efficiency $\iota$')
+            iota_key = f'int_PD_iota{family_suffix}'
+            if iota_key in pd_data and not (split_family_mode and family != 'total'):
+                iota = np.asarray(pd_data[iota_key], dtype=float)
+                if should_plot_component(iota, threshold=epsilon):
+                    ax_frac.plot(
+                        x, iota,
+                        '-' if not family_summary_legend else family_style,
+                        linewidth=line_main,
+                        color=_family_efficiency_color(family),
+                        label=r'Net Efficiency $\iota$' if not family_summary_legend else '_nolegend_',
+                    )
+
+        _add_compact_legend_proxies(ax_frac, include_fractional=True, include_components=True)
 
         ax_frac.set_xlabel(xlabel, fontproperties=font)
-        ax_frac.set_ylabel(_axis_label_pd_y('fractional', label_mode=label_mode), fontproperties=font)
+        ax_frac.set_ylabel(f'{_axis_label_pd_y("fractional", label_mode=label_mode)}{_family_axis_suffix(plot_family_context)}', fontproperties=font)
         if x_scale == 'log':
             ax_frac.set_xscale('log')
             ax_frac.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
@@ -2152,7 +3150,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
         frac_title = f'{title} (Fractions)'
         if _get_label_mode(plot_params) == 'math':
             frac_title = r'Fractional Contributions'
-        ax_frac.set_title(f'{frac_title} - {region_label}', y=y_title, fontproperties=font_title)
+        ax_frac.set_title(f'{frac_title} - {region_label}{_family_axis_suffix(plot_family_context) if not split_family_mode else ""}', y=y_title, fontproperties=font_title)
         legend_outside = _smart_legend(ax_frac, fig_frac, plot_params=plot_params, font_legend=font_legend)
         if legend_outside:
             fig_frac.tight_layout(rect=[0, 0.08, 1, 1])
@@ -2164,19 +3162,74 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
     if plot_net:
         fig_net, ax_net = plt.subplots(figsize=figure_size, dpi=dpi)
 
-        for prefix, label, color, sym in component_map:
-            prod_key = f'int_{prefix}_prod'
-            diss_key = f'int_{prefix}_diss'
-            if prod_key in pd_data and diss_key in pd_data:
-                arr_p = units * np.asarray(pd_data[prod_key], dtype=float)
-                arr_d = units * np.asarray(pd_data[diss_key], dtype=float)
-                net_i = arr_p - arr_d
-                if should_plot_component(net_i, threshold=epsilon):
-                    ax_net.plot(x, net_i, '--', linewidth=line_comp, color=color, label=rf'{label} $N_{{\mathrm{{{sym}}}}}$')
+        for family in selected_velocity_families:
+            family_style = _family_plot_style(family) if family_summary_legend else None
+            family_series = family_series_map.get(family, {})
+            family_display = 'total' if family == 'total' else family.title()
+            if split_family_mode and family != 'total':
+                total_net_reference = _total_compact_reference_net()
+                if total_net_reference is not None and should_plot_component(total_net_reference, threshold=epsilon):
+                    ax_net.plot(
+                        x,
+                        total_net_reference,
+                        '-',
+                        linewidth=line_main,
+                        color=color_compact_net,
+                        label=r'Net total (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$',
+                    )
+            family_compact_net = None if family_series.get('total_prod_compact') is None or family_series.get('total_diss_compact') is None else (family_series['total_prod_compact'] - family_series['total_diss_compact'])
+            if family_compact_net is not None and should_plot_component(family_compact_net, threshold=epsilon):
+                ax_net.plot(
+                    x,
+                    family_compact_net,
+                    '-',
+                    linewidth=line_main,
+                    color=_compact_family_color(family),
+                    label=(r'Net (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$'
+                           if family != 'total' else
+                           r'Net total (compact) $P_{\mathrm{tot}}-D_{\mathrm{tot}}$'),
+                )
+            for prefix, label, color, sym in component_map:
+                if prefix == 'MIE_drag_B2' and family != 'total':
+                    continue
+                if prefix == 'MIE_drag_B2':
+                    arr_p = family_series.get('drag_prod')
+                    arr_d = family_series.get('drag_diss')
+                else:
+                    component_key = {
+                        'MIE_compres_B2': 'compression',
+                        'MIE_stretch_B2': 'stretching',
+                        'MIE_advec_B2': 'advection',
+                        'MIE_diver_B2': 'divergence',
+                    }.get(prefix)
+                    arr_p = family_series.get('components', {}).get(component_key, {}).get('prod')
+                    arr_d = family_series.get('components', {}).get(component_key, {}).get('diss')
+                if arr_p is not None and arr_d is not None:
+                    net_i = arr_p - arr_d
+                    if should_plot_component(net_i, threshold=epsilon):
+                        ax_net.plot(
+                            x,
+                            net_i,
+                            '--' if not family_summary_legend else family_style,
+                            linewidth=line_comp,
+                            color=color,
+                            label=rf'{label} $N_{{\mathrm{{{sym}}}}}$' if not family_summary_legend else '_nolegend_',
+                        )
 
-        ax_net.plot(x, itemized_net, '--', linewidth=line_main, color=color_itemized_net, label='Net total (itemized)')
-        if compact_net is not None:
-            ax_net.plot(x, compact_net, '-', linewidth=line_main, color=color_compact_net, label='Net total (compact)')
+            family_display = 'total' if family == 'total' else family.title()
+
+            family_itemized_net = family_series.get('total_net_itemized')
+            if itemized_enabled and family_itemized_net is not None and should_plot_component(family_itemized_net, threshold=epsilon):
+                ax_net.plot(
+                    x,
+                    family_itemized_net,
+                    '--' if not family_summary_legend else family_style,
+                    linewidth=line_main,
+                    color=color_itemized_net,
+                    label=f'Net {family_display} (itemized)' if not family_summary_legend else '_nolegend_',
+                )
+
+        _add_compact_legend_proxies(ax_net, include_net=True, include_components=True)
 
         ax_net.set_xlabel(xlabel, fontproperties=font)
         net_label = _apply_norm_vol_suffix(
@@ -2185,7 +3238,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             normalize_by_volume=normalize_by_volume,
             label_mode=label_mode,
         )
-        ax_net.set_ylabel(net_label, fontproperties=font)
+        ax_net.set_ylabel(f'{net_label}{_family_axis_suffix(plot_family_context)}', fontproperties=font)
         if x_scale == 'log':
             ax_net.set_xscale('log')
             ax_net.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
@@ -2200,7 +3253,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
         net_title = f'{title} (Net)'
         if _get_label_mode(plot_params) == 'math':
             net_title = r'Net Contributions $N$'
-        ax_net.set_title(f'{net_title} - {region_label}', y=y_title, fontproperties=font_title)
+        ax_net.set_title(f'{net_title} - {region_label}{_family_axis_suffix(plot_family_context) if not split_family_mode else ""}', y=y_title, fontproperties=font_title)
         ax_net_aux = _overlay_cumulative_magnetic_energy(ax_net, enabled=plot_cumulative_magnetic_energy, use_normalized=normalized)
         legend_outside = _smart_legend(ax_net, fig_net, plot_params=plot_params, font_legend=font_legend)
         if legend_outside:
@@ -2230,18 +3283,71 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             )
             integral_components_plotted.append(label)
 
-        for prefix, label, color, sym in component_map:
-            prod_key = f'int_{prefix}_prod'
-            diss_key = f'int_{prefix}_diss'
-            if prod_key in pd_data and diss_key in pd_data:
-                arr_p = units * np.asarray(pd_data[prod_key], dtype=float)
-                arr_d = units * np.asarray(pd_data[diss_key], dtype=float)
-                net_i = arr_p - arr_d
-                _plot_integral_curve(x, net_i, rf'Integrated {label} $N_{{\mathrm{{{sym}}}}}$', color, linestyle='--', linewidth=line_comp)
+        if split_family_mode and selected_velocity_families != ['total']:
+            total_net_reference = _total_compact_reference_net()
+            if total_net_reference is not None and should_plot_component(total_net_reference, threshold=epsilon):
+                ax_net_integral.plot(
+                    x,
+                    _cumulative_integral_series(x, total_net_reference),
+                    '-',
+                    linewidth=line_main,
+                    color=color_compact_net,
+                    label=r'Integrated Net total (compact) $\int N\,dt$',
+                )
 
-        _plot_integral_curve(x, itemized_net, 'Integrated Net total (itemized)', color_itemized_net, linestyle='--', linewidth=line_main)
-        if compact_net is not None:
-            _plot_integral_curve(x, compact_net, 'Integrated Net total (compact)', color_compact_net, linestyle='-', linewidth=line_main)
+        for family in selected_velocity_families:
+            family_style = _family_plot_style(family) if family_summary_legend else None
+            family_series = family_series_map.get(family, {})
+            family_compact_net = None if family_series.get('total_prod_compact') is None or family_series.get('total_diss_compact') is None else (family_series['total_prod_compact'] - family_series['total_diss_compact'])
+            if family_compact_net is not None:
+                _plot_integral_curve(
+                    x,
+                    family_compact_net,
+                    (r'Integrated Net (compact) $\int N\,dt$'
+                     if family != 'total' else
+                     r'Integrated Net total (compact) $\int N\,dt$'),
+                    _compact_family_color(family),
+                    linestyle='-',
+                    linewidth=line_main,
+                )
+            for prefix, label, color, sym in component_map:
+                if prefix == 'MIE_drag_B2' and family != 'total':
+                    continue
+                if prefix == 'MIE_drag_B2':
+                    arr_p = family_series.get('drag_prod')
+                    arr_d = family_series.get('drag_diss')
+                else:
+                    component_key = {
+                        'MIE_compres_B2': 'compression',
+                        'MIE_stretch_B2': 'stretching',
+                        'MIE_advec_B2': 'advection',
+                        'MIE_diver_B2': 'divergence',
+                    }.get(prefix)
+                    arr_p = family_series.get('components', {}).get(component_key, {}).get('prod')
+                    arr_d = family_series.get('components', {}).get(component_key, {}).get('diss')
+                if arr_p is not None and arr_d is not None:
+                    net_i = arr_p - arr_d
+                    _plot_integral_curve(
+                        x,
+                        net_i,
+                        rf'Integrated {label} $N_{{\mathrm{{{sym}}}}}$' if not family_summary_legend else '_nolegend_',
+                        color,
+                        linestyle='--' if not family_summary_legend else family_style,
+                        linewidth=line_comp,
+                    )
+
+            family_itemized_net = family_series.get('total_net_itemized')
+            if itemized_enabled and family_itemized_net is not None:
+                _plot_integral_curve(
+                    x,
+                    family_itemized_net,
+                    f'Integrated Net {family_display} (itemized)' if not family_summary_legend else '_nolegend_',
+                    color_itemized_net,
+                    linestyle='--' if not family_summary_legend else family_style,
+                    linewidth=line_main,
+                )
+
+        _add_compact_legend_proxies(ax_net_integral, include_net=True, include_components=True, include_integrated_net=True)
 
         ax_net_integral.set_xlabel(xlabel, fontproperties=font)
         net_int_label = _apply_norm_vol_suffix(
@@ -2250,7 +3356,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             normalize_by_volume=normalize_by_volume,
             label_mode=label_mode,
         )
-        ax_net_integral.set_ylabel(net_int_label, fontproperties=font)
+        ax_net_integral.set_ylabel(f'{net_int_label}{_family_axis_suffix(plot_family_context)}', fontproperties=font)
         if x_scale == 'log':
             ax_net_integral.set_xscale('log')
             ax_net_integral.set_xlabel(_axis_label_x(x_axis, x_scale='log', label_mode=label_mode), fontproperties=font)
@@ -2265,7 +3371,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
         net_int_title = f'{title} (Net Integrals)'
         if _get_label_mode(plot_params) == 'math':
             net_int_title = r'Integrated Net Contributions $\int N\,dt$'
-        ax_net_integral.set_title(f'{net_int_title} - {region_label}', y=y_title, fontproperties=font_title)
+        ax_net_integral.set_title(f'{net_int_title} - {region_label}{_family_axis_suffix(plot_family_context) if not split_family_mode else ""}', y=y_title, fontproperties=font_title)
         ax_net_integral_aux = _overlay_cumulative_magnetic_energy(ax_net_integral, enabled=plot_cumulative_magnetic_energy, use_normalized=normalized)
         legend_outside = _smart_legend(ax_net_integral, fig_net_integral, plot_params=plot_params, font_legend=font_legend)
         if legend_outside:
@@ -2279,6 +3385,12 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             folder = os.getcwd()
 
         sim_info = f'{induction_params["up_to_level"]}_{induction_params["F"]}_{induction_params["vir_kind"]}vir_{induction_params["rad_kind"]}rad_{induction_params["region"]}Region'
+        if plot_family_context:
+            family_info = f'_family_{plot_family_context}'
+        elif len(selected_velocity_families) > 1:
+            family_info = '_vf_' + '-'.join(selected_velocity_families)
+        else:
+            family_info = ''
         axis_info = f'{x_axis}_{x_scale}_{y_scale}'
         if cancel_limits:
             limit_info = 'cancel_limits'
@@ -2297,7 +3409,7 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
         base_title = '_'.join(title.split()[:4])
         units_info = f'pd_{"physical" if not normalized else "normalized"}'
         if plot_absolute and len(figures) >= 1:
-            fname_abs = f'{folder}/{run}_{base_title}_prod_diss_abs_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_abs = f'{folder}/{run}_{base_title}{family_info}_prod_diss_abs_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
             fname_abs = safe_filename(fname_abs, verbose=verbose)
             figures[0].savefig(fname_abs, dpi=dpi)
             if verbose:
@@ -2317,21 +3429,21 @@ def plot_production_dissipation_evolution(pd_data, plot_params, induction_params
             net_idx = next_idx
 
         if frac_idx is not None and len(figures) > frac_idx:
-            fname_frac = f'{folder}/{run}_{base_title}_prod_diss_frac_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_frac = f'{folder}/{run}_{base_title}{family_info}_prod_diss_frac_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
             fname_frac = safe_filename(fname_frac, verbose=verbose)
             figures[frac_idx].savefig(fname_frac, dpi=dpi)
             if verbose:
                 print(f'Plotting... Production/Dissipation fractional plot saved as: {fname_frac}')
 
         if net_idx is not None and len(figures) > net_idx:
-            fname_net = f'{folder}/{run}_{base_title}_prod_diss_net_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_net = f'{folder}/{run}_{base_title}{family_info}_prod_diss_net_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
             fname_net = safe_filename(fname_net, verbose=verbose)
             figures[net_idx].savefig(fname_net, dpi=dpi)
             if verbose:
                 print(f'Plotting... Production/Dissipation net plot saved as: {fname_net}')
 
         if fig_net_integral is not None:
-            fname_integral = f'{folder}/{run}_{base_title}_prod_diss_integrals_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
+            fname_integral = f'{folder}/{run}_{base_title}{family_info}_prod_diss_integrals_{units_info}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil", "")}.png'
             fname_integral = safe_filename(fname_integral, verbose=verbose)
             fig_net_integral.savefig(fname_integral, dpi=dpi)
             if verbose:
@@ -2418,12 +3530,51 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
     ylim = plot_params.get('ylim', None)
     rylim = plot_params.get('rylim', None)
     dylim = plot_params.get('dylim', None)
+    aux_tick_labelsize = plot_params.get('aux_tick_labelsize', 11)
+    aux_density_offset = plot_params.get('aux_density_offset', 1.18)
     fixed_legend = bool(plot_params.get('fixed_legend', False))
     figure_size = plot_params.get('figure_size', [12, 8])
     line_widths = plot_params.get('line_widths', [3, 1.5])
     title = plot_params.get('title', 'Magnetic Field Radial Profiles')
     dpi = plot_params.get('dpi', 300)
     run = plot_params.get('run', '_')
+    velocity_family_order = ('total', 'solenoidal', 'compressive')
+    velocity_family_suffix = {
+        'total': '',
+        'solenoidal': '_solenoidal',
+        'compressive': '_compressive',
+    }
+    requested_velocity_families = plot_params.get('velocity_families', None)
+    if requested_velocity_families is None:
+        requested_velocity_families = [
+            family for family in velocity_family_order
+            if induction_params.get('velocity_field', {}).get(family, family == 'total')
+        ]
+    elif isinstance(requested_velocity_families, str):
+        requested_velocity_families = [requested_velocity_families]
+    selected_velocity_families = [
+        family for family in velocity_family_order
+        if family in requested_velocity_families
+    ] or ['total']
+    family_context = plot_params.get('_family_context', None)
+    plot_split = bool(plot_params.get('plot_split', False))
+    if plot_split and len(selected_velocity_families) > 1 and family_context is None:
+        figures = []
+        for family in selected_velocity_families:
+            split_params = plot_params.copy()
+            split_params['velocity_families'] = [family]
+            split_params['plot_split'] = False
+            split_params['_family_context'] = family
+            figures.extend(plot_induction_radial_profiles(
+                profile_data, split_params, induction_params,
+                grid_t, grid_zeta, rad, verbose=verbose,
+                save=save, folder=folder,
+            ))
+        return figures
+    family_styles = plot_params.get(
+        'velocity_family_styles',
+        {'total': '-', 'solenoidal': '--', 'compressive': ':'},
+    )
     y_title = 1.1
 
     # Parameters specific to plot type
@@ -2520,23 +3671,15 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
     r = np.asarray(profile_bin_centers) / float(rad)
     nbins = profile_bin_centers.shape[0]
     
-    t = [grid_t[i] * time_to_yr for i in it_indx]
-    z = np.array([grid_zeta[i] for i in it_indx])
-    if z[-1] < 0:
-        z[-1] = abs(z[-1])
-
-    # Compute plotted arrays with units (each is a list indexed by snapshots)
-    # Robustly coerce scalars/missing values to per-bin arrays to avoid ndimage axis errors.
+    # Coerce missing/scalar/mismatched profiles to aligned radial arrays.
     def series_array(key, scale):
         raw = profile_data.get(key, None)
         out = []
         for i in range(len(it_indx)):
-            value = 0.0
-            if raw is not None:
-                try:
-                    value = raw[i]
-                except Exception:
-                    value = 0.0
+            try:
+                value = raw[i] if raw is not None else 0.0
+            except (IndexError, TypeError, KeyError):
+                value = raw if raw is not None and np.isscalar(raw) else 0.0
 
             arr = np.asarray(value, dtype=float)
             if arr.ndim == 0:
@@ -2552,122 +3695,142 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
                     x_new = np.linspace(0.0, 1.0, nbins)
                     arr = np.interp(x_new, x_old, arr)
 
+            arr[~np.isfinite(arr)] = np.nan
             out.append(scale * arr)
         return out
 
     components_cfg = induction_params.get('components', {})
     plot_kinetic_energy = bool(components_cfg.get('kinetic_energy', True))
 
-    kinetic_energy_profile = series_array('kinetic_energy_profile', units_y_2)
-    clus_b2_profile = series_array('clus_b2_profile', units_y_2)
-    clus_rho_rho_b_profile = series_array('clus_rho_rho_b_profile', units_y_3)
-    diver_profile = series_array('MIE_diver_B2_profile', units_y_1)
-    compres_profile = series_array('MIE_compres_B2_profile', units_y_1)
-    stretch_profile = series_array('MIE_stretch_B2_profile', units_y_1)
-    advec_profile = series_array('MIE_advec_B2_profile', units_y_1)
-    drag_profile = series_array('MIE_drag_B2_profile', units_y_1)
-    total_profile = series_array('MIE_total_B2_profile', units_y_1)
-    ind_b2_profile = series_array('ind_b2_profile', units_y_1)
-    # post_ind_b2_profile = [units_y_1 * safe_get('post_ind_b2_profile')[i] for i in range(len(it_indx))]
+    base_profiles = {
+        'total': 'MIE_total_B2', 'itemized': 'ind_b2',
+        'compression': 'MIE_compres_B2', 'stretching': 'MIE_stretch_B2',
+        'advection': 'MIE_advec_B2', 'divergence': 'MIE_diver_B2',
+        'drag': 'MIE_drag_B2',
+    }
+    family_profiles = {}
+    for family in selected_velocity_families:
+        suffix = velocity_family_suffix[family]
+        family_profiles[family] = {}
+        for name, base_key in base_profiles.items():
+            if name == 'itemized':
+                key = 'ind_b2_profile' if family == 'total' else '__missing_itemized_profile__'
+            elif name == 'drag':
+                key = 'MIE_drag_B2_profile'
+            else:
+                key = f'{base_key}{suffix}_profile'
+            family_profiles[family][name] = series_array(key, units_y_1)
 
-    
-    # Prepare data based on plot type
+    split_family_reference_profiles = None
+    if family_context is not None and family_context != 'total':
+        split_family_reference_profiles = {
+            'total': series_array('MIE_total_B2_profile', units_y_1),
+            'itemized': series_array('ind_b2_profile', units_y_1),
+        }
+
+    reference_profiles = {
+        'kinetic': series_array('kinetic_energy_profile', units_y_2),
+        'magnetic': series_array('clus_b2_profile', units_y_2),
+        'density': series_array('clus_rho_rho_b_profile', units_y_3),
+    }
+    all_profiles = [reference_profiles] + list(family_profiles.values())
     if plot_type == 'smoothed':
-        # Apply Gaussian smoothing (operate per snapshot)
-        clus_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in clus_b2_profile]
-        kinetic_energy_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in kinetic_energy_profile]
-        clus_rho_rho_b_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in clus_rho_rho_b_profile]
-        diver_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in diver_profile]
-        compres_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in compres_profile]
-        stretch_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in stretch_profile]
-        advec_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in advec_profile]
-        drag_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in drag_profile]
-        total_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in total_profile]
-        ind_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in ind_b2_profile]
-        # post_ind_b2_profile = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in post_ind_b2_profile]
-        
+        for profiles in all_profiles:
+            for key in profiles:
+                profiles[key] = [gaussian_filter1d(arr, sigma=smoothing_sigma) for arr in profiles[key]]
         r_pro = r
         plot_suffix = f'smoothed_sigma_{smoothing_sigma}'
-
     elif plot_type == 'interpolated':
-        # Create interpolations per snapshot, produce callables
         r_new = np.linspace(min(r), max(r), num=interpolation_points, endpoint=True)
-        clus_b2_profile = [interp1d(r, clus_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(clus_b2_profile))]
-        kinetic_energy_profile = [interp1d(r, kinetic_energy_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(kinetic_energy_profile))]
-        clus_rho_rho_b_profile = [interp1d(r, clus_rho_rho_b_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(clus_rho_rho_b_profile))]
-        diver_profile = [interp1d(r, diver_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(diver_profile))]
-        compres_profile = [interp1d(r, compres_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(compres_profile))]
-        stretch_profile = [interp1d(r, stretch_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(stretch_profile))]
-        advec_profile = [interp1d(r, advec_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(advec_profile))]
-        drag_profile = [interp1d(r, drag_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(drag_profile))]
-        total_profile = [interp1d(r, total_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(total_profile))]
-        ind_b2_profile = [interp1d(r, ind_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(ind_b2_profile))]
-        # post_ind_b2_profile = [interp1d(r, post_ind_b2_profile[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for i in range(len(post_ind_b2_profile))]
-        
+        for profiles in all_profiles:
+            for key in profiles:
+                profiles[key] = [interp1d(r, arr, kind=interpolation_kind, bounds_error=False, fill_value=np.nan) for arr in profiles[key]]
         r_pro = r_new
         plot_suffix = f'{interpolation_kind}_interpolated_{interpolation_points}_points'
-
-    else:  # raw
+    else:
         r_pro = r
         plot_suffix = 'raw'
 
     figures = []
-    
-    # Components configuration: (data_list, label, color, lw, linestyle, axis_type, alpha)
-    components_configs = [
-        # Induction main axis
-        (total_profile, '...from Compact Induction', palette.get('induction_compact', DEFAULT_PLOT_PALETTE['induction_compact']), line1, '-', AXIS_MAIN, 1.0),
-        (ind_b2_profile, '...from Itemized Induction', palette.get('induction_itemized', DEFAULT_PLOT_PALETTE['induction_itemized']), line1, '--', AXIS_MAIN, 1.0),
-        # (post_ind_b2_profile, '...from Post-Itemize Induction', "#ffbb78", line1, '-.', AXIS_MAIN),
-        # Individual components (main axis)
-        (compres_profile, r'Compression $\Gamma_{\mathrm{comp}}$', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), line2, '--', AXIS_MAIN, component_alpha),
-        (stretch_profile, r'Stretching $\Gamma_{\mathrm{str}}$', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), line2, '--', AXIS_MAIN, component_alpha),
-        (advec_profile, r'Advection $\Gamma_{\mathrm{adv}}$', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), line2, '--', AXIS_MAIN, component_alpha),
-        (diver_profile, r'Divergence $\Gamma_{\mathrm{div}}$', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), line2, '--', AXIS_MAIN, component_alpha),
-        (drag_profile, r'Cosmic Drag $\Gamma_{\mathrm{drag}}$', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), line2, '--', AXIS_MAIN, component_alpha)
+    components_configs = []
+    mechanism_specs = [
+        ('compression', r'Compression $\Gamma_{\mathrm{comp}}$', 'compression', line2, component_alpha),
+        ('stretching', r'Stretching $\Gamma_{\mathrm{str}}$', 'stretching', line2, component_alpha),
+        ('advection', r'Advection $\Gamma_{\mathrm{adv}}$', 'advection', line2, component_alpha),
+        ('divergence', r'Divergence $\Gamma_{\mathrm{div}}$', 'divergence', line2, component_alpha),
+        ('drag', r'Cosmic Drag $\Gamma_{\mathrm{drag}}$', 'drag', line2, component_alpha),
     ]
+    family_overlay = len(selected_velocity_families) > 1 and family_context is None
+    energy_label_prefix = 'Magnetic Energy '
+    family_compact_color = palette.get('induction_compact', DEFAULT_PLOT_PALETTE['induction_compact'])
+    if family_context is not None and family_context != 'total':
+        family_compact_rgb = np.asarray(to_rgb(family_compact_color), dtype=float)
+        family_compact_color = tuple(np.clip(0.65 * family_compact_rgb + 0.35, 0.0, 1.0))
+    for family in selected_velocity_families:
+        style = family_styles.get(family, '-')
+        family_label = ''
+        profiles = family_profiles[family]
+        compact_style = '-' if len(selected_velocity_families) == 1 and family == 'total' else style
+        itemized_style = '--' if len(selected_velocity_families) == 1 and family == 'total' else style
+        mechanism_style = '--' if family_context is not None or (len(selected_velocity_families) == 1 and family == 'total') else style
+        components_configs.extend([
+            (profiles['total'], f'{energy_label_prefix}from Compact Induction{family_label}' if family_context is None or family_context == 'total' else f'...from Compact Induction{family_label}', family_compact_color if family_context is not None else palette.get('induction_compact', DEFAULT_PLOT_PALETTE['induction_compact']), line1, '-' if family_context is not None else compact_style, AXIS_MAIN, 1.0),
+            (profiles['itemized'], f'...from Itemized Induction{family_label}', palette.get('induction_itemized', DEFAULT_PLOT_PALETTE['induction_itemized']), line1, '--' if family_context is not None else itemized_style, AXIS_MAIN, 1.0),
+        ])
+        if split_family_reference_profiles is not None:
+            components_configs.insert(
+                0,
+                (split_family_reference_profiles['total'], 'Magnetic Energy from Compact Induction (total)', palette.get('induction_compact', DEFAULT_PLOT_PALETTE['induction_compact']), line1, '-', AXIS_MAIN, 1.0),
+            )
+        for key, label, color_key, linewidth, alpha_curve in mechanism_specs:
+            if family != 'total' and key == 'drag':
+                continue
+            if not components_cfg.get(key, True):
+                continue
+            components_configs.append((
+                profiles[key], f'{label}{family_label}',
+                component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key]),
+                linewidth, mechanism_style, AXIS_MAIN, alpha_curve,
+            ))
 
-    if plot_kinetic_energy:
-        components_configs.insert(
-            0,
-            (kinetic_energy_profile, 'Kinetic Energy Density', palette.get('kinetic_energy', DEFAULT_PLOT_PALETTE['kinetic_energy']), line1, '-', AXIS_ENERGY, 1.0)
-        )
-
-    if plot_magnetic_energy:
-        components_configs.insert(
-            0,
-            (clus_b2_profile, 'Magnetic Energy Density', palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy']), line1, '-', AXIS_ENERGY, 1.0)
-        )
-
-    if plot_density:
-        components_configs.insert(
-            0,
-            (clus_rho_rho_b_profile, 'Density', palette.get('density', DEFAULT_PLOT_PALETTE['density']), line1, '-', AXIS_DENSITY, 1.0)
-        )
+    # These fields are not decomposed upstream. Plot them once, with total-family
+    # styling in overlay/total plots, and as references in split family plots.
+    if (
+        'total' in selected_velocity_families
+        or family_context is not None
+        or plot_magnetic_energy
+        or plot_density
+        or plot_kinetic_energy
+    ):
+        reference_style = family_styles.get('total', '-')
+        if plot_kinetic_energy:
+            components_configs.insert(0, (reference_profiles['kinetic'], 'Kinetic Energy Density', palette.get('kinetic_energy', DEFAULT_PLOT_PALETTE['kinetic_energy']), line1, reference_style, AXIS_ENERGY, 1.0))
+        if plot_magnetic_energy:
+            components_configs.insert(0, (reference_profiles['magnetic'], 'Magnetic Energy Density', palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy']), line1, reference_style, AXIS_ENERGY, 1.0))
+        if plot_density:
+            components_configs.insert(0, (reference_profiles['density'], 'Density', palette.get('density', DEFAULT_PLOT_PALETTE['density']), line1, reference_style, AXIS_DENSITY, 1.0))
 
     # Decide which components have data (per snapshot we check existence)
     def has_nonzero(arr_or_callable, snap_idx, threshold=induction_params.get('epsilon', 1e-30)):
-        # If callable (interp), assume has values (could be NaN outside range)
         if callable(arr_or_callable):
             try:
                 y = arr_or_callable(r_pro)
-                return np.any(~np.isnan(y)) and np.any(np.abs(y) > threshold)
+                return np.any(np.isfinite(y)) and np.any(np.abs(y[np.isfinite(y)]) > threshold)
             except Exception:
                 return False
-        # If list-like of arrays
         try:
             a = arr_or_callable[snap_idx]
-            return np.any(np.abs(np.asarray(a)) > threshold)
+            a = np.asarray(a, dtype=float)
+            finite = np.isfinite(a)
+            return np.any(finite) and np.any(np.abs(a[finite]) > threshold)
         except Exception:
             return False
         
-    # Helper to plot signed data: single continuous line with per-segment styling
+    # Helper to plot signed data: family line style for positive values and markers for negatives.
     def plot_signed(ax, x, y, lw, ls, color, label, alpha=1.0, eps=induction_params.get('epsilon', 1e-30)):
         """
-        Plot a single continuous line where:
-            - positive intervals use linestyle `ls`
-            - negative intervals use linestyle ':'
-        No gaps between positive and negative segments.
+        Plot a single continuous line where positive intervals use `ls` and
+        negative samples are marked with dots.
         Returns a single Line2D handle for legend.
         """
         from matplotlib.collections import LineCollection
@@ -2685,9 +3848,9 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
         yv = y[valid]
         yabs = np.maximum(np.abs(yv), eps)  # clamp to avoid log issues
 
-        # Build segments with sign-dependent linestyle
+        # Build positive segments; negative values are represented by markers.
         segments = []
-        sign_styles = []  # True = positive (ls), False = negative (':')
+        sign_styles = []
         
         for i in range(len(xv) - 1):
             seg = np.array([[xv[i], yabs[i]], [xv[i+1], yabs[i+1]]])
@@ -2702,18 +3865,20 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
         ax.plot(xv, yabs, linestyle='-', linewidth=max(lw * 0.5, 0.3), 
             color=color, alpha=0.2 * alpha, label='_nolegend_')
 
-        # Overlay segments with sign-dependent dashes
+        # Overlay only positive segments with the family's line style.
         lc_pos = LineCollection(
             [seg for seg, is_pos in zip(segments, sign_styles) if is_pos],
             linewidths=lw, colors=color, linestyles=ls, label='_nolegend_', alpha=alpha
         )
-        lc_neg = LineCollection(
-            [seg for seg, is_pos in zip(segments, sign_styles) if not is_pos],
-            linewidths=lw, colors=color, linestyles=':', label='_nolegend_', alpha=alpha
-        )
-        
         ax.add_collection(lc_pos)
-        ax.add_collection(lc_neg)
+
+        negative = yv < 0
+        if np.any(negative):
+            ax.plot(
+                xv[negative], yabs[negative],
+                linestyle='None', marker='.', markersize=max(3.0, lw * 1.8),
+                color=color, alpha=alpha, label='_nolegend_',
+            )
 
         # Return a dummy handle for legend entry
         h_legend, = ax.plot([], [], linestyle=ls, linewidth=lw, color=color, alpha=alpha, label=label)
@@ -2747,13 +3912,14 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
         if plot_density:
             ax_density = ax1.twinx()
             if ax_energy is not None:
-                ax_density.spines["right"].set_position(("axes", 1.12))
+                ax_density.spines["right"].set_position(("axes", aux_density_offset))
             ax_density.set_frame_on(True)
             ax_density.patch.set_visible(False)
             for sp in ax_density.spines.values():
                 sp.set_visible(True)
 
-        snap_z = np.abs(np.round(grid_zeta[it_indx[snap_i]], 2))
+        snap_index = it_indx[snap_i]
+        snap_z = np.abs(np.round(grid_zeta[snap_index], 2))
         z_text = f"{snap_z:6.2f}"
         ax1.set_title(f'{title} - z = {z_text}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
 
@@ -2762,11 +3928,7 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
         y_main_vals = []
         y_energy_vals = []
         y_density_vals = []
-
-        from matplotlib.lines import Line2D
-        neg_note = Line2D([0], [0], color=color_negative_interval, linestyle=':', linewidth=line2, label='Negative Interval')
-        unique_handles.append(neg_note)
-        unique_labels.append('Negative Interval')
+        negative_interval_found = False
 
         for (data_list, label, color, lw, ls, axis_type, alpha_curve) in components_configs:
             if not has_nonzero(data_list, snap_i):
@@ -2778,6 +3940,7 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
                 y = np.asarray(data_list[snap_i])
                 if plot_type == 'interpolated' and y.size == r.size and r_pro.size != r.size:
                     y = np.interp(r_pro, r, y)
+            negative_interval_found |= bool(np.any(np.asarray(y)[np.isfinite(y)] < 0))
 
             if axis_type == AXIS_ENERGY:
                 if ax_energy is None:
@@ -2807,7 +3970,7 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
         if x_scale == 'log':
             ax1.set_xscale('log')
             if label_mode == 'math':
-                ax1.set_xlabel(r'$\log_{10}igl(r/R_{\mathrm{Vir}}\bigr)$', fontproperties=font)
+                ax1.set_xlabel(r'$\log_{10}\!\left(r/R_{\mathrm{Vir}}\right)$', fontproperties=font)
             else:
                 ax1.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
         else:
@@ -2887,17 +4050,59 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
             if ax_density is not None:
                 ax_density.set_ylabel('Density (arb. units)', fontproperties=font)
 
+        # Keep auxiliary axes consistent with the P/D radial-profile plots.
+        if ax_energy is not None:
+            if label_mode == 'math':
+                if units == energy_to_erg:
+                    energy_label = r'$\rho_{B}\ (\mathrm{erg}\,\mathrm{Mpc}^{-3})$'
+                elif units == energy_to_J:
+                    energy_label = r'$\rho_{B}\ (\mathrm{J}\,\mathrm{Mpc}^{-3})$'
+                else:
+                    energy_label = r'$\rho_{B}\ (\mathrm{arb.\ units})$'
+            else:
+                energy_label = ('Magnetic Energy Density (erg/$Mpc^{3}$)' if units == energy_to_erg
+                                else 'Magnetic Energy Density (J/$Mpc^{3}$)' if units == energy_to_J
+                                else 'Magnetic Energy Density (arb. units)')
+            ax_energy.set_ylabel(energy_label, fontproperties=font, color=palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy']))
+            ax_energy.tick_params(axis='y', colors=palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy']))
+        if ax_density is not None:
+            if label_mode == 'math':
+                if units == energy_to_erg:
+                    density_label = r'$\rho\ (\mathrm{g}\,\mathrm{cm}^{-3})$'
+                elif units == energy_to_J:
+                    density_label = r'$\rho\ (M_{\odot}\,\mathrm{Mpc}^{-3})$'
+                else:
+                    density_label = r'$\rho\ (\mathrm{arb.\ units})$'
+            else:
+                density_label = ('Density (g/cm$^{3}$)' if units == energy_to_erg
+                                 else 'Density (M$_{\odot}$/Mpc$^{3}$)' if units == energy_to_J
+                                 else 'Density (arb. units)')
+            ax_density.set_ylabel(density_label, fontproperties=font, color=palette.get('density', DEFAULT_PLOT_PALETTE['density']))
+            ax_density.tick_params(axis='y', colors=palette.get('density', DEFAULT_PLOT_PALETTE['density']))
+
+        if family_context is not None and family_context != 'total':
+            ax1.set_ylabel(f'{ax1.get_ylabel()} - {family_context.title()} Velocity Field', fontproperties=font)
+
         ax1.grid(alpha=0.3)
         if ax_energy is not None:
             ax_energy.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+            ax_energy.tick_params(axis='y', labelsize=aux_tick_labelsize)
         if ax_density is not None:
             ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+            ax_density.tick_params(axis='y', labelsize=aux_tick_labelsize)
 
         h1, l1 = ax1.get_legend_handles_labels()
         h2, l2 = ax_energy.get_legend_handles_labels() if ax_energy is not None else ([], [])
         h3, l3 = ax_density.get_legend_handles_labels() if ax_density is not None else ([], [])
         all_handles = h1 + h2 + h3
         all_labels = l1 + l2 + l3
+        from matplotlib.lines import Line2D
+        if negative_interval_found:
+            all_handles.insert(0, Line2D(
+                [0], [0], color=color_negative_interval, linestyle='None',
+                marker='.', markersize=max(4.0, line2 * 1.8),
+                label='Negative Interval'))
+            all_labels.insert(0, 'Negative Interval')
         seen = set()
         for hh, ll in zip(all_handles, all_labels):
             if ll and not ll.startswith('_') and ll not in seen:
@@ -2906,10 +4111,23 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
                 unique_labels.append(ll)
 
         if unique_handles:
+            if family_overlay:
+                family_handles = [
+                    Line2D([0], [0], color='0.25', linestyle=family_styles.get(family, '-'),
+                           linewidth=line1, label=f'Velocity family: {family}')
+                    for family in selected_velocity_families
+                ]
+                # Keep family identity in the legend without repeating it on every curve.
+                unique_handles = family_handles + unique_handles
+                unique_labels = [handle.get_label() for handle in family_handles] + unique_labels
             if fixed_legend:
                 ax1.legend(unique_handles, unique_labels, prop=font_legend,
                            loc='lower left', bbox_to_anchor=(0.02, 0.02),
                            bbox_transform=ax1.transAxes, ncol=2, frameon=True)
+                legend_outside = False
+            elif family_overlay:
+                ax1.legend(unique_handles, unique_labels, prop=font_legend,
+                           ncol=2, frameon=True)
                 legend_outside = False
             else:
                 # place axis legend first and let _smart_legend decide if it must move below
@@ -2964,13 +4182,13 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
             folder = os.getcwd()
 
         sim_info = f'{induction_params.get("up_to_level","")}_{factor_F}_{induction_params.get("vir_kind","")}vir_{induction_params.get("rad_kind","")}rad_{region}Region'
+        family_info = f'_family_{family_context}' if family_context is not None else ''
         axis_info = f'{x_scale}_{y_scale}'
         limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
-
         diff_cfg = induction_params.get('differentiation', {})
         if diff_cfg.get('buffer', False) == True:
             parent_flag = diff_cfg.get('parent', False)
-            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol',''))
+            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol', ''))
             buffer_info = f'Buffered_{diff_cfg.get("interpol","")}_siblings_{diff_cfg.get("use_siblings","")}'
             if parent_flag:
                 buffer_info += f'_parent_{parent_interpol}'
@@ -2980,7 +4198,7 @@ def plot_induction_radial_profiles(profile_data, plot_params, induction_params,
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         for i, fig in enumerate(figures):
             file_title = '_'.join(title.split()[:3])
-            file_name = f'{folder}/{run}_{file_title}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
+            file_name = f'{folder}/{run}_{file_title}{family_info}_induction_profile_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
             file_name = safe_filename(file_name, verbose=verbose)
             fig.savefig(file_name, dpi=dpi)
             if verbose:
@@ -3016,51 +4234,91 @@ def plot_production_dissipation_radial_profiles(profile_data, plot_params, induc
     assert plot_params.get('y_scale', 'log') in ['lin', 'log'], "y_scale must be 'lin' or 'log'"
     plot_type = plot_params.get('plot_type', 'raw')
     assert plot_type in ['raw', 'smoothed', 'interpolated'], "plot_type must be 'raw', 'smoothed', or 'interpolated'"
-    assert plot_params.get('interpolation_kind', 'linear') in ['linear', 'cubic', 'nearest'], "interpolation_kind must be 'linear', 'cubic', or 'nearest'"
-    assert plot_params.get('smoothing_sigma', 1.10) > 0, "smoothing_sigma must be a positive number"
-    assert plot_params.get('it_indx', None) is not None, "it_indx must be provided in plot_params"
-    assert len(plot_params['it_indx']) > 0, "it_indx must contain at least one index"
+    interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
+    assert interpolation_kind in ['linear', 'cubic', 'nearest'], "interpolation_kind must be 'linear', 'cubic', or 'nearest'"
+    it_indx = list(plot_params.get('it_indx', []))
+    if not it_indx:
+        raise ValueError('it_indx must be provided and contain at least one index')
 
-    it_indx = plot_params['it_indx']
     x_scale = plot_params.get('x_scale', 'lin')
     y_scale = plot_params.get('y_scale', 'log')
-    xlim = plot_params.get('xlim', None)
-    ylim = plot_params.get('ylim', None)
+    xlim = plot_params.get('xlim')
+    ylim = plot_params.get('ylim')
+    rylim = plot_params.get('rylim')
+    dylim = plot_params.get('dylim')
+    aux_tick_labelsize = plot_params.get('aux_tick_labelsize', 11)
+    aux_density_offset = plot_params.get('aux_density_offset', 1.18)
     fixed_legend = bool(plot_params.get('fixed_legend', False))
     figure_size = plot_params.get('figure_size', [12, 8])
     line_widths = plot_params.get('line_widths', [3, 1.5])
+    line_main = line_widths[0]
+    line_comp = line_widths[1] if len(line_widths) > 1 else line_main
     title = plot_params.get('title', 'Production and Dissipation Radial Profile')
     dpi = plot_params.get('dpi', 300)
     run = plot_params.get('run', '_')
+    threshold = float(plot_params.get('component_threshold', induction_params.get('differentiation', {}).get('epsilon', 1e-30)))
+    smoothing_sigma = float(plot_params.get('smoothing_sigma', 1.10))
+    interpolation_points = int(plot_params.get('interpolation_points', 500))
+    plot_absolute = bool(plot_params.get('plot_absolute', True))
+    plot_net = bool(plot_params.get('plot_net', False))
+    plot_reconstructed_net = bool(plot_params.get('plot_reconstructed_net', False))
+    plot_composed = bool(plot_params.get('plot_composed', False))
+    production_dissipation_cfg = induction_params.get('production_dissipation', {})
+    plot_profiles = bool(production_dissipation_cfg.get('plot_profiles', False))
+    plot_fractional = bool(production_dissipation_cfg.get('plot_fractional_profiles', False))
+    if not plot_profiles:
+        if verbose:
+            print('Production/dissipation radial profiles disabled by production_dissipation.plot_profiles')
+        return []
+    plot_density = bool(plot_params.get('plot_density', False))
+    plot_magnetic_energy = bool(plot_params.get('plot_magnetic_energy', False))
+    label_mode = _get_label_mode(plot_params)
 
-    if plot_type == 'smoothed':
-        smoothing_sigma = plot_params.get('smoothing_sigma', 1.10)
-    elif plot_type == 'interpolated':
-        interpolation_points = plot_params.get('interpolation_points', 500)
-        interpolation_kind = plot_params.get('interpolation_kind', 'cubic')
+    family_order = ('total', 'solenoidal', 'compressive')
+    family_suffix = {'total': '', 'solenoidal': '_solenoidal', 'compressive': '_compressive'}
+    requested = plot_params.get('velocity_families')
+    if requested is None:
+        requested = [f for f in family_order if induction_params.get('velocity_field', {}).get(f, f == 'total')]
+    if isinstance(requested, str):
+        requested = [requested]
+    families = [f for f in family_order if f in requested] or ['total']
+    plot_split = bool(plot_params.get('plot_split', False))
+    family_context = plot_params.get('_family_context')
+    if plot_split and len(families) > 1 and family_context is None:
+        figures = []
+        for family in families:
+            params = plot_params.copy()
+            params['velocity_families'] = [family]
+            params['plot_split'] = False
+            params['_family_context'] = family
+            figures.extend(plot_production_dissipation_radial_profiles(
+                profile_data, params, induction_params, grid_t, grid_zeta, rad,
+                verbose=verbose, save=save, folder=folder))
+        return figures
 
-    profile_bin_centers = profile_data.get('profile_bin_centers', None)
+    profile_bin_centers = profile_data.get('profile_bin_centers')
     if profile_bin_centers is None:
-        raise KeyError("profile_bin_centers not found in profile_data")
-    if isinstance(profile_bin_centers, (list, tuple, np.ndarray)) and len(profile_bin_centers) > 0 and not isinstance(profile_bin_centers, np.ndarray):
-        pb = None
-        for p in profile_bin_centers:
-            if p is None:
-                continue
-            p_arr = np.asarray(p)
-            if p_arr.size > 0:
-                pb = p_arr
-                break
-        if pb is None:
-            raise ValueError("profile_bin_centers list contains only empty entries")
-        profile_bin_centers = pb
+        raise KeyError('profile_bin_centers not found in profile_data')
+    if isinstance(profile_bin_centers, (list, tuple)):
+        profile_bin_centers = next((np.asarray(p, dtype=float).ravel() for p in profile_bin_centers
+                                    if p is not None and np.asarray(p).size), None)
     else:
-        profile_bin_centers = np.asarray(profile_bin_centers)
-    profile_bin_centers = profile_bin_centers.flatten()
+        profile_bin_centers = np.asarray(profile_bin_centers, dtype=float).ravel()
+    if profile_bin_centers is None or profile_bin_centers.size == 0:
+        raise ValueError('profile_bin_centers contains no usable bins')
+    nbins = profile_bin_centers.size
+    r = profile_bin_centers / float(rad)
 
-    factor_F = induction_params.get('F', 1.0)
-    region = induction_params.get('region', None)
-    units = plot_params.get('units', induction_params.get('units', None))
+    units = plot_params.get('units', induction_params.get('units'))
+    if units == energy_to_erg:
+        units_y, units_energy, units_density = (energy_to_erg / length_to_mpc**3 / time_to_s,
+                                                 energy_to_erg / length_to_mpc**3, density_to_cgs)
+    elif units == energy_to_J:
+        units_y, units_energy, units_density = (energy_to_J / length_to_mpc**3 / time_to_s,
+                                                 energy_to_J / length_to_mpc**3, density_to_sunMpc3)
+    else:
+        units_y = units_energy = units_density = 1.0
+
     palette = get_plot_palette(plot_params, induction_params)
     component_colors = palette.get('component_colors', {})
     color_prod = palette.get('production', DEFAULT_PLOT_PALETTE['production'])
@@ -3068,467 +4326,717 @@ def plot_production_dissipation_radial_profiles(profile_data, plot_params, induc
     color_itemized_net = palette.get('net_itemized', DEFAULT_PLOT_PALETTE['net_itemized'])
     color_compact_net = palette.get('net_compact', DEFAULT_PLOT_PALETTE['net_compact'])
     color_efficiency = palette.get('efficiency', DEFAULT_PLOT_PALETTE['efficiency'])
-    color_measured_energy = palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
+    color_measured = palette.get('measured_energy', DEFAULT_PLOT_PALETTE['measured_energy'])
     color_density = palette.get('density', DEFAULT_PLOT_PALETTE['density'])
-    plot_density = bool(plot_params.get('plot_density', False))
-    plot_magnetic_energy = bool(plot_params.get('plot_magnetic_energy', False))
+    components_cfg = induction_params.get('components', {})
+    family_styles = plot_params.get('velocity_family_styles', {'total': '-', 'solenoidal': '--', 'compressive': ':'})
 
-    if units is None:
-        units_y = 1.0
-        units_energy = 1.0
-        units_density = 1.0
-    elif units == energy_to_erg:
-        units_y = (energy_to_erg / (length_to_mpc) ** 3) / time_to_s
-        units_energy = energy_to_erg / (length_to_mpc) ** 3
-        units_density = density_to_cgs
-    elif units == energy_to_J:
-        units_y = (energy_to_J / (length_to_mpc) ** 3) / time_to_s
-        units_energy = energy_to_J / (length_to_mpc) ** 3
-        units_density = density_to_sunMpc3
-    else:
-        units_y = 1.0
-        units_energy = 1.0
-        units_density = 1.0
+    def _family_efficiency_color(family):
+        if family == 'total':
+            return color_efficiency
+        rgb = np.asarray(to_rgb(color_efficiency), dtype=float)
+        return tuple(np.clip(0.65 * rgb + 0.35, 0.0, 1.0))
 
-    plt.rcParams.update({
-        'font.size': 16,
-        'axes.labelsize': 16,
-        'axes.titlesize': 18,
-        'xtick.labelsize': 14,
-        'ytick.labelsize': 14,
-        'legend.fontsize': 10,
-        'figure.titlesize': 20
-    })
-
-    font = FontProperties()
-    font.set_style('normal')
-    font.set_weight('normal')
-    font.set_size(12)
-
-    font_title = FontProperties()
-    font_title.set_style('normal')
-    font_title.set_weight('bold')
-    font_title.set_size(17)
-
-    font_legend = FontProperties()
-    font_legend.set_style('normal')
-    font_legend.set_weight('normal')
-    font_legend.set_size(12)
-
-    line_main, line_comp = line_widths
-    component_alpha = float(np.clip(plot_params.get('component_alpha', 0.75), 0.05, 1.0))
-    area_alpha = float(np.clip(plot_params.get('area_alpha', 0.24), 0.0, 1.0))
-    y_title = 1.05
-
-    r = np.asarray(profile_bin_centers) / float(rad)
-    nbins = profile_bin_centers.shape[0]
-
-    def safe_get(key):
-        return profile_data.get(key, [np.zeros(nbins) for _ in range(len(it_indx))])
+    def _family_compact_color(family):
+        if family == 'total':
+            return color_compact_net
+        rgb = np.asarray(to_rgb(color_compact_net), dtype=float)
+        return tuple(np.clip(0.65 * rgb + 0.35, 0.0, 1.0))
 
     component_map = [
-        ('MIE_compres_B2', 'Compression', component_colors.get('compression', DEFAULT_PLOT_PALETTE['component_colors']['compression']), 'comp'),
-        ('MIE_stretch_B2', 'Stretching', component_colors.get('stretching', DEFAULT_PLOT_PALETTE['component_colors']['stretching']), 'str'),
-        ('MIE_advec_B2', 'Advection', component_colors.get('advection', DEFAULT_PLOT_PALETTE['component_colors']['advection']), 'adv'),
-        ('MIE_diver_B2', 'Divergence', component_colors.get('divergence', DEFAULT_PLOT_PALETTE['component_colors']['divergence']), 'div'),
-        ('MIE_drag_B2', 'Cosmic Drag', component_colors.get('drag', DEFAULT_PLOT_PALETTE['component_colors']['drag']), 'drag')
+        ('MIE_compres_B2', 'Compression', 'compression', 'comp'),
+        ('MIE_stretch_B2', 'Stretching', 'stretching', 'str'),
+        ('MIE_advec_B2', 'Advection', 'advection', 'adv'),
+        ('MIE_diver_B2', 'Divergence', 'divergence', 'div'),
+        ('MIE_drag_B2', 'Cosmic Drag', 'drag', 'drag'),
     ]
+    def _raw_snapshot(raw, local_i, global_i):
+        if raw is None:
+            return None
+        if np.isscalar(raw):
+            return raw
+        if isinstance(raw, np.ndarray) and raw.ndim == 1 and raw.size == nbins:
+            return raw
+        try:
+            n = len(raw)
+        except TypeError:
+            return raw
+        if n == 0:
+            return None
+        source_i = global_i if global_i < n else local_i
+        return raw[source_i] if source_i < n else None
 
-    def _series(key):
-        return [units_y * np.asarray(safe_get(key)[i], dtype=float) for i in range(len(it_indx))]
+    def _align(value, keep_zero=False):
+        if value is None:
+            return None
+        arr = np.asarray(value, dtype=float).ravel()
+        if arr.size == 0:
+            return None
+        if arr.size == 1:
+            arr = np.full(nbins, float(arr[0]))
+        elif arr.size != nbins:
+            arr = np.interp(np.linspace(0, 1, nbins), np.linspace(0, 1, arr.size), arr)
+        arr[~np.isfinite(arr)] = np.nan
+        if not np.any(np.isfinite(arr)):
+            return None
+        if not keep_zero and not np.any(np.abs(arr[np.isfinite(arr)]) > threshold):
+            return None
+        return arr
 
-    itemized_prod = _series('MIE_total_B2_prod_itemized_profile')
-    itemized_diss = _series('MIE_total_B2_diss_itemized_profile')
-    itemized_net = _series('MIE_total_B2_net_itemized_profile')
-    compact_prod = _series('MIE_total_B2_prod_compact_profile')
-    compact_diss = _series('MIE_total_B2_diss_compact_profile')
-    compact_net = _series('MIE_total_B2_net_compact_profile')
-    clus_b2_profile = [units_energy * np.asarray(safe_get('clus_b2_profile')[i], dtype=float) for i in range(len(it_indx))]
-    clus_rho_rho_b_profile = [units_density * np.asarray(safe_get('clus_rho_rho_b_profile')[i], dtype=float) for i in range(len(it_indx))]
+    def _series(key, scale=units_y, keep_zero=False):
+        raw = profile_data.get(key)
+        result = []
+        for local_i, global_i in enumerate(it_indx):
+            value = _raw_snapshot(raw, local_i, global_i)
+            arr = _align(value, keep_zero=keep_zero)
+            result.append(None if arr is None else scale * arr)
+        return result
 
-    component_prod = {prefix: _series(f'{prefix}_prod_profile') for prefix, _, _, _ in component_map}
-    component_diss = {prefix: _series(f'{prefix}_diss_profile') for prefix, _, _, _ in component_map}
-    component_net = {prefix: _series(f'{prefix}_net_profile') for prefix, _, _, _ in component_map}
-    component_frac_prod = {prefix: _series(f'PD_frac_{prefix}_prod_profile') for prefix, _, _, _ in component_map}
-    component_frac_diss = {prefix: _series(f'PD_frac_{prefix}_diss_profile') for prefix, _, _, _ in component_map}
+    def _family_key(base, family, metric):
+        return f'{base}{family_suffix[family]}_{metric}_profile'
+
+    def _family_series(base, family, metric, keep_zero=False):
+        return _series(_family_key(base, family, metric), keep_zero=keep_zero)
+
+    profile_sets = {}
+    for family in families:
+        profile_sets[family] = {
+            'total_prod': _series('MIE_total_B2_prod_itemized_profile') if family == 'total' else [None] * len(it_indx),
+            'total_diss': _series('MIE_total_B2_diss_itemized_profile') if family == 'total' else [None] * len(it_indx),
+            'total_net': _series('MIE_total_B2_net_itemized_profile') if family == 'total' else [None] * len(it_indx),
+            'compact_prod': _series('MIE_total_B2_prod_compact_profile') if family == 'total' else _family_series('MIE_total_B2', family, 'prod'),
+            'compact_diss': _series('MIE_total_B2_diss_compact_profile') if family == 'total' else _family_series('MIE_total_B2', family, 'diss'),
+            'compact_net': _series('MIE_total_B2_net_compact_profile') if family == 'total' else _family_series('MIE_total_B2', family, 'net'),
+            'reconstructed_prod': _series('MIE_total_B2_prod_itemized_reconstructed_profile') if family == 'total' else [None] * len(it_indx),
+            'reconstructed_diss': _series('MIE_total_B2_diss_itemized_reconstructed_profile') if family == 'total' else [None] * len(it_indx),
+            'reconstructed_net': _series('MIE_total_B2_net_itemized_reconstructed_profile') if family == 'total' else [None] * len(it_indx),
+            'reconstructed_compact_prod': _series('MIE_total_B2_prod_compact_reconstructed_profile') if family == 'total' else [None] * len(it_indx),
+            'reconstructed_compact_diss': _series('MIE_total_B2_diss_compact_reconstructed_profile') if family == 'total' else [None] * len(it_indx),
+            'reconstructed_compact_net': _series('MIE_total_B2_net_compact_reconstructed_profile') if family == 'total' else [None] * len(it_indx),
+            'components': {},
+            'fractional': {},
+        }
+        for base, _, _, _ in component_map:
+            if base == 'MIE_drag_B2':
+                use_family = 'total'
+            else:
+                use_family = family
+            profile_sets[family]['components'][base] = {
+                'prod': _family_series(base, use_family, 'prod', keep_zero=True),
+                'diss': _family_series(base, use_family, 'diss', keep_zero=True),
+                'net': _family_series(base, use_family, 'net'),
+            }
+            profile_sets[family]['fractional'][base] = {
+                'prod': _series(f'PD_frac_{base}{family_suffix[use_family]}_prod_profile', scale=1.0),
+                'diss': _series(f'PD_frac_{base}{family_suffix[use_family]}_diss_profile', scale=1.0),
+            }
+
+    references = {
+        'magnetic': _series('clus_b2_profile', scale=units_energy),
+        'density': _series('clus_rho_rho_b_profile', scale=units_density),
+    }
+    split_total_reference = None
+    if family_context is not None and family_context != 'total':
+        split_total_reference = {
+            'compact_prod': _series('MIE_total_B2_prod_compact_profile'),
+            'compact_diss': _series('MIE_total_B2_diss_compact_profile'),
+            'compact_net': _series('MIE_total_B2_net_compact_profile'),
+        }
 
     if plot_type == 'smoothed':
-        smooth = lambda arrs: [gaussian_filter1d(a, sigma=smoothing_sigma) for a in arrs]
-        itemized_prod = smooth(itemized_prod)
-        itemized_diss = smooth(itemized_diss)
-        itemized_net = smooth(itemized_net)
-        compact_prod = smooth(compact_prod)
-        compact_diss = smooth(compact_diss)
-        compact_net = smooth(compact_net)
-        clus_b2_profile = smooth(clus_b2_profile)
-        clus_rho_rho_b_profile = smooth(clus_rho_rho_b_profile)
-        for prefix in component_prod:
-            component_prod[prefix] = smooth(component_prod[prefix])
-            component_diss[prefix] = smooth(component_diss[prefix])
-            component_net[prefix] = smooth(component_net[prefix])
-            component_frac_prod[prefix] = smooth(component_frac_prod[prefix])
-            component_frac_diss[prefix] = smooth(component_frac_diss[prefix])
+        if smoothing_sigma <= 0:
+            raise ValueError('smoothing_sigma must be positive')
         r_plot = r
         plot_suffix = f'smoothed_sigma_{smoothing_sigma}'
     elif plot_type == 'interpolated':
-        r_new = np.linspace(min(r), max(r), num=interpolation_points, endpoint=True)
-        interp = lambda arrs: [
-            interp1d(r, arrs[i], kind=interpolation_kind, bounds_error=False, fill_value=np.nan)(r_new)
-            for i in range(len(arrs))
-        ]
-        itemized_prod = interp(itemized_prod)
-        itemized_diss = interp(itemized_diss)
-        itemized_net = interp(itemized_net)
-        compact_prod = interp(compact_prod)
-        compact_diss = interp(compact_diss)
-        compact_net = interp(compact_net)
-        clus_b2_profile = interp(clus_b2_profile)
-        clus_rho_rho_b_profile = interp(clus_rho_rho_b_profile)
-        for prefix in component_prod:
-            component_prod[prefix] = interp(component_prod[prefix])
-            component_diss[prefix] = interp(component_diss[prefix])
-            component_net[prefix] = interp(component_net[prefix])
-            component_frac_prod[prefix] = interp(component_frac_prod[prefix])
-            component_frac_diss[prefix] = interp(component_frac_diss[prefix])
-        r_plot = r_new
+        if interpolation_points < 2:
+            raise ValueError('interpolation_points must be at least 2')
+        r_plot = np.linspace(np.min(r), np.max(r), interpolation_points)
         plot_suffix = f'{interpolation_kind}_interpolated_{interpolation_points}_points'
     else:
         r_plot = r
         plot_suffix = 'raw'
 
-    def _auto_limits(values, scale, pad=0.10):
-        values = np.asarray(values)
-        values = values[np.isfinite(values)]
-        if values.size == 0:
+    def _transform(arr):
+        if arr is None:
             return None
+        if plot_type == 'smoothed':
+            return gaussian_filter1d(arr, sigma=smoothing_sigma)
+        if plot_type == 'interpolated':
+            valid = np.isfinite(arr)
+            if np.count_nonzero(valid) < 2:
+                return None
+            kind = interpolation_kind
+            if kind == 'cubic' and np.count_nonzero(valid) < 4:
+                kind = 'linear'
+            return interp1d(r[valid], arr[valid], kind=kind,
+                            bounds_error=False, fill_value=np.nan)(r_plot)
+        return arr
+
+    def _auto_limits(values, scale):
+        values = np.asarray(values, dtype=float)
+        values = values[np.isfinite(values)]
         if scale == 'log':
             values = values[values > 0]
             if values.size == 0:
                 return None
-            vmin = np.log10(np.min(values))
-            vmax = np.log10(np.max(values))
-            span = max(vmax - vmin, 1e-6)
-            return 10 ** (vmin - pad * span), 10 ** (vmax + pad * span)
-        vmin = np.min(values)
-        vmax = np.max(values)
-        span = max(vmax - vmin, 1e-12)
-        return vmin - pad * span, vmax + pad * span
+            lo, hi = np.log10(values.min()), np.log10(values.max())
+            span = max(hi - lo, 1e-6)
+            return 10 ** (lo - 0.1 * span), 10 ** (hi + 0.1 * span)
+        if values.size == 0:
+            return None
+        span = max(values.max() - values.min(), 1e-12)
+        return values.min() - 0.1 * span, values.max() + 0.1 * span
 
-    def _plot_signed(ax, x, y, lw, ls, color, label, alpha=1.0, eps=1e-30):
-        from matplotlib.collections import LineCollection
-        y = np.asarray(y)
-        x = np.asarray(x)
-        valid = ~np.isnan(y)
+    def _blend_color(base_color, target, amount):
+        base = np.asarray(to_rgb(base_color), dtype=float)
+        target_rgb = np.ones(3) if target == 'white' else np.zeros(3)
+        return tuple((1.0 - amount) * base + amount * target_rgb)
+
+    def _plot_signed(ax, xvals, values, linestyle, color, label, linewidth, alpha=1.0):
+        values = _transform(values)
+        if values is None:
+            return False, False
+        valid = np.isfinite(values)
         if not np.any(valid):
-            return
-        xv = x[valid]
-        yv = y[valid]
-        yabs = np.maximum(np.abs(yv), eps)
-        segments = []
-        sign_styles = []
-        for i in range(len(xv) - 1):
-            segments.append(np.array([[xv[i], yabs[i]], [xv[i + 1], yabs[i + 1]]]))
-            sign_styles.append(yv[i] >= 0)
-        if not segments:
-            return
-        ax.plot(xv, yabs, linestyle='-', linewidth=max(lw * 0.5, 0.3), color=color, alpha=0.2 * alpha, label='_nolegend_')
-        ax.add_collection(LineCollection([s for s, p in zip(segments, sign_styles) if p], linewidths=lw, colors=color, linestyles=ls, alpha=alpha))
-        ax.add_collection(LineCollection([s for s, p in zip(segments, sign_styles) if not p], linewidths=lw, colors=color, linestyles=':', alpha=alpha))
-        ax.plot([], [], linestyle=ls, linewidth=lw, color=color, alpha=alpha, label=label)
+            return False, False
+        xvals = np.asarray(xvals)[valid]
+        signed = values[valid]
+        negative = signed < 0
+        yvals = np.maximum(np.abs(signed), threshold)
+        positive_values = np.where(~negative, yvals, np.nan)
+        if np.any(~negative):
+            ax.plot(xvals, yvals, linestyle='-', linewidth=max(linewidth * 0.35, 0.3),
+                    color=color, alpha=0.15 * alpha, label='_nolegend_')
+            ax.plot(xvals, positive_values, linestyle=linestyle,
+                linewidth=linewidth, color=color, alpha=alpha, label='_nolegend_')
+        if np.any(negative):
+            ax.plot(xvals[negative], yvals[negative], linestyle='None', marker='.',
+                    markersize=max(3.0, linewidth * 1.8), color=color, alpha=alpha,
+                    label='_nolegend_')
+        ax.plot([], [], linestyle=linestyle, linewidth=linewidth, color=color,
+                alpha=alpha, label=label)
+        return True, bool(np.any(negative))
 
-    def _blend_color(base_color, target='white', amount=0.4):
-        """Blend a color towards white/black to create readable fill shades."""
-        c = np.array(to_rgb(base_color), dtype=float)
-        t = np.array([1.0, 1.0, 1.0], dtype=float) if target == 'white' else np.array([0.0, 0.0, 0.0], dtype=float)
-        amount = float(np.clip(amount, 0.0, 1.0))
-        return tuple((1.0 - amount) * c + amount * t)
+    def _add_legend(ax, fig, extra_handles=None):
+        handles, labels = ax.get_legend_handles_labels()
+        if extra_handles:
+            handles = list(extra_handles[0]) + handles
+            labels = list(extra_handles[1]) + labels
+        unique_h, unique_l = [], []
+        for handle, label in zip(handles, labels):
+            if label and not label.startswith('_') and label not in unique_l:
+                unique_h.append(handle)
+                unique_l.append(label)
+        if not unique_h:
+            return
+        if fixed_legend:
+            ax.legend(unique_h, unique_l, prop=font_legend, loc='lower left',
+                      bbox_to_anchor=(0.02, 0.02), bbox_transform=ax.transAxes,
+                      ncol=2, frameon=True)
+            if not composed_plot:
+                fig.tight_layout()
+        elif extra_handles:
+            ax.legend(unique_h, unique_l, prop=font_legend, ncol=2)
+            if not composed_plot:
+                fig.tight_layout()
+        else:
+            ax.legend(unique_h, unique_l, prop=font_legend, ncol=2)
+            outside = _smart_legend(ax, fig, plot_params=plot_params, font_legend=font_legend)
+            if not composed_plot:
+                fig.tight_layout(rect=[0, 0.08, 1, 1] if outside else None)
 
+    plt.rcParams.update({'font.size': 16, 'axes.labelsize': 16, 'axes.titlesize': 18,
+                         'xtick.labelsize': 14, 'ytick.labelsize': 14, 'legend.fontsize': 10,
+                         'figure.titlesize': 20})
+    font = FontProperties(size=12)
+    font_title = FontProperties(size=17, weight='bold')
+    font_legend = FontProperties(size=12)
     figures = []
-    plot_absolute = bool(plot_params.get('plot_absolute', True))
-    plot_net = bool(plot_params.get('plot_net', False))
-    plot_fractional_profiles = bool(
-        plot_params.get(
-            'plot_fractional_profiles',
-            induction_params.get('production_dissipation', {}).get('plot_fractional_profiles', False)
-        )
-    )
-
-    for snap_i in range(len(it_indx)):
-        fig, ax = plt.subplots(figsize=figure_size, dpi=dpi)
+    for snap_i, snap_index in enumerate(it_indx):
+        negative_found = False
+        composed_plot = plot_composed and plot_fractional
+        if composed_plot:
+            from matplotlib.gridspec import GridSpec
+            fig = plt.figure(figsize=figure_size, dpi=dpi)
+            grid_spec = GridSpec(2, 1, figure=fig, height_ratios=(3.0, 1.25), hspace=0.08)
+            ax = fig.add_subplot(grid_spec[0])
+            ax_frac = fig.add_subplot(grid_spec[1], sharex=ax)
+        else:
+            fig, ax = plt.subplots(figsize=figure_size, dpi=dpi)
+            ax_frac = None
         ax_energy = ax.twinx() if plot_magnetic_energy else None
         ax_density = ax.twinx() if plot_density else None
         if ax_density is not None:
             if ax_energy is not None:
-                ax_density.spines["right"].set_position(("axes", 1.12))
+                ax_density.spines['right'].set_position(('axes', aux_density_offset))
             ax_density.set_frame_on(True)
             ax_density.patch.set_visible(False)
-            for sp in ax_density.spines.values():
-                sp.set_visible(True)
-
-        snap_z = np.abs(np.round(grid_zeta[it_indx[snap_i]], 2))
-        z_text = f"{snap_z:6.2f}"
-        ax.set_title(f'{title} - z = {z_text}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
-
-        plotted_vals = []
-        energy_vals = []
-        density_vals = []
-
-        if plot_absolute:
-            if should_plot_component(itemized_prod[snap_i]):
-                ax.plot(r_plot, itemized_prod[snap_i], '-.', linewidth=line_main, color=color_prod, label='Total Production (itemized)')
-                plotted_vals.append(itemized_prod[snap_i])
-            if should_plot_component(itemized_diss[snap_i]):
-                ax.plot(r_plot, itemized_diss[snap_i], '-.', linewidth=line_main, color=color_diss, label='Total Dissipation (itemized)')
-                plotted_vals.append(itemized_diss[snap_i])
-            if should_plot_component(compact_prod[snap_i]):
-                ax.plot(r_plot, compact_prod[snap_i], '-', linewidth=line_comp, color=color_prod, label='Total Production (compact)')
-                plotted_vals.append(compact_prod[snap_i])
-            if should_plot_component(compact_diss[snap_i]):
-                ax.plot(r_plot, compact_diss[snap_i], '-', linewidth=line_comp, color=color_diss, label='Total Dissipation (compact)')
-                plotted_vals.append(compact_diss[snap_i])
-
-        for prefix, label, color, sym in component_map:
-            arr_p = component_prod[prefix][snap_i]
-            arr_d = component_diss[prefix][snap_i]
-
-            # Shade the area between P and D for each component: lighter when P dominates,
-            # darker when D dominates.
-            p_vals = np.asarray(arr_p, dtype=float)
-            d_vals = np.asarray(arr_d, dtype=float)
-            valid_fill = np.isfinite(p_vals) & np.isfinite(d_vals)
-            if y_scale == 'log':
-                valid_fill = valid_fill & (p_vals > 0.0) & (d_vals > 0.0)
-
-            if np.any(valid_fill):
-                prod_dominates = valid_fill & (p_vals >= d_vals)
-                diss_dominates = valid_fill & (d_vals > p_vals)
-                fill_light = _blend_color(color, target='white', amount=0.45)
-                fill_dark = _blend_color(color, target='black', amount=0.22)
-
-                ax.fill_between(
-                    r_plot, p_vals, d_vals,
-                    where=prod_dominates,
-                    interpolate=True,
-                    color=fill_light,
-                    alpha=area_alpha,
-                    linewidth=0.0,
-                    label='_nolegend_'
-                )
-                ax.fill_between(
-                    r_plot, p_vals, d_vals,
-                    where=diss_dominates,
-                    interpolate=True,
-                    color=fill_dark,
-                    alpha=area_alpha,
-                    linewidth=0.0,
-                    label='_nolegend_'
-                )
-
-            if should_plot_component(arr_p):
-                ax.plot(r_plot, arr_p, '--', linewidth=line_comp, color=color, alpha=component_alpha, label=rf'{label} $P_{{\mathrm{{{sym}}}}}$')
-                plotted_vals.append(arr_p)
-            if should_plot_component(arr_d):
-                ax.plot(r_plot, arr_d, ':', linewidth=line_comp, color=color, alpha=component_alpha, label=rf'{label} $D_{{\mathrm{{{sym}}}}}$')
-                plotted_vals.append(arr_d)
-
-        if should_plot_component(compact_net[snap_i]):
-            _plot_signed(ax, r_plot, compact_net[snap_i], line_main, '-', color_compact_net, 'Net total (compact)')
-            plotted_vals.append(np.maximum(np.abs(compact_net[snap_i]), 1e-30))
-        if should_plot_component(itemized_net[snap_i]):
-            _plot_signed(ax, r_plot, itemized_net[snap_i], line_main, '--', color_itemized_net, 'Net total (itemized)')
-            plotted_vals.append(np.maximum(np.abs(itemized_net[snap_i]), 1e-30))
-
-        if plot_net:
-            for prefix, label, color, sym in component_map:
-                arr_n = component_net[prefix][snap_i]
-                if should_plot_component(arr_n):
-                    _plot_signed(ax, r_plot, arr_n, line_comp, '--', color, rf'{label} $N_{{\mathrm{{{sym}}}}}$', alpha=component_alpha)
-                    plotted_vals.append(np.maximum(np.abs(arr_n), 1e-30))
-
+        z_value = abs(round(grid_zeta[snap_index], 2)) if snap_index < len(grid_zeta) else float('nan')
+        family_label = ''
+        ax.set_title(f'{title} - z = {z_value:6.2f}, $R_{{Vir}}$ = {np.round(rad, 1)} Mpc',
+                 y=1.0 if composed_plot else 1.05, fontproperties=font_title)
+        plotted = []
+        fill_regions = []
+        energy_reference_values = []
+        density_reference_values = []
+        families_to_draw = families
+        drawn_drag = False
+        for family in families_to_draw:
+            data = profile_sets[family]
+            style = family_styles.get(family, '-')
+            suffix_label = '' if len(families) == 1 or family_context is None else f' ({family})'
+            if plot_absolute:
+                for key, color, label in (
+                    ('total_prod', color_prod, f'Total Production (itemized){suffix_label}'),
+                    ('total_diss', color_diss, f'Total Dissipation (itemized){suffix_label}')):
+                    arr = data[key][snap_i]
+                    if arr is not None:
+                        is_dissipation = key.endswith('_diss')
+                        total_style = style if is_dissipation else '-.'
+                        ax.plot(r_plot, _transform(arr), linestyle=total_style,
+                            linewidth=line_main, color=color,
+                            label=label if len(families) == 1 else '_nolegend_')
+                        plotted.append(arr)
+                for key, color, label in (
+                    ('compact_prod', color_prod, f'Total Production (compact){suffix_label}'),
+                    ('compact_diss', color_diss, f'Total Dissipation (compact){suffix_label}')):
+                    arr = data[key][snap_i]
+                    if arr is not None:
+                        is_dissipation = key.endswith('_diss')
+                        total_style = style if is_dissipation else '-'
+                        ax.plot(r_plot, _transform(arr), linestyle=total_style,
+                            linewidth=line_comp, color=color,
+                            label=label if len(families) == 1 else '_nolegend_')
+                        plotted.append(arr)
+                for key, color, label in (
+                    ('reconstructed_prod', color_prod, f'Total Production (itemized reconstructed){suffix_label}'),
+                    ('reconstructed_diss', color_diss, f'Total Dissipation (itemized reconstructed){suffix_label}')):
+                    arr = data[key][snap_i]
+                    if arr is not None:
+                        is_dissipation = key.endswith('_diss')
+                        total_style = style if is_dissipation else '--'
+                        ax.plot(r_plot, _transform(arr), linestyle=total_style,
+                            linewidth=line_comp, color=color, alpha=0.7,
+                            label=label if len(families) == 1 else '_nolegend_')
+                        plotted.append(arr)
+                for key, color, label in (
+                    ('reconstructed_compact_prod', color_prod, f'Total Production (compact reconstructed){suffix_label}'),
+                    ('reconstructed_compact_diss', color_diss, f'Total Dissipation (compact reconstructed){suffix_label}')):
+                    arr = data[key][snap_i]
+                    if arr is not None:
+                        is_dissipation = key.endswith('_diss')
+                        total_style = style if is_dissipation else '-'
+                        ax.plot(r_plot, _transform(arr), linestyle=total_style,
+                            linewidth=line_comp, color=color, alpha=0.7,
+                            label=label if len(families) == 1 else '_nolegend_')
+                        plotted.append(arr)
+            for base, label, color_key, sym in component_map:
+                if not components_cfg.get(color_key, True):
+                    continue
+                if base == 'MIE_drag_B2' and drawn_drag:
+                    continue
+                comp = data['components'][base]
+                arr_p, arr_d = comp['prod'][snap_i], comp['diss'][snap_i]
+                if arr_p is not None and arr_d is not None:
+                    p_plot = _transform(arr_p)
+                    d_plot = _transform(arr_d)
+                    fill_color = component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key])
+                    valid_fill = np.isfinite(p_plot) & np.isfinite(d_plot)
+                    if np.any(valid_fill):
+                        fill_regions.append((p_plot, d_plot, valid_fill, fill_color))
+                if arr_p is not None and should_plot_component(arr_p, threshold=threshold):
+                    component_label = ('_nolegend_' if composed_plot else f'{label} $P_{{\\mathrm{{{sym}}}}}${suffix_label}') if len(families) == 1 else '_nolegend_'
+                    ax.plot(r_plot, _transform(arr_p), linestyle='--' if len(families) == 1 else style, linewidth=line_comp, color=component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key]), alpha=0.75, label=component_label)
+                    plotted.append(arr_p)
+                if arr_d is not None and should_plot_component(arr_d, threshold=threshold):
+                    diss_style = ':' if family_context is not None else style
+                    component_label = ('_nolegend_' if composed_plot else f'{label} $D_{{\\mathrm{{{sym}}}}}${suffix_label}') if len(families) == 1 else '_nolegend_'
+                    ax.plot(r_plot, _transform(arr_d), linestyle=diss_style, linewidth=line_comp, color=component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key]), alpha=0.48, label=component_label)
+                    plotted.append(arr_d)
+                if base == 'MIE_drag_B2':
+                    drawn_drag = True
+            if plot_net:
+                if split_total_reference is not None:
+                    total_reference_net = split_total_reference['compact_net'][snap_i]
+                    if total_reference_net is not None:
+                        _plot_signed(
+                            ax, r_plot, total_reference_net, '-', color_compact_net,
+                            'Net total (compact)', line_main)
+                for key, color, label in (
+                    ('compact_net', color_compact_net, f'Net total (compact){suffix_label}'),
+                    ('total_net', color_itemized_net, f'Net total (itemized){suffix_label}'),
+                    ('reconstructed_net', color_itemized_net, f'Net total (itemized reconstructed){suffix_label}'),
+                    ('reconstructed_compact_net', color_compact_net, f'Net total (compact reconstructed){suffix_label}')):
+                    if key in ('reconstructed_net', 'reconstructed_compact_net') and not plot_reconstructed_net:
+                        continue
+                    arr = data[key][snap_i]
+                    if arr is not None:
+                        if key == 'compact_net' and family_context is not None and family_context != 'total':
+                            net_label = 'Net (compact)'
+                        else:
+                            net_label = label if len(families) == 1 else '_nolegend_'
+                        reconstructed = key in ('reconstructed_net', 'reconstructed_compact_net')
+                        if len(families) > 1:
+                            net_style = style
+                        elif plot_reconstructed_net:
+                            net_style = '--' if reconstructed else '-'
+                        else:
+                            net_style = '-' if key == 'compact_net' else '--'
+                        net_color = _family_compact_color(family) if key in ('compact_net', 'reconstructed_compact_net') else color
+                        _, has_negative = _plot_signed(ax, r_plot, arr, net_style, net_color, net_label, line_main)
+                        negative_found |= has_negative
+                        plotted.append(np.abs(arr))
+        if plot_magnetic_energy and references['magnetic'][snap_i] is not None:
+            magnetic_reference = _transform(references['magnetic'][snap_i])
+            ax_energy.plot(r_plot, magnetic_reference, color=color_measured, linewidth=line_main, label='Magnetic Energy Density')
+            energy_reference_values.append(magnetic_reference)
+        if plot_density and references['density'][snap_i] is not None:
+            density_reference = _transform(references['density'][snap_i])
+            ax_density.plot(r_plot, density_reference, color=color_density, linewidth=line_main, label='Density')
+            density_reference_values.append(density_reference)
         if x_scale == 'log':
             ax.set_xscale('log')
-            ax.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
-        else:
-            ax.set_xlabel('Radial Distance [r/$R_{Vir}$]', fontproperties=font)
-        ax.tick_params(axis='x', labelsize=11)
+        radial_xlabel = (r'$\log_{10}(r/R_{\mathrm{Vir}})$' if x_scale == 'log' else r'$r/R_{\mathrm{Vir}}$') if label_mode == 'math' else ('Radial Distance log[r/$R_{Vir}$]' if x_scale == 'log' else 'Radial Distance [r/$R_{Vir}$]')
+        ax.set_xlabel('' if composed_plot else radial_xlabel, fontproperties=font)
         if xlim is not None:
             ax.set_xlim(xlim[0], xlim[1])
-
         if y_scale == 'log':
             ax.set_yscale('log')
             if ax_energy is not None:
                 ax_energy.set_yscale('log')
             if ax_density is not None:
                 ax_density.set_yscale('log')
-
+        if ax_energy is not None:
+            if rylim is not None:
+                ax_energy.set_ylim(*rylim)
+            elif energy_reference_values:
+                energy_limits = _auto_limits(np.concatenate(energy_reference_values), y_scale)
+                if energy_limits is not None:
+                    ax_energy.set_ylim(*energy_limits)
+        if ax_density is not None:
+            if dylim is not None:
+                ax_density.set_ylim(*dylim)
+            elif density_reference_values:
+                density_limits = _auto_limits(np.concatenate(density_reference_values), y_scale)
+                if density_limits is not None:
+                    ax_density.set_ylim(*density_limits)
         if ylim is not None:
             ax.set_ylim(ylim[0], ylim[1])
-        elif plotted_vals:
-            auto_lim = _auto_limits(np.concatenate([np.asarray(v).ravel() for v in plotted_vals]), y_scale)
-            if auto_lim is not None:
-                ax.set_ylim(auto_lim[0], auto_lim[1])
-
+        elif plotted:
+            limits = _auto_limits(np.concatenate([np.asarray(p).ravel() for p in plotted]), y_scale)
+            if limits is not None:
+                ax.set_ylim(*limits)
+        if fill_regions:
+            y_lower, _ = ax.get_ylim()
+            area_alpha = float(np.clip(plot_params.get('area_alpha', 0.24), 0.0, 1.0))
+            for p_plot, d_plot, valid_fill, fill_color in fill_regions:
+                p_visible = np.asarray(p_plot, dtype=float).copy()
+                d_visible = np.asarray(d_plot, dtype=float).copy()
+                valid_visible = valid_fill & np.isfinite(p_visible) & np.isfinite(d_visible)
+                if y_scale == 'log':
+                    floor = max(y_lower, np.finfo(float).tiny)
+                    p_visible[p_visible <= 0.0] = floor
+                    d_visible[d_visible <= 0.0] = floor
+                d_dominates = valid_visible & (d_visible > p_visible)
+                ax.fill_between(
+                    r_plot, p_visible, d_visible, where=valid_visible,
+                    interpolate=True,
+                    color=_blend_color(fill_color, 'white', 0.45),
+                    alpha=area_alpha, linewidth=0.0, label='_nolegend_', zorder=1)
+                ax.fill_between(
+                    r_plot, p_visible, d_visible, where=d_dominates,
+                    interpolate=True,
+                    color=_blend_color(fill_color, 'black', 0.22),
+                    alpha=area_alpha, linewidth=0.0, label='_nolegend_', zorder=1)
         if ax_energy is not None:
-            if should_plot_component(clus_b2_profile[snap_i]):
-                ax_energy.plot(r_plot, clus_b2_profile[snap_i], '-', linewidth=line_main, color=color_measured_energy, label='Magnetic Energy Density')
-                energy_vals.append(clus_b2_profile[snap_i])
+            if label_mode == 'math':
+                if units == energy_to_erg:
+                    energy_label = r'$\rho_{B}\ (\mathrm{erg}\,\mathrm{Mpc}^{-3})$'
+                elif units == energy_to_J:
+                    energy_label = r'$\rho_{B}\ (\mathrm{J}\,\mathrm{Mpc}^{-3})$'
+                else:
+                    energy_label = r'$\rho_{B}\ (\mathrm{arb.\ units})$'
+            else:
+                energy_label = ('Magnetic Energy Density (erg/$Mpc^{3}$)' if units == energy_to_erg
+                                else 'Magnetic Energy Density (J/$Mpc^{3}$)' if units == energy_to_J
+                                else 'Magnetic Energy Density (arb. units)')
+            ax_energy.set_ylabel(energy_label, fontproperties=font, color=color_measured)
+            ax_energy.tick_params(axis='y', colors=color_measured)
         if ax_density is not None:
-            if should_plot_component(clus_rho_rho_b_profile[snap_i]):
-                ax_density.plot(r_plot, clus_rho_rho_b_profile[snap_i], '-', linewidth=line_main, color=color_density, label='Density')
-                density_vals.append(clus_rho_rho_b_profile[snap_i])
-
-        if ax_energy is not None and energy_vals:
-            energy_auto = _auto_limits(np.concatenate([np.asarray(v).ravel() for v in energy_vals]), y_scale)
-            if energy_auto is not None:
-                ax_energy.set_ylim(energy_auto[0], energy_auto[1])
-        if ax_density is not None and density_vals:
-            density_auto = _auto_limits(np.concatenate([np.asarray(v).ravel() for v in density_vals]), y_scale)
-            if density_auto is not None:
-                ax_density.set_ylim(density_auto[0], density_auto[1])
-
-        if units == energy_to_erg:
-            ax.set_ylabel('Production / Dissipation (erg/$Mpc^{3}$/s)', fontproperties=font)
-            if ax_energy is not None:
-                ax_energy.set_ylabel('Magnetic Energy Density (erg/$Mpc^{3}$)', fontproperties=font)
-            if ax_density is not None:
-                ax_density.set_ylabel('Density (g/cm³)', fontproperties=font)
-        elif units == energy_to_J:
-            ax.set_ylabel('Production / Dissipation (J/$Mpc^{3}$/s)', fontproperties=font)
-            if ax_energy is not None:
-                ax_energy.set_ylabel('Magnetic Energy Density (J/$Mpc^{3}$)', fontproperties=font)
-            if ax_density is not None:
-                ax_density.set_ylabel('Density (M$_{\odot}$/Mpc³)', fontproperties=font)
-        else:
-            ax.set_ylabel('Production / Dissipation (arb. units)', fontproperties=font)
-            if ax_energy is not None:
-                ax_energy.set_ylabel('Magnetic Energy Density (arb. units)', fontproperties=font)
-            if ax_density is not None:
-                ax_density.set_ylabel('Density (arb. units)', fontproperties=font)
-
+            if label_mode == 'math':
+                if units == energy_to_erg:
+                    density_label = r'$\rho\ (\mathrm{g}\,\mathrm{cm}^{-3})$'
+                elif units == energy_to_J:
+                    density_label = r'$\rho\ (M_{\odot}\,\mathrm{Mpc}^{-3})$'
+                else:
+                    density_label = r'$\rho\ (\mathrm{arb.\ units})$'
+            else:
+                density_label = ('Density (g/cm$^{3}$)' if units == energy_to_erg
+                                 else 'Density (M$_{\odot}$/Mpc$^{3}$)' if units == energy_to_J
+                                 else 'Density (arb. units)')
+            ax_density.set_ylabel(density_label, fontproperties=font, color=color_density)
+            ax_density.tick_params(axis='y', colors=color_density)
+        ylabel = 'Production / Dissipation (erg/$Mpc^{3}$/s)' if units == energy_to_erg else ('Production / Dissipation (J/$Mpc^{3}$/s)' if units == energy_to_J else 'Production / Dissipation (arb. units)')
+        ax.set_ylabel(ylabel, fontproperties=font)
+        if family_context is not None:
+            if family_context != 'total':
+                family_ylabel = f'{ylabel}\n- {family_context.title()} Velocity Field' if composed_plot else f'{ylabel} - {family_context.title()} Velocity Field'
+                ax.set_ylabel(family_ylabel, fontproperties=font)
         ax.grid(alpha=0.3)
         if ax_energy is not None:
             ax_energy.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+            ax_energy.tick_params(axis='y', labelsize=aux_tick_labelsize)
         if ax_density is not None:
             ax_density.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
-
-        handles, labels = ax.get_legend_handles_labels()
-        if ax_energy is not None:
-            h_energy, l_energy = ax_energy.get_legend_handles_labels()
-            handles += h_energy
-            labels += l_energy
-        if ax_density is not None:
-            h_density, l_density = ax_density.get_legend_handles_labels()
-            handles += h_density
-            labels += l_density
-        seen = set()
-        legend_handles = []
-        legend_labels = []
-        for hh, ll in zip(handles, labels):
-            if ll and not ll.startswith('_') and ll not in seen:
-                seen.add(ll)
-                legend_handles.append(hh)
-                legend_labels.append(ll)
-        if legend_handles:
-            if fixed_legend:
-                ax.legend(legend_handles, legend_labels, prop=font_legend,
-                          loc='lower left', bbox_to_anchor=(0.02, 0.02),
-                          bbox_transform=ax.transAxes, ncol=2, frameon=True)
-                legend_outside = False
+            ax_density.tick_params(axis='y', labelsize=aux_tick_labelsize)
+        from matplotlib.lines import Line2D
+        extras = None
+        if negative_found:
+            extras = ([Line2D([0], [0], color='0.25', marker='.', linestyle='None', label='Negative Interval')], ['Negative Interval'])
+        if len(families) > 1:
+            fam_handles = [Line2D([0], [0], color='0.25', linestyle=family_styles.get(f, '-'), label=f'Velocity family: {f}') for f in families]
+            fam_labels = [h.get_label() for h in fam_handles]
+            if extras:
+                fam_handles.extend(extras[0]); fam_labels.extend(extras[1])
+            extras = (fam_handles, fam_labels)
+            if plot_absolute:
+                absolute_handles = list(extras[0]) if extras else []
+                absolute_labels = list(extras[1]) if extras else []
+                for key, color, linestyle, label in (
+                    ('compact_prod', color_prod, '-', 'Total Production (compact)'),
+                    ('compact_diss', color_diss, '-', 'Total Dissipation (compact)'),
+                ):
+                    if any(profile_sets[f][key][snap_i] is not None for f in families):
+                        absolute_handles.append(Line2D([0], [0], color=color, linestyle=linestyle,
+                                                        linewidth=line_comp, label=label))
+                        absolute_labels.append(label)
+                for base, label, color_key, sym in component_map:
+                    if not components_cfg.get(color_key, True):
+                        continue
+                    color = component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key])
+                    has_prod = any(profile_sets[f]['components'][base]['prod'][snap_i] is not None for f in families)
+                    has_diss = any(profile_sets[f]['components'][base]['diss'][snap_i] is not None for f in families)
+                    if has_prod:
+                        absolute_handles.append(Line2D([0], [0], color=color, linestyle='-',
+                                                        linewidth=line_comp, label=f'{label} production'))
+                        absolute_labels.append(f'{label} production')
+                    if has_diss:
+                        absolute_handles.append(Line2D([0], [0], color=color, linestyle='-',
+                                                        linewidth=line_comp, alpha=0.48, label=f'{label} dissipation'))
+                        absolute_labels.append(f'{label} dissipation')
+                if plot_net:
+                    for key, color, label in (
+                        ('compact_net', color_compact_net, 'Net total (compact)'),
+                        ('total_net', color_itemized_net, 'Net total (itemized)'),
+                    ):
+                        if any(profile_sets[f][key][snap_i] is not None for f in families):
+                            absolute_handles.append(Line2D([0], [0], color=color, linestyle='-',
+                                                            linewidth=line_main, label=label))
+                            absolute_labels.append(label)
+                extras = (absolute_handles, absolute_labels)
             else:
-                ax.legend(legend_handles, legend_labels, prop=font_legend, ncol=2)
-                legend_outside = _smart_legend(ax, fig, plot_params=plot_params, font_legend=font_legend)
-            if legend_outside:
-                fig.tight_layout(rect=[0, 0.08, 1, 1])
+                profile_handles = list(extras[0]) if extras else []
+                profile_labels = list(extras[1]) if extras else []
+                for base, label, color_key, sym in component_map:
+                    if not components_cfg.get(color_key, True):
+                        continue
+                    color = component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key])
+                    has_prod = any(profile_sets[f]['components'][base]['prod'][snap_i] is not None for f in families)
+                    has_diss = any(profile_sets[f]['components'][base]['diss'][snap_i] is not None for f in families)
+                    if has_prod:
+                        profile_handles.append(Line2D([0], [0], color=color, linestyle='-',
+                                                       linewidth=line_comp, label=rf'{label} $P_{{\mathrm{{{sym}}}}}$'))
+                        profile_labels.append(rf'{label} $P_{{\mathrm{{{sym}}}}}$')
+                    if has_diss:
+                        profile_handles.append(Line2D([0], [0], color=color, linestyle='-',
+                                                       linewidth=line_comp, alpha=0.48,
+                                                       label=rf'{label} $D_{{\mathrm{{{sym}}}}}$'))
+                        profile_labels.append(rf'{label} $D_{{\mathrm{{{sym}}}}}$')
+                extras = (profile_handles, profile_labels)
+        _add_legend(ax, fig, extras)
+        if not composed_plot:
+            figures.append(fig)
+
+        if plot_fractional:
+            if not composed_plot:
+                fig_frac, ax_frac = plt.subplots(figsize=figure_size, dpi=dpi)
             else:
-                fig.tight_layout()
-        else:
-            fig.tight_layout()
-        figures.append(fig)
-
-        if plot_fractional_profiles:
-            fig_frac, ax_frac = plt.subplots(figsize=figure_size, dpi=dpi)
-            ax_frac.set_title(f'{title} (Fractions) - z = {z_text}, $R_{{Vir}}$ = {np.round(rad,1)} Mpc', y=y_title, fontproperties=font_title)
-
-            for prefix, label, color, sym in component_map:
-                arr_fp = component_frac_prod[prefix][snap_i]
-                arr_fd = component_frac_diss[prefix][snap_i]
-                if should_plot_component(arr_fp, threshold=1e-30):
-                    ax_frac.plot(r_plot, arr_fp, '--', linewidth=line_comp, color=color, label=rf'{label} $p_{{\mathrm{{{sym}}}}}$')
-                if should_plot_component(arr_fd, threshold=1e-30):
-                    ax_frac.plot(r_plot, -arr_fd, ':', linewidth=line_comp, color=color, label=rf'{label} $d_{{\mathrm{{{sym}}}}}$')
-
-            prod_i = np.asarray(itemized_prod[snap_i], dtype=float)
-            diss_i = np.asarray(itemized_diss[snap_i], dtype=float)
-            iota_profile = np.divide(
-                prod_i - diss_i,
-                prod_i,
-                out=np.zeros_like(prod_i),
-                where=prod_i > 0
-            )
-            if should_plot_component(iota_profile, threshold=1e-30):
-                ax_frac.plot(r_plot, iota_profile, '-', linewidth=line_main, color=color_efficiency, label=r'Net Efficiency $\iota$')
-
+                fig_frac = fig
+                ax_frac.tick_params(axis='x', labelbottom=True)
+                ax.tick_params(axis='x', labelbottom=False)
+            if not composed_plot:
+                ax_frac.set_title(
+                    f'{title} (Fractions){family_label} - z = {z_value:6.2f}, '
+                    f'$R_{{Vir}}$ = {np.round(rad, 1)} Mpc',
+                    y=1.05, fontproperties=font_title)
+            for family in families_to_draw:
+                data = profile_sets[family]
+                style = family_styles.get(family, '-')
+                suffix_label = '' if len(families) == 1 or family_context is None else f' ({family})'
+                for base, label, color_key, sym in component_map:
+                    if not components_cfg.get(color_key, True) or (base == 'MIE_drag_B2' and family != 'total'):
+                        continue
+                    frac = data['fractional'][base]
+                    color = component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key])
+                    prod_frac = frac['prod'][snap_i]
+                    diss_frac = frac['diss'][snap_i]
+                    if prod_frac is not None:
+                        fraction_label = ('_nolegend_' if composed_plot else f'{label} $p_{{\\mathrm{{{sym}}}}}${suffix_label}') if len(families) == 1 else '_nolegend_'
+                        ax_frac.plot(r_plot, _transform(prod_frac), linestyle='--' if len(families) == 1 else style, linewidth=line_comp, color=color, label=fraction_label)
+                    if diss_frac is not None:
+                        fraction_label = ('_nolegend_' if composed_plot else f'{label} $d_{{\\mathrm{{{sym}}}}}${suffix_label}') if len(families) == 1 else '_nolegend_'
+                        diss_style = ':' if len(families) == 1 else style
+                        ax_frac.plot(r_plot, -_transform(diss_frac), linestyle=diss_style, linewidth=line_comp, alpha=0.48, color=color, label=fraction_label)
+            efficiency_curves = []
+            if split_total_reference is not None:
+                total_prod_ref = split_total_reference['compact_prod'][snap_i]
+                total_diss_ref = split_total_reference['compact_diss'][snap_i]
+                if total_prod_ref is not None and total_diss_ref is not None:
+                    total_iota = np.divide(
+                        total_prod_ref - total_diss_ref,
+                        total_prod_ref,
+                        out=np.zeros_like(total_prod_ref),
+                        where=total_prod_ref > 0,
+                    )
+                    ax_frac.plot(
+                        r_plot, _transform(total_iota), color=color_efficiency,
+                        linewidth=line_main, linestyle='-',
+                        label=r'Net Efficiency $\iota$ (total)',
+                    )
+            for family in families_to_draw:
+                data = profile_sets[family]
+                total_prod = data['compact_prod'][snap_i]
+                total_diss = data['compact_diss'][snap_i]
+                if total_prod is None or total_diss is None:
+                    continue
+                iota = np.divide(total_prod - total_diss, total_prod, out=np.zeros_like(total_prod), where=total_prod > 0)
+                efficiency_color = _family_efficiency_color(family)
+                efficiency_style = family_styles.get(family, '-') if len(families) > 1 else '-'
+                efficiency_label = r'Net Efficiency $\iota$' if len(families) == 1 else '_nolegend_'
+                ax_frac.plot(r_plot, _transform(iota), color=efficiency_color, linewidth=line_main,
+                             linestyle=efficiency_style, label=efficiency_label)
+                efficiency_curves.append((family, efficiency_color, efficiency_style))
+            ax_frac.set_xlabel(radial_xlabel, fontproperties=font)
             if x_scale == 'log':
                 ax_frac.set_xscale('log')
-                ax_frac.set_xlabel('Radial Distance log[r/$R_{Vir}$]', fontproperties=font)
-            else:
-                ax_frac.set_xlabel('Radial Distance [r/$R_{Vir}$]', fontproperties=font)
-            ax_frac.tick_params(axis='x', labelsize=11)
             if xlim is not None:
                 ax_frac.set_xlim(xlim[0], xlim[1])
-
             ax_frac.set_ylim(-1.05, 1.05)
-            ax_frac.set_ylabel('Fractional Contribution (+prod / -diss)', fontproperties=font)
+            fractional_ylabel = 'Fractional Contribution (-diss / +prod)'
+            if family_context is not None and family_context != 'total':
+                fractional_ylabel = f'{fractional_ylabel} - {family_context.title()} Velocity Field'
+            if composed_plot:
+                fractional_ylabel = 'Fractional Contributions\n(-diss / +prod)'
+            ax_frac.set_ylabel(fractional_ylabel, fontproperties=font)
             ax_frac.grid(alpha=0.3)
-            if fixed_legend:
-                ax_frac.legend(prop=font_legend,
-                               loc='lower left', bbox_to_anchor=(0.02, 0.02),
-                               bbox_transform=ax_frac.transAxes, ncol=2, frameon=True)
-                legend_outside = False
+            fraction_extras = None
+            if len(families) > 1:
+                from matplotlib.lines import Line2D
+                fraction_handles = [Line2D([0], [0], color='0.25', linestyle=family_styles.get(f, '-'), label=f'Velocity family: {f}') for f in families]
+                fraction_labels = [f'Velocity family: {f}' for f in families]
+                if efficiency_curves:
+                    fraction_handles.append(Line2D([0], [0], color=color_efficiency, linestyle='-', linewidth=line_main, label=r'Net Efficiency $\iota$'))
+                    fraction_labels.append(r'Net Efficiency $\iota$')
+                for base, label, color_key, sym in component_map:
+                    if not components_cfg.get(color_key, True):
+                        continue
+                    color = component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key])
+                    if any(profile_sets[f]['fractional'][base]['prod'][snap_i] is not None for f in families):
+                        fraction_handles.append(Line2D([0], [0], color=color, linestyle='-', linewidth=line_comp, label=rf'{label} $p_{{\mathrm{{{sym}}}}}$'))
+                        fraction_labels.append(rf'{label} $p_{{\mathrm{{{sym}}}}}$')
+                    if any(profile_sets[f]['fractional'][base]['diss'][snap_i] is not None for f in families):
+                        fraction_handles.append(Line2D([0], [0], color=color, linestyle='-', linewidth=line_comp, alpha=0.48, label=f'{label} $d_{{\\mathrm{{{sym}}}}}$'))
+                        fraction_labels.append(rf'{label} $d_{{\mathrm{{{sym}}}}}$')
+                fraction_extras = (fraction_handles, fraction_labels)
+            if composed_plot:
+                from matplotlib.lines import Line2D
+                fraction_handles = []
+                fraction_labels = []
+                if len(families) > 1:
+                    fraction_handles.extend(
+                        Line2D([0], [0], color='0.25', linestyle=family_styles.get(f, '-'),
+                               label=f'Velocity family: {f}')
+                        for f in families
+                    )
+                    fraction_labels.extend(f'Velocity family: {f}' for f in families)
+                if negative_found:
+                    fraction_handles.append(Line2D(
+                        [0], [0], color='0.25', marker='.', linestyle='None',
+                        label='Negative Interval'))
+                    fraction_labels.append('Negative Interval')
+                if plot_net:
+                    net_handles = []
+                    net_labels = []
+                    if split_total_reference is not None and split_total_reference['compact_net'][snap_i] is not None:
+                        net_handles.append(Line2D(
+                            [0], [0], color=color_compact_net, linestyle='-',
+                            linewidth=line_main, label='Net total (compact)'))
+                        net_labels.append('Net total (compact)')
+                    for key, color, label, linestyle in (
+                        ('compact_net', color_compact_net, 'Net total (compact)', '-'),
+                        ('total_net', color_itemized_net, 'Net total (itemized)', '-'),
+                        ('reconstructed_compact_net', color_compact_net, 'Net total (compact reconstructed)', '--'),
+                        ('reconstructed_net', color_itemized_net, 'Net total (itemized reconstructed)', '--'),
+                    ):
+                        if key.startswith('reconstructed') and not plot_reconstructed_net:
+                            continue
+                        if any(profile_sets[f][key][snap_i] is not None for f in families):
+                            if key == 'compact_net' and family_context is not None and family_context != 'total':
+                                label = 'Net (compact)'
+                            net_handles.append(Line2D([0], [0], color=color, linestyle=linestyle,
+                                                      linewidth=line_main, label=label))
+                            net_labels.append(label)
+                    insert_at = 1 if fraction_labels and fraction_labels[0] == 'Negative Interval' else 0
+                    fraction_handles[insert_at:insert_at] = net_handles
+                    fraction_labels[insert_at:insert_at] = net_labels
+                if efficiency_curves:
+                    fraction_handles.append(Line2D(
+                        [0], [0], color=color_efficiency, linestyle='-',
+                        linewidth=line_main, label=r'Net Efficiency $\iota$'))
+                    fraction_labels.append(r'Net Efficiency $\iota$')
+                for base, label, color_key, sym in component_map:
+                    if not components_cfg.get(color_key, True):
+                        continue
+                    color = component_colors.get(color_key, DEFAULT_PLOT_PALETTE['component_colors'][color_key])
+                    has_prod = any(profile_sets[f]['fractional'][base]['prod'][snap_i] is not None for f in families)
+                    has_diss = any(profile_sets[f]['fractional'][base]['diss'][snap_i] is not None for f in families)
+                    if has_prod:
+                        fraction_handles.append(Line2D(
+                            [0], [0], color=color, linestyle='-', linewidth=line_comp,
+                            label=rf'{label} $P_{{\mathrm{{{sym}}}}},p_{{\mathrm{{{sym}}}}}$'))
+                        fraction_labels.append(rf'{label} $P_{{\mathrm{{{sym}}}}},p_{{\mathrm{{{sym}}}}}$')
+                    if has_diss:
+                        fraction_handles.append(Line2D(
+                            [0], [0], color=color, linestyle='-', linewidth=line_comp,
+                            alpha=0.48, label=rf'{label} $D_{{\mathrm{{{sym}}}}},d_{{\mathrm{{{sym}}}}}$'))
+                        fraction_labels.append(rf'{label} $D_{{\mathrm{{{sym}}}}},d_{{\mathrm{{{sym}}}}}$')
+                _add_legend(ax, fig, (fraction_handles, fraction_labels))
+                if ax_frac.legend_ is not None:
+                    ax_frac.legend_.remove()
+                fig_frac.subplots_adjust(left=0.10, right=0.96, bottom=0.10, top=0.92, hspace=0.08)
+                figures.append(fig_frac)
             else:
-                ax_frac.legend(prop=font_legend, ncol=2)
-                legend_outside = _smart_legend(ax_frac, fig_frac, plot_params=plot_params, font_legend=font_legend)
-            if legend_outside:
-                fig_frac.tight_layout(rect=[0, 0.08, 1, 1])
-            else:
-                fig_frac.tight_layout()
-            figures.append(fig_frac)
-            figures.append(fig_frac)
+                _add_legend(ax_frac, fig_frac, fraction_extras)
+                figures.append(fig_frac)
 
     if verbose:
         print('Plotting... Production/dissipation radial profile plots created')
 
-    if save:
+    if save and figures:
         if folder is None:
             folder = os.getcwd()
-
-        sim_info = f'{induction_params.get("up_to_level","")}_{factor_F}_{induction_params.get("vir_kind","")}vir_{induction_params.get("rad_kind","")}rad_{region}Region'
-        axis_info = f'{x_scale}_{y_scale}'
-        limit_info = f'{xlim[0] if xlim else "auto"}_{ylim[0] if ylim else "auto"}_{ylim[1] if ylim else "auto"}'
-
+        family_info = f'_family_{family_context}' if family_context else (('_vf_' + '-'.join(families)) if len(families) > 1 else '')
+        sim_info = f'{induction_params.get("up_to_level", "")}_{induction_params.get("F", 1.0)}_{induction_params.get("vir_kind", "")}vir_{induction_params.get("rad_kind", "")}rad_{induction_params.get("region", None)}Region'
         diff_cfg = induction_params.get('differentiation', {})
-        if diff_cfg.get('buffer', False) == True:
-            parent_flag = diff_cfg.get('parent', False)
-            parent_interpol = diff_cfg.get('parent_interpol', diff_cfg.get('interpol', ''))
-            buffer_info = f'Buffered_{diff_cfg.get("interpol","")}_siblings_{diff_cfg.get("use_siblings","")}'
-            if parent_flag:
-                buffer_info += f'_parent_{parent_interpol}'
-        else:
-            buffer_info = 'NoBuffer'
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        for i, fig in enumerate(figures):
-            file_title = '_'.join(title.split()[:3])
-            if plot_fractional_profiles and (i % 2 == 1):
-                profile_tag = 'pd_frac_profile'
-            else:
-                profile_tag = 'pd_profile'
-            file_name = f'{folder}/{run}_{file_title}_{profile_tag}_{sim_info}_{axis_info}_{limit_info}_{buffer_info}_{diff_cfg.get("stencil","")}_{plot_suffix}_{i}_{timestamp}.png'
-            file_name = safe_filename(file_name, verbose=verbose)
-            fig.savefig(file_name, dpi=dpi)
+        buffer_info = f'Buffered_{diff_cfg.get("interpol", "")}_siblings_{diff_cfg.get("use_siblings", "")}' if diff_cfg.get('buffer', False) else 'NoBuffer'
+        base = '_'.join(title.split()[:3])
+        for index, fig in enumerate(figures):
+            filename = f'{folder}/{run}_{base}{family_info}_pd_profile_{sim_info}_{x_scale}_{y_scale}_{buffer_info}_{diff_cfg.get("stencil", "")}_{plot_suffix}_{index}.png'
+            filename = safe_filename(filename, verbose=verbose)
+            fig.savefig(filename, dpi=dpi)
             if verbose:
-                print(f'Saved figure {i+1}/{len(figures)}: {file_name}')
-
+                print(f'Saved figure {index + 1}/{len(figures)}: {filename}')
     return figures
 
 def distribution_check(arr, quantity, plot_params, induction_params,

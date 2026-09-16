@@ -14,7 +14,7 @@ from config import PERCENTILE_PLOT_PARAMS as percentile_plot_params
 from config import SCAN_PLOT_PARAMS as scan_plot_params
 from config import get_sim_characteristics
 from scripts.induction_evo import find_most_massive_halo, create_region, process_iteration, induction_energy_integral_evolution
-from scripts.plot_fields import plot_integral_evolution, plot_production_dissipation_evolution, plot_induction_radial_profiles, plot_production_dissipation_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D
+from scripts.plot_fields import plot_integral_evolution, plot_production_dissipation_evolution, plot_induction_radial_profiles, plot_production_dissipation_radial_profiles, plot_percentile_evolution, distribution_check, scan_animation_3D, zoom_animation_3D, run_only_plot
 from scripts.memory_utils import process_iteration_with_logging, MemoryMonitor, build_executor_kwargs
 from scripts.units import *
 np.random.seed(out_params["random_seed"]) # Set the random seed for reproducibility
@@ -28,6 +28,7 @@ active_dir_params = out_params.get("active_dir_params_list", out_params.get("dir
 active_dir_grids = out_params.get("active_dir_grids_list", out_params.get("dir_grids_list", [out_params.get("dir_grids")]))
 active_dir_gas = out_params.get("active_dir_gas_list", out_params.get("dir_gas_list", [out_params.get("dir_gas")]))
 active_dir_halos = out_params.get("active_dir_halos_list", out_params.get("dir_halos_list", [out_params.get("dir_halos")]))
+active_dir_vortex = out_params.get("active_dir_vortex_list", out_params.get("dir_vortex_list", [out_params.get("dir_vortex")]))
 
 _log_cm = None
 if out_params.get("save_terminal", False):
@@ -47,9 +48,10 @@ if out_params.get("save_terminal", False):
 
 start_time = time.time()
 
-# ============================
+
+# ====================================================================================
 # Only edit the section below
-# ============================
+# ====================================================================================
 
 if __name__ == "__main__":
     memory_monitor.start()
@@ -67,13 +69,69 @@ if __name__ == "__main__":
         prod_diss_cfg.get("enabled", False) and
         (prod_diss_cfg.get("plot_absolute", False) or prod_diss_cfg.get("plot_fractional", False) or prod_diss_cfg.get("plot_net", False))
     )
-    # Use the validated _truly_enabled flags from config
-    induction_profiles_enabled = bool(ind_params.get("energy_evolution", {}).get("_truly_enabled", False) and 
-                                     ind_params.get("energy_evolution", {}).get("plot_profiles", False))
-    pd_profiles_enabled = bool(
+    energy_integral_export_enabled = bool(
+        return_params.get("enabled", False)
+        and (
+            return_params.get("fields", {}).get("induction_energy_integrals", False)
+            or return_params.get("fields", {}).get("induction_test_energy_integrals", False)
+        )
+    )
+    energy_evolution_compute_enabled = energy_evolution_plots_enabled or energy_integral_export_enabled
+    percentile_compute_enabled = bool(
+        percentile_params_cfg.get("enabled", False)
+        or (
+            return_params.get("enabled", False)
+            and return_params.get("fields", {}).get("percentiles", False)
+        )
+    )
+    projection_compute_enabled = bool(
+        ind_params.get("projection", {}).get("enabled", False)
+        or (
+            return_params.get("enabled", False)
+            and return_params.get("fields", {}).get("projection", False)
+        )
+    )
+    # Profile computation is needed either for plotting or for configured export.
+    # Keep these triggers independent so profiles can be saved without plotting.
+    induction_profile_plot_enabled = bool(
+        ind_params.get("energy_evolution", {}).get("_truly_enabled", False)
+        and ind_params.get("energy_evolution", {}).get("plot_profiles", False)
+    )
+    induction_profile_export_enabled = bool(
+        return_params.get("enabled", False)
+        and return_params.get("fields", {}).get("induction_energy_profiles", False)
+    )
+    induction_profiles_enabled = induction_profile_plot_enabled or induction_profile_export_enabled
+    pd_profile_plot_enabled = bool(
         prod_diss_cfg.get("_truly_enabled", False) and
         (prod_diss_cfg.get("plot_profiles", False) or prod_diss_cfg.get("plot_fractional_profiles", False))
     )
+    pd_profile_export_enabled = bool(
+        return_params.get("enabled", False)
+        and return_params.get("fields", {}).get("production_dissipation_profiles", False)
+    )
+    pd_profiles_enabled = pd_profile_plot_enabled or pd_profile_export_enabled
+    if out_params.get("only_plot", False):
+        run_only_plot(
+            active_sims, active_it, ind_params["level"], out_params["data_folder"],
+            out_params["image_folder"], ind_params, evo_plot_params,
+            prod_diss_plot_params, ind_prof_plot_params, pd_prof_plot_params,
+            percentile_plot_params,
+            save=out_params["save"], verbose=out_params["verbose"]
+        )
+        print('***********************************************************')
+        print('Plot-only execution finished')
+        print(f"Plots saved in {out_params['image_folder']}" if out_params["save"] else "Plots not saved")
+        elapsed_time = time.time() - start_time
+        hours, rem = divmod(elapsed_time, 3600)
+        minutes, seconds = divmod(rem, 60)
+        print(f'Execution time: {int(hours)}h {int(minutes)}m {seconds:.5f}s')
+        print('***********************************************************')
+        memory_monitor.log("final (only_plot)", force=True)
+        memory_monitor.stop()
+        memory_monitor.summary(out_params)
+        raise SystemExit(0)
+
     if out_params["parallel"]:
         print(f'**************************************************************')
         print(f"Running in parallel mode with {out_params['ncores']} cores")
@@ -111,13 +169,13 @@ if __name__ == "__main__":
         for L, lvl in enumerate(ind_params["level"]):
             # Initialize result dictionaries for this level based on what's enabled
             all_data = {}
-            need_integrals = energy_evolution_plots_enabled or pd_evolution_plots_enabled
+            need_integrals = energy_evolution_compute_enabled or pd_evolution_plots_enabled
             all_induction_energy_integral = {} if need_integrals else None
             all_induction_test_energy_integral = {} if need_integrals else None
             all_induction_energy_profiles = {} if induction_profiles_enabled else None
             all_production_dissipation_profiles = {} if pd_profiles_enabled else None
-            all_induction_uniform = {} if ind_params.get("projection", {}).get("enabled", False) else None
-            all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
+            all_induction_uniform = {} if projection_compute_enabled else None
+            all_diver_B_percentiles = {} if percentile_compute_enabled else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
             scan_meta_sim = []
@@ -163,9 +221,11 @@ if __name__ == "__main__":
                         fut = executor.submit(
                             process_iteration_with_logging,
                             ind_params["components"],
+                            ind_params["velocity_field"],
                             active_dir_grids[active_pos],
                             active_dir_gas[active_pos],
                             active_dir_params[active_pos],
+                            active_dir_vortex[active_pos],
                             sims,
                             it,
                             Coords[active_pos][j],
@@ -194,12 +254,12 @@ if __name__ == "__main__":
                             mag=return_params["fields"].get("magnitudes_components", False),
                             sim_characteristics=sim_characteristics,
                             energy_evolution_config=ind_params["energy_evolution"],
-                            energy_evolution=energy_evolution_plots_enabled,
+                                            energy_evolution=energy_evolution_compute_enabled,
                             profiles=induction_profiles_flag,
                             induction_profiles=induction_profiles_flag,
                             pd_profiles=pd_profiles_flag,
-                            projection=ind_params.get("projection", {}).get("enabled", False),
-                            percentiles=percentile_params_cfg["enabled"],
+                            projection=projection_compute_enabled,
+                            percentiles=percentile_compute_enabled,
                             percentile_levels=percentile_params_cfg["percentile_levels"],
                             divergence_filter=ind_params.get("divergence_filter"),
                             debug_params=debug_params_flag,
@@ -354,7 +414,7 @@ if __name__ == "__main__":
                 else:
                     print(f"Ploting " + prod_diss_plot_params["title"] + f" skipped (level {lvl}, no valid integrated P/D data).")
 
-            if induction_profiles_enabled and all_induction_energy_profiles is not None:
+            if induction_profile_plot_enabled and all_induction_energy_profiles is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
                 # Determine how many snapshots have profiles calculated
@@ -372,7 +432,7 @@ if __name__ == "__main__":
                     )
                     print(f"Ploting " + ind_prof_plot_params["title"] + f" completed (level {lvl}).")
 
-            if pd_profiles_enabled and all_production_dissipation_profiles is not None:
+            if pd_profile_plot_enabled and all_production_dissipation_profiles is not None:
                 plot_ind_params = ind_params.copy()
                 plot_ind_params["up_to_level"] = lvl
                 num_pd_profiles = len(all_production_dissipation_profiles.get('profile_bin_centers', []))
@@ -521,13 +581,13 @@ if __name__ == "__main__":
             
             # Initialize result dictionaries before the loop (conditional based on config)
             all_data = {}
-            need_integrals = energy_evolution_plots_enabled or pd_evolution_plots_enabled
+            need_integrals = energy_evolution_compute_enabled or pd_evolution_plots_enabled
             all_induction_energy_integral = {} if need_integrals else None
             all_induction_test_energy_integral = {} if need_integrals else None
             all_induction_energy_profiles = {} if induction_profiles_enabled else None
             all_production_dissipation_profiles = {} if pd_profiles_enabled else None
-            all_induction_uniform = {} if ind_params.get("projection", {}).get("enabled", False) else None
-            all_diver_B_percentiles = {} if percentile_params_cfg["enabled"] else None
+            all_induction_uniform = {} if projection_compute_enabled else None
+            all_diver_B_percentiles = {} if percentile_compute_enabled else None
             any_debug = debug_params.get("field_analysis", {}).get("enabled", False) or debug_params.get("scan_animation", {}).get("enabled", False)
             all_debug_fields = {} if any_debug else None
             scan_meta_sim = []
@@ -574,9 +634,11 @@ if __name__ == "__main__":
                     induction_test_energy_integral, induction_energy_profiles, production_dissipation_profiles, induction_uniform,
                     diver_B_percentiles, debug_fields) = process_iteration(
                         components=ind_params["components"],
+                        velocity_field=ind_params.get("velocity_field", {}),
                         dir_grids=active_dir_grids[active_pos],
                         dir_gas=active_dir_gas[active_pos],
                         dir_params=active_dir_params[active_pos],
+                        dir_vortex=active_dir_vortex[active_pos] if active_pos < len(active_dir_vortex) else None,
                         sims=sims,
                         it=it,
                         coords=Coords[active_pos][j],
@@ -605,12 +667,12 @@ if __name__ == "__main__":
                         mag=return_params["fields"].get("magnitudes_components", False),
                         sim_characteristics=sim_characteristics,
                         energy_evolution_config=ind_params["energy_evolution"],
-                        energy_evolution=energy_evolution_plots_enabled,
+                                    energy_evolution=energy_evolution_compute_enabled,
                         profiles=induction_profiles_enabled if it in profile_idx_set else False,
                         induction_profiles=induction_profiles_enabled if it in profile_idx_set else False,
                         pd_profiles=pd_profiles_enabled if it in pd_profile_idx_set else False,
-                        projection=ind_params.get("projection", {}).get("enabled", False),
-                        percentiles=percentile_params_cfg["enabled"],
+                        projection=projection_compute_enabled,
+                        percentiles=percentile_compute_enabled,
                         percentile_levels=percentile_params_cfg["percentile_levels"],
                         divergence_filter=ind_params.get("divergence_filter"),
                         debug_params=debug_params_flag,
@@ -782,7 +844,7 @@ if __name__ == "__main__":
                 else:
                     utils.log_message(f"Plotting {prod_diss_plot_params['title']} skipped (no valid integrated P/D data).", tag='plots', level=1)
             
-            if induction_profiles_enabled == False:
+            if induction_profile_plot_enabled == False:
                 utils.log_message("Induction profile plotting is disabled in the configuration. Skipping induction profile plots.", tag='plots', level=1)
             else:
                 # Create local params with current level for plotting
@@ -804,7 +866,7 @@ if __name__ == "__main__":
                     
                     utils.log_message(f"Plotting {ind_prof_plot_params['title']} completed.", tag='plots', level=1)
 
-            if pd_profiles_enabled == False:
+            if pd_profile_plot_enabled == False:
                 utils.log_message("P/D profile plotting is disabled in the configuration. Skipping P/D profile plots.", tag='plots', level=1)
             else:
                 plot_ind_params = ind_params.copy()
@@ -936,9 +998,9 @@ if __name__ == "__main__":
             # print(f"Ploting " + ind_params["test_params"]['evo_plot_params']["title"] + " completed.")
             
         
-# ============================
+# ====================================================================================
 # Only edit the section above
-# ============================
+# ====================================================================================
 
 if out_params["save"] == True:
     print(f'***********************************************************')

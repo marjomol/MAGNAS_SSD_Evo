@@ -12,6 +12,7 @@ import os
 import json
 import numpy as np
 import utils
+import struct
 from cython_fortran_file import FortranFile as FF
 import importlib.util
 if (importlib.util.find_spec('tqdm') is None):
@@ -926,3 +927,238 @@ def get_read_clus_kwargs(sim_characteristics, level, region=None, **override_fla
         'read_region': region
     }
     return kwargs
+
+# ============================
+# VORTEX-p reader functions
+# ============================
+
+
+def read_record(f, dtype='f4'):
+    '''
+    Reads a record from a Fortran unformatted file.
+
+    Args:
+        f: file object
+        dtype: data type (str)
+
+    Returns:
+        data: numpy array with the read data
+        
+    Author: David Vallés (for VORTEX-p python_reader module)
+    '''
+    # Following the description of the standard, found in:
+    #  https://stackoverflow.com/questions/15608421/inconsistent-record-marker-while-reading-fortran-unformatted-file
+    # This method works always, even when there are split records (because they are longer than 2^31 bytes)!!!!
+    head=struct.unpack('i',f.read(4))
+    recl=head[0]
+
+    if recl>0:
+        numval=recl//np.dtype(dtype).itemsize
+        data=np.fromfile(f,dtype=dtype,count=numval)
+        endrec=struct.unpack('i',f.read(4))[0]
+        #assert recl==endrec
+    else:
+        the_bytes=f.read(abs(recl))
+        endrec=struct.unpack('i',f.read(4))[0]
+        while recl<0:
+            head=struct.unpack('i',f.read(4))
+            recl=head[0]
+            the_bytes=the_bytes+f.read(abs(recl))
+            endrec=struct.unpack('i',f.read(4))[0]
+
+        if dtype=='f4':
+            dtype2='f'
+            len_data=4
+        elif dtype=='i4':
+            dtype2='i'
+            len_data=4
+        elif dtype=='f8':
+            dtype2='d'
+            len_data=4
+        elif dtype=='i8':
+            dtype2='q'
+            len_data=4
+        else:
+            print('Unknown data type!!!!')
+            raise ValueError
+        dtype2='{:}'.format(len(the_bytes)//len_data)+dtype2
+        #print(dtype2)
+
+        data=struct.unpack(dtype2,the_bytes)
+
+    if len(data)==0:
+        return np.array([], dtype=dtype)
+
+    return data
+
+def skip_record(f):
+    '''
+    Skips a record in a Fortran unformatted file.
+
+    Args:
+        f: file object
+        
+    Author: David Vallés (for VORTEX-p python_reader module)
+    '''
+    head=struct.unpack('i',f.read(4))
+    recl=head[0]
+
+    if recl>0:
+        f.seek(recl,1)
+        endrec=struct.unpack('i',f.read(4))[0]
+        #assert recl==endrec
+    else:
+        f.seek(abs(recl),1)
+        endrec=struct.unpack('i',f.read(4))[0]
+        while recl<0:
+            head=struct.unpack('i',f.read(4))
+            recl=head[0]
+            f.seek(abs(recl),1)
+            endrec=struct.unpack('i',f.read(4))[0]
+
+    return
+
+def read_vcomp(it, path='', parameters_path=None, 
+               filename='vcomp',
+               digits=5, grids_path=None, grids_filename='grids',
+               max_refined_level=None):
+    """
+    Reads the vcompXXXXX file, which contains the compressive part of 
+     the velocity field.
+
+    Args:
+        it: iteration number (int)
+        path: path to the grid_overlaps file (str)
+        parameters_path: path to the parameters file (str). If None, 
+         the parameters file is assumed to be in the same directory as
+         the grid_overlaps file.
+        filename: name of the grid_overlaps file (str)
+        digits: number of digits in the iteration number (int)
+        grids_path: path to the grids file (str). If None, the grids file
+         is assumed to be in the same directory as the grid_overlaps file.
+        grids_filename: name of the grids file (str)
+        max_refined_level: maximum level to be read (int). If None, all
+            levels are read. If set, all levels above max_refined_level
+            are ignored, even if present in the file.
+
+
+    Returns:
+        vcompx, vcompy, vcompz: gridded compressive velocity field
+        
+    Author: David Vallés (for VORTEX-p python_reader module)
+    """
+
+    if parameters_path is None:
+        parameters_path = path
+    if grids_path is None:
+        grids_path = path
+    
+    parameters = read_parameters_file(path=parameters_path)
+    nmax, nmay, nmaz, size = parameters['NMAX'], parameters['NMAY'], parameters['NMAZ'], parameters['SIZE']
+
+    npatch, patchnx, patchny, patchnz = read_grids(it, path=grids_path, parameters_path=parameters_path, read_general=False,
+                                                    read_patchnum=True, read_dmpartnum=False,
+                                                    read_patchcellextension=True, read_patchcellposition=False,
+                                                    read_patchposition=False, read_patchparent=False)
+
+    filename = filename + str(it).zfill(digits)
+
+    with open(os.path.join(path, filename), 'rb') as f:
+        vcompx = [np.reshape(read_record(f, 'f4'), (nmax,nmax,nmax), 'F')]
+        vcompy = [np.reshape(read_record(f, 'f4'), (nmax,nmax,nmax), 'F')]
+        vcompz = [np.reshape(read_record(f, 'f4'), (nmax,nmax,nmax), 'F')]
+        for i in range(1,npatch.sum()+1):
+            vcompx.append(np.reshape(read_record(f, 'f4'), (patchnx[i],patchny[i],patchnz[i]), 'F'))
+            vcompy.append(np.reshape(read_record(f, 'f4'), (patchnx[i],patchny[i],patchnz[i]), 'F'))
+            vcompz.append(np.reshape(read_record(f, 'f4'), (patchnx[i],patchny[i],patchnz[i]), 'F'))
+
+    return vcompx, vcompy, vcompz
+
+
+def read_vsol(it, path='', parameters_path=None, 
+               filename='vsol',
+               digits=5, grids_path=None, grids_filename='grids',
+               max_refined_level=None):
+    """
+    Reads the vsolXXXXX file, which contains the solenoidal part of 
+     the velocity field.
+
+    Args:
+        it: iteration number (int)
+        path: path to the grid_overlaps file (str)
+        parameters_path: path to the parameters file (str). If None, 
+         the parameters file is assumed to be in the same directory as
+         the grid_overlaps file.
+        filename: name of the grid_overlaps file (str)
+        digits: number of digits in the iteration number (int)
+        grids_path: path to the grids file (str). If None, the grids file
+         is assumed to be in the same directory as the grid_overlaps file.
+        grids_filename: name of the grids file (str)
+        max_refined_level: maximum level to be read (int). If None, all
+            levels are read. If set, all levels above max_refined_level
+            are ignored, even if present in the file.
+
+
+    Returns:
+        vsolx, vsoly, vsolz: gridded compressive velocity field
+        
+    Author: David Vallés (for VORTEX-p python_reader module)
+    """
+
+    if parameters_path is None:
+        parameters_path = path
+    if grids_path is None:
+        grids_path = path
+    
+    parameters = read_parameters_file(path=parameters_path)
+    nmax, nmay, nmaz, size = parameters['NMAX'], parameters['NMAY'], parameters['NMAZ'], parameters['SIZE']
+
+    npatch, patchnx, patchny, patchnz = read_grids(it, path=grids_path, parameters_path=parameters_path, read_general=False,
+                                                    read_patchnum=True, read_dmpartnum=False,
+                                                    read_patchcellextension=True, read_patchcellposition=False,
+                                                    read_patchposition=False, read_patchparent=False)
+
+    filename = filename + str(it).zfill(digits)
+
+    with open(os.path.join(path, filename), 'rb') as f:
+        vsolx = [np.reshape(read_record(f, 'f4'), (nmax,nmax,nmax), 'F')]
+        vsoly = [np.reshape(read_record(f, 'f4'), (nmax,nmax,nmax), 'F')]
+        vsolz = [np.reshape(read_record(f, 'f4'), (nmax,nmax,nmax), 'F')]
+        for i in range(1,npatch.sum()+1):
+            vsolx.append(np.reshape(read_record(f, 'f4'), (patchnx[i],patchny[i],patchnz[i]), 'F'))
+            vsoly.append(np.reshape(read_record(f, 'f4'), (patchnx[i],patchny[i],patchnz[i]), 'F'))
+            vsolz.append(np.reshape(read_record(f, 'f4'), (patchnx[i],patchny[i],patchnz[i]), 'F'))
+
+    return vsolx, vsoly, vsolz
+
+
+def read_vortex_velocity_fields(it, path='', parameters_path=None,
+                                digits=5, grids_path=None, grids_filename='grids',
+                                max_refined_level=None,
+                                read_solenoidal=True, read_compressive=True):
+    """
+    Reads the VORTEX-p velocity decomposition on demand.
+
+    Returns a 6-tuple in the fixed order:
+        vsolx, vsoly, vsolz, vcompx, vcompy, vcompz
+
+    Each triplet is returned as None when its branch is disabled.
+    """
+    vsol = (None, None, None)
+    vcomp = (None, None, None)
+
+    if read_compressive:
+        vcomp = read_vcomp(
+            it, path=path, parameters_path=parameters_path, digits=digits,
+            grids_path=grids_path, grids_filename=grids_filename,
+            max_refined_level=max_refined_level
+        )
+
+    if read_solenoidal:
+        vsol = read_vsol(
+            it, path=path, parameters_path=parameters_path, digits=digits,
+            grids_path=grids_path, grids_filename=grids_filename,
+            max_refined_level=max_refined_level
+        )
+
+    return (*vsol, *vcomp)

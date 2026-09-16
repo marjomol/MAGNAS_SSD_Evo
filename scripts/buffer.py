@@ -1279,7 +1279,7 @@ def ghost_buffer_buster(buffered_field, patchnx, patchny, patchnz, nghost=1, kep
     
     for ipatch in range(len(buffered_field)):
         if not kept_patches[ipatch] or isinstance(buffered_field[ipatch], (int, float)):
-            # return scalar 0 for outside-region patches to match readers' convention
+            # Return scalar 0 for outside-region patches to match readers' convention
             field.append(0)
             continue
         

@@ -155,7 +155,7 @@ def build_executor_kwargs(ncores, max_tasks_per_child=None):
     return kwargs
 
 
-def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
+def process_iteration_with_logging(components, velocity_field, dir_grids, dir_gas, dir_params, dir_vortex,
                                     sims, it, coords, region_coords, rad, rmin, level, up_to_level,
                                     nmax, size, H0, a0, test, units=1, nbins=25, logbins=True,
                                     stencil=3, buffer=True, use_siblings=True, interpol='TSC', nghost=1, blend=False,
@@ -183,6 +183,7 @@ def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
                 dir_grids=dir_grids,
                 dir_gas=dir_gas,
                 dir_params=dir_params,
+                dir_vortex=dir_vortex,
                 sims=sims,
                 it=it,
                 coords=coords,
@@ -221,6 +222,7 @@ def process_iteration_with_logging(components, dir_grids, dir_gas, dir_params,
                 divergence_filter=divergence_filter,
                 debug_params=debug_params,
                 production_dissipation=production_dissipation,
+                velocity_field=velocity_field,
                 return_options=return_options,
                 gc_worker_end=gc_worker_end,
                 verbose=verbose
